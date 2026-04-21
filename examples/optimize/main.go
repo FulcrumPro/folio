@@ -86,19 +86,33 @@ func tableHeavy() *document.Document {
 	return doc
 }
 
-func writeBoth(f fixture) (defaultBytes, optimizedBytes []byte, err error) {
+// writeAll serializes the fixture in each comparison mode:
+//
+//   - default: traditional xref table and trailer (§7.5.4 / §7.5.5).
+//   - xref+obj: cross-reference stream (§7.5.8) plus object streams (§7.5.7).
+//   - +sweep: also drops indirect objects unreachable from /Root, /Info,
+//     and /Encrypt before serialization.
+func writeAll(f fixture) (defaultBytes, packedBytes, sweptBytes []byte, err error) {
 	defaultBytes, err = f.build().ToBytes()
 	if err != nil {
-		return nil, nil, fmt.Errorf("%s default: %w", f.name, err)
+		return nil, nil, nil, fmt.Errorf("%s default: %w", f.name, err)
 	}
-	optimizedBytes, err = f.build().ToBytesWithOptions(document.WriteOptions{
+	packedBytes, err = f.build().ToBytesWithOptions(document.WriteOptions{
 		UseXRefStream:    true,
 		UseObjectStreams: true,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("%s optimized: %w", f.name, err)
+		return nil, nil, nil, fmt.Errorf("%s xref+obj: %w", f.name, err)
 	}
-	return defaultBytes, optimizedBytes, nil
+	sweptBytes, err = f.build().ToBytesWithOptions(document.WriteOptions{
+		UseXRefStream:    true,
+		UseObjectStreams: true,
+		OrphanSweep:      true,
+	})
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("%s +sweep: %w", f.name, err)
+	}
+	return defaultBytes, packedBytes, sweptBytes, nil
 }
 
 func main() {
@@ -108,24 +122,25 @@ func main() {
 		{name: "table-heavy", build: tableHeavy},
 	}
 
-	fmt.Printf("%-20s %12s %12s %10s\n", "fixture", "default", "optimized", "saved")
-	fmt.Println("-------------------- ------------ ------------ ----------")
+	fmt.Printf("%-20s %12s %12s %12s %10s\n",
+		"fixture", "default", "xref+obj", "+sweep", "saved")
+	fmt.Println("-------------------- ------------ ------------ ------------ ----------")
 
 	for _, f := range fixtures {
-		def, opt, err := writeBoth(f)
+		def, packed, swept, err := writeAll(f)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		saved := len(def) - len(opt)
+		saved := len(def) - len(swept)
 		pct := 100.0 * float64(saved) / float64(len(def))
-		fmt.Printf("%-20s %10d B %10d B %8.1f %%\n",
-			f.name, len(def), len(opt), pct)
+		fmt.Printf("%-20s %10d B %10d B %10d B %8.1f %%\n",
+			f.name, len(def), len(packed), len(swept), pct)
 	}
 
-	// Write the text-heavy fixture to disk so the user has a concrete
-	// pair of files to inspect with qpdf or any PDF viewer.
-	def, opt, err := writeBoth(fixtures[0])
+	// Write the text-heavy fixture to disk so the user has concrete
+	// files to inspect with qpdf or any PDF viewer.
+	def, _, swept, err := writeAll(fixtures[0])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -134,7 +149,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "write default file: %v\n", err)
 		os.Exit(1)
 	}
-	if err := os.WriteFile("optimize-compressed.pdf", opt, 0o644); err != nil {
+	if err := os.WriteFile("optimize-compressed.pdf", swept, 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "write optimized file: %v\n", err)
 		os.Exit(1)
 	}

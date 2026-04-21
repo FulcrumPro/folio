@@ -52,6 +52,38 @@ type WriteOptions struct {
 	// interaction with the standard security handler has not yet been
 	// implemented.
 	OrphanSweep bool
+
+	// RecompressStreams re-Flate-compresses eligible stream payloads
+	// at zlib.BestCompression and commits the rewrite only when it
+	// produces a strictly smaller payload (size-regression guarded).
+	// Eligibility (per ISO 32000-1 §7.4):
+	//
+	//   - Streams with no /Filter — payload is raw bytes; Flate is
+	//     applied and /Filter /FlateDecode is set.
+	//   - Streams whose /Filter is exactly /FlateDecode — payload is
+	//     inflated, re-deflated at higher effort, and committed only
+	//     on shrink. Useful when the original producer used a lower
+	//     zlib level than BestCompression.
+	//
+	// Streams whose filter chain contains /DCTDecode (§7.4.8),
+	// /JPXDecode (§7.4.9), /CCITTFaxDecode (§7.4.7), or /JBIG2Decode
+	// (§7.4.8) are skipped — those payloads are already specialized-
+	// compressed and Flate would inflate them. Multi-filter chains
+	// other than the eligible cases above are also skipped. FlateDecode
+	// streams that carry a /DecodeParms entry (most commonly a PNG or
+	// TIFF predictor per §7.4.4.4) are skipped because the inflated
+	// payload is predictor-filtered bytes, not plaintext, and a safe
+	// re-deflate would require re-applying the predictor inversion.
+	//
+	// Currently refused on encrypted documents: rewriting payload
+	// bytes after the encryption walk would emit ciphertext that
+	// decrypts to the wrong plaintext, and rewriting before the
+	// walk requires the encryption code to revisit each rewritten
+	// stream — both deferred until needed.
+	//
+	// Lossless and safe to combine with UseXRefStream,
+	// UseObjectStreams, and OrphanSweep.
+	RecompressStreams bool
 }
 
 // WriteToWithOptions is the option-aware variant of WriteTo. WriteTo is
@@ -83,11 +115,25 @@ func (w *Writer) WriteToWithOptions(out io.Writer, opts WriteOptions) (int64, er
 		// the keys for every renumbered entry.
 		return 0, fmt.Errorf("writer: orphan sweep is not supported on encrypted documents")
 	}
+	if opts.RecompressStreams && w.encryptor != nil {
+		// Same defense as the sweep refusal above: rewriting payload
+		// bytes interacts with the encryption walk in subtle ways
+		// (encrypted ciphertext decrypts only against the bytes that
+		// were encrypted). Refuse before any mutation so a retry
+		// without RecompressStreams is unaffected.
+		return 0, fmt.Errorf("writer: stream recompression is not supported on encrypted documents")
+	}
 	if opts.OrphanSweep {
 		// Sweep before the encryption walk so encryption uses the new
 		// numbers. With encryption refused above the order is currently
 		// moot, but the placement encodes the intended invariant.
 		w.sweepOrphans()
+	}
+	if opts.RecompressStreams {
+		// Recompress AFTER the sweep: orphan streams should not be
+		// recompressed only to be dropped. AFTER sweep also means
+		// after renumbering, but recompression is renumber-agnostic.
+		w.recompressStreams()
 	}
 
 	// Encrypt all user objects in place. Done before serialization so

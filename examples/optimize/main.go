@@ -3,15 +3,17 @@
 
 // Optimize compares the default writer with the optimized writer
 // (cross-reference streams per ISO 32000-1 §7.5.8 plus object streams
-// per ISO 32000-1 §7.5.7) across several document shapes and reports
-// the byte-size delta for each.
+// per ISO 32000-1 §7.5.7, orphan sweep over §7.5.4 reachability, and
+// Flate recompression of eligible payloads per §7.4.4) across several
+// document shapes and reports the byte-size delta for each.
 //
 // The compression ratio depends heavily on what the document contains:
-// content streams are already Flate-compressed and ineligible for
-// object stream packing, so text-heavy documents save less than
-// metadata-heavy documents. The fixture set in this example is chosen
-// to surface that difference, so callers can decide whether the
-// optimizer is worth turning on for their workload.
+// content streams produced by Folio's writer are already at
+// zlib.BestCompression and cannot benefit from re-deflate, so layout-
+// built documents see most of their gains from object-stream packing
+// and the orphan sweep. Imported documents (built by parsing a source
+// PDF and copying pages into a new Document) carry their content
+// streams in raw plaintext form — that is where recompression wins big.
 //
 // Usage:
 //
@@ -19,12 +21,14 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 
 	"github.com/carlos7ags/folio/document"
 	"github.com/carlos7ags/folio/font"
 	"github.com/carlos7ags/folio/layout"
+	"github.com/carlos7ags/folio/reader"
 )
 
 // fixture is one row of the comparison table.
@@ -86,23 +90,51 @@ func tableHeavy() *document.Document {
 	return doc
 }
 
+// importedTextHeavy builds the text-heavy document, writes it, parses
+// the result, and imports every page into a fresh Document. The output
+// document carries content streams in raw form — exactly the shape
+// where Flate recompression on write produces a large win.
+func importedTextHeavy() *document.Document {
+	src := textHeavy()
+	var buf bytes.Buffer
+	if _, err := src.WriteTo(&buf); err != nil {
+		panic(fmt.Errorf("source write: %w", err))
+	}
+	r, err := reader.Parse(buf.Bytes())
+	if err != nil {
+		panic(fmt.Errorf("source parse: %w", err))
+	}
+	out := document.NewDocument(document.PageSizeLetter)
+	out.Info.Title = "Imported text-heavy fixture"
+	for i := 0; i < r.PageCount(); i++ {
+		srcPage, _ := r.Page(i)
+		cs, _ := srcPage.ContentStream()
+		res, _ := srcPage.Resources()
+		p := out.AddPage()
+		p.ImportPage(cs, res, srcPage.Width, srcPage.Height)
+	}
+	return out
+}
+
 // writeAll serializes the fixture in each comparison mode:
 //
 //   - default: traditional xref table and trailer (§7.5.4 / §7.5.5).
 //   - xref+obj: cross-reference stream (§7.5.8) plus object streams (§7.5.7).
 //   - +sweep: also drops indirect objects unreachable from /Root, /Info,
 //     and /Encrypt before serialization.
-func writeAll(f fixture) (defaultBytes, packedBytes, sweptBytes []byte, err error) {
+//   - +recompress: also re-Flate-compresses eligible stream payloads
+//     (§7.4.4) at zlib.BestCompression.
+func writeAll(f fixture) (defaultBytes, packedBytes, sweptBytes, recompressBytes []byte, err error) {
 	defaultBytes, err = f.build().ToBytes()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("%s default: %w", f.name, err)
+		return nil, nil, nil, nil, fmt.Errorf("%s default: %w", f.name, err)
 	}
 	packedBytes, err = f.build().ToBytesWithOptions(document.WriteOptions{
 		UseXRefStream:    true,
 		UseObjectStreams: true,
 	})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("%s xref+obj: %w", f.name, err)
+		return nil, nil, nil, nil, fmt.Errorf("%s xref+obj: %w", f.name, err)
 	}
 	sweptBytes, err = f.build().ToBytesWithOptions(document.WriteOptions{
 		UseXRefStream:    true,
@@ -110,9 +142,18 @@ func writeAll(f fixture) (defaultBytes, packedBytes, sweptBytes []byte, err erro
 		OrphanSweep:      true,
 	})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("%s +sweep: %w", f.name, err)
+		return nil, nil, nil, nil, fmt.Errorf("%s +sweep: %w", f.name, err)
 	}
-	return defaultBytes, packedBytes, sweptBytes, nil
+	recompressBytes, err = f.build().ToBytesWithOptions(document.WriteOptions{
+		UseXRefStream:     true,
+		UseObjectStreams:  true,
+		OrphanSweep:       true,
+		RecompressStreams: true,
+	})
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("%s +recompress: %w", f.name, err)
+	}
+	return defaultBytes, packedBytes, sweptBytes, recompressBytes, nil
 }
 
 func main() {
@@ -120,27 +161,29 @@ func main() {
 		{name: "text-heavy", build: textHeavy},
 		{name: "many empty pages", build: manyPages},
 		{name: "table-heavy", build: tableHeavy},
+		{name: "imported text-heavy", build: importedTextHeavy},
 	}
 
-	fmt.Printf("%-20s %12s %12s %12s %10s\n",
-		"fixture", "default", "xref+obj", "+sweep", "saved")
-	fmt.Println("-------------------- ------------ ------------ ------------ ----------")
+	fmt.Printf("%-22s %12s %12s %12s %12s %10s\n",
+		"fixture", "default", "xref+obj", "+sweep", "+recompress", "saved")
+	fmt.Println("---------------------- ------------ ------------ ------------ ------------ ----------")
 
 	for _, f := range fixtures {
-		def, packed, swept, err := writeAll(f)
+		def, packed, swept, recompress, err := writeAll(f)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		saved := len(def) - len(swept)
+		saved := len(def) - len(recompress)
 		pct := 100.0 * float64(saved) / float64(len(def))
-		fmt.Printf("%-20s %10d B %10d B %10d B %8.1f %%\n",
-			f.name, len(def), len(packed), len(swept), pct)
+		fmt.Printf("%-22s %10d B %10d B %10d B %10d B %8.1f %%\n",
+			f.name, len(def), len(packed), len(swept), len(recompress), pct)
 	}
 
-	// Write the text-heavy fixture to disk so the user has concrete
-	// files to inspect with qpdf or any PDF viewer.
-	def, _, swept, err := writeAll(fixtures[0])
+	// Write the imported fixture to disk so the user has concrete files
+	// to inspect with qpdf or any PDF viewer. The imported case is
+	// where the optimizer's win is most visible.
+	def, _, _, recompress, err := writeAll(fixtures[len(fixtures)-1])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -149,10 +192,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "write default file: %v\n", err)
 		os.Exit(1)
 	}
-	if err := os.WriteFile("optimize-compressed.pdf", swept, 0o644); err != nil {
+	if err := os.WriteFile("optimize-compressed.pdf", recompress, 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "write optimized file: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println()
-	fmt.Println("wrote optimize-default.pdf and optimize-compressed.pdf (text-heavy fixture)")
+	fmt.Println("wrote optimize-default.pdf and optimize-compressed.pdf (imported text-heavy fixture)")
 }

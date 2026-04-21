@@ -1,9 +1,42 @@
-# Migrating from v0.5.x to v0.6.0
+# Migrating
 
-This guide covers only what you need to change in your code.
 For the full list of new features and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
+
+## Upgrading from v0.6.x to v0.7.0
+
+No code changes are required. Every new API is additive and the
+zero-value `document.WriteOptions` reproduces byte-identical output to
+v0.6.2.
+
+Several bug fixes change the visible output of affected documents.
+Review these before regression-diffing PDFs against a v0.6.x baseline:
+
+- **CSS multi-column fill order** — sequential balanced fill replaces
+  round-robin distribution (#145).
+- **Arabic text shaping** — OpenType GSUB contextual shaping replaces
+  the isolated-forms fallback when the font has GSUB positional
+  features (#160).
+- **TrueType kerning** — Apple-format v0 coverage (Arial and others)
+  now returns non-zero kern pairs; spacing tightens (#172).
+- **CJK line-breaking** — JIS X 4051 kinsoku shori rules (#157).
+- **Per-glyph font fallback** — runes outside the primary font's
+  coverage route to a configured fallback face.
+- **CSS `!important` cascade** at the inline/stylesheet boundary
+  is now honored (#137).
+- **`/ActualText` markers around shaped Arabic words** emitted by
+  default; opt out with `Document.SetActualText(false)`.
+
+Deprecated direct-field access on `core.PdfDictionary.Entries`,
+`core.PdfArray.Elements`, and `core.PdfIndirectReference.ObjectNumber` /
+`.GenerationNumber` remains supported in v0.7.0 and is scheduled for
+removal at v1.0. Migration targets are listed in the Deprecated section
+of the CHANGELOG.
+
+---
+
+## Upgrading from v0.5.x to v0.6.0
 
 ## 1. Rename constructors
 

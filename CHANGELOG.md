@@ -5,19 +5,111 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] - 2026-04-21
 
-No breaking API changes. The new writer behavior is opt-in via a new options struct; existing callers of `Document.WriteTo`, `Document.Save`, `Document.ToBytes`, and `Writer.WriteTo` see byte-identical output.
+No breaking API changes. Every new field, method, and package is additive; zero-value `WriteOptions` and existing constructors produce byte-identical output to v0.6.2. Several bug fixes change the visible output of affected documents — see Visual changes before regression-diffing PDFs.
+
+### Visual changes
+
+- **CSS multi-column fill order** — children are distributed sequentially with height-balanced packing instead of round-robin by index. Matches CSS Multi-column Layout `column-fill: balance` (the spec default). Documents using `column-count` will reflow (#145)
+- **Arabic text shaping** — the layout engine uses the font's OpenType GSUB contextual substitutions (init/medi/fina/isol) when present and falls back to the legacy Arabic Presentation Forms-B substitutions only when the font lacks GSUB. v0.6.x rendered Arabic as disconnected isolated forms; v0.7.0 renders connected (#160)
+- **TrueType kerning** — fonts whose `kern` table uses Apple-format v0 coverage (Arial and many others) previously returned zero kern for every pair due to a flipped coverage-byte decode. Pairs are now applied; spacing in affected documents tightens (#172)
+- **CJK line-breaking** — Japanese, Chinese, and Korean paragraphs break per JIS X 4051 kinsoku shori rules instead of arbitrary character boundaries (#157)
+- **Per-glyph font fallback** — runes outside the primary font's coverage previously rendered as `.notdef` boxes; the layout engine selects a fallback face per glyph cluster when one is configured
+- **CSS `!important` cascade** at the inline/stylesheet boundary is now honored (#137)
+- **`/ActualText` markers around shaped Arabic words** are emitted by default. Adds a small per-word byte cost and improves copy/paste fidelity in PDF readers. Opt out with `Document.SetActualText(false)`
+
+### Deprecated
+
+These remain fully functional in v0.7.0. Plan to migrate before v1.0, when the stable API will be declared and deprecated symbols removed.
+
+- **`core.PdfDictionary.Entries`** direct field access — use `All`, `Get`, `Set`, `Remove`. Direct slice mutation bypasses the lazy key index
+- **`core.PdfArray.Elements`** direct field access — use `All`, `At`, `Len`, `Add`, `Set`, `RemoveAt`, `Replace`
+- **`core.PdfIndirectReference.ObjectNumber`** — use `Num` for reads and `SetNum` for writes
+- **`core.PdfIndirectReference.GenerationNumber`** — use `Gen`
+
+### Discouraged (security)
+
+- **`core.RevisionRC4128`** — RC4 is cryptographically broken; use `RevisionAES256` for new documents. The constant remains supported for reading and writing legacy RC4-encrypted PDFs and is not scheduled for removal
 
 ### Added
 
-- **`document.WriteOptions`** — first option-aware extension point for the PDF writer. Zero value reproduces the historical default output (traditional cross-reference table per ISO 32000-1 §7.5.4 and a separate trailer dictionary per §7.5.5)
-- **`WriteOptions.UseXRefStream`** — emit a cross-reference stream object (ISO 32000-1 §7.5.8) in place of the traditional xref table and trailer. The stream dictionary carries `/Root`, `/Info`, `/Encrypt`, and `/ID`; entries are Flate-compressed. PDF readers from PDF 1.5 onward consume the format. The xref stream is always written as the last indirect object so its own offset is known before serialization (no two-pass writer)
-- **`WriteOptions.UseObjectStreams`** — pack eligible indirect objects into compressed object streams (ISO 32000-1 §7.5.7). Implies `UseXRefStream` because type-2 cross-reference entries (compressed objects) require an xref stream to express. Eligibility follows §7.5.7: streams, the encryption dictionary, and any object with a non-zero generation are excluded; phase 1 also keeps the catalog and info dictionary inline as a conservative restriction. Refused on encrypted documents in phase 1
-- **`WriteOptions.ObjectStreamCapacity`** — caps the number of objects packed into a single `/ObjStm`. Default 100
-- **`Writer.WriteToWithOptions`** — option-aware variant of `Writer.WriteTo`
-- **`Document.WriteToWithOptions`, `Document.SaveWithOptions`, `Document.ToBytesWithOptions`** — option-aware variants of the existing methods
-- **`examples/optimize`** — runnable demo that writes the same document with and without the optimizer options and reports the byte-size delta
+#### Internationalization
+
+- **Right-to-left text** — bidi paragraph layout per UAX #9 via `golang.org/x/text/unicode/bidi`, character-level bidi splitting, RTL list support (markers on right, text indented from right), HTML `dir` attribute and CSS `direction` property wiring (#37)
+- **Arabic shaping** — presentation-forms shaper with full GSUB pipeline for init/medi/fina/isol features, GSUB ligature substitutions (`rlig`, `liga`), kashida (tatweel) justification, `/ActualText` markers (default on) for round-trip-safe copy/paste of shaped words (#37, #160, #179, #180)
+- **Devanagari shaping** — Indic shaper for Hindi, Sanskrit, Marathi, and Nepali. Five-phase OpenType pipeline with reordering, half-form substitution, and conjunct formation (#186)
+- **CJK line-breaking** — kinsoku shori rules per JIS X 4051 with leading and trailing prohibition sets (#157)
+- **Unicode infrastructure** — UAX #29 grapheme clusters (`unicode/grapheme` package), UAX #24 script segmentation, cluster-aware `font.MeasureString` (#170, #176, #183)
+
+#### OpenType infrastructure
+
+- **GSUB LookupType 4** ligature substitutions (#171)
+- **GSUB LookupType 6** chaining contextual substitution with depth-bounded action recursion (#174, #184)
+- **GPOS LookupType 2** pair adjustment (Format 1 explicit pairs and Format 2 class-based pairs); `face.Kern` consults GPOS first and falls back to the legacy `kern` table (#175)
+- **GPOS LookupType 4** mark-to-base anchoring with draw-pipeline wiring; correct diacritic placement for Arabic and Devanagari (#175, #185)
+- **TrueType `kern` table** parser hardening: correct v0 / v1 coverage decode, per-face cache, kerning-aware `MeasureString` for both `Standard` and `EmbeddedFont` (#172)
+
+#### Writer optimizer
+
+The `WriteOptions` struct is the single extension point for opt-in writer behavior. Zero value preserves byte-identical output to v0.6.2. Pass dispatch order: orphan sweep → content-stream cleanup → object dedup → stream recompression → encryption → serialization.
+
+- **`document.WriteOptions`** with `Writer.WriteToWithOptions`, `Document.WriteToWithOptions`, `Document.SaveWithOptions`, `Document.ToBytesWithOptions`
+- **`UseXRefStream`** — cross-reference stream object (ISO 32000-1 §7.5.8) replacing the traditional xref table and trailer. The xref stream is always written as the last indirect object so its own offset is known before serialization
+- **`UseObjectStreams`** — packs eligible indirect objects into compressed object streams (§7.5.7). Implies `UseXRefStream`. Refused on encrypted documents
+- **`ObjectStreamCapacity`** — cap on objects packed per `/ObjStm` (default 100)
+- **`OrphanSweep`** — drops indirect objects unreachable from `/Root`, `/Info`, `/Encrypt`; renumbers survivors contiguously
+- **`RecompressStreams`** — re-Flates eligible payloads at `zlib.BestCompression`, gated by a size-regression guard. Skips DCT/JPX/CCITT/JBIG2 leaf filters, multi-filter chains, and FlateDecode streams carrying `/DecodeParms` (predictor handling per §7.4.4.4)
+- **`DeduplicateObjects`** — merges byte-identical indirect objects via SHA-256 of canonical serialization; rewrites references to the canonical survivor; renumbers contiguously. Excludes catalog, `/Info`, `/Encrypt`
+- **`CleanContentStreams`** — removes empty `q`...`Q` save/restore pairs and identity `1 0 0 1 0 0 cm` operators (§7.8) from page content streams. Includes a byte-level lexer respecting strings, hex strings, comments, names, arrays, dictionaries, and inline images (BI/ID/EI per §8.9.7)
+- **`core.PdfIndirectReference.SetNum`** — object-number setter used by writer-side renumbering passes
+- **`core.PdfStream.WillCompress`** — getter matching the existing `SetCompress` setter; lets writer-side passes skip streams the writer will already deflate
+- **`core.DeflateStreamData` / `core.InflateStreamData`** — exported zlib codec helpers (formerly the unexported `deflate`)
+- **`examples/optimize`** — runnable demo with four fixtures (text-heavy, many empty pages, table-heavy, imported text-heavy) reporting byte-size deltas across the optimizer toggles. Imported fixture: 40,569 → 6,071 bytes (85.0% saved) with the full stack
+
+#### Templates and HTML
+
+- **`tmpl` package** — `html/template` integration: parse a template, execute against caller data, feed the result to the HTML converter (#155)
+- **`@font-face` with `src: url(data:font/...)`** base64 data URI fonts (#159)
+
+#### Examples
+
+- **`examples/indic`** — Hindi, Sanskrit, Marathi, Nepali samples (#191)
+- **`examples/rtl`** — expanded with full Arabic shaping showcase (#191)
+- **`examples/optimize`** — multi-fixture optimizer comparison (#177, #181)
+- **Stress tests** for column, grid, flexbox, and SVG layouts (#126, #153)
+
+### Fixed
+
+- **`<br>` inside `<strong>`, `<em>`, `<a>`, and other inline elements** — previously panicked. All 14 inline tags now route line breaks correctly through the `TextRun.IsLineBreak` field (#147, #150)
+- **Multi-line headings** no longer overprint wrapped lines (#132)
+- **`column-span: all` inside multi-column containers** — correct break handling at leading, trailing, consecutive, and column-boundary positions (#127)
+- **Heading overflow tag and `Consumed` accounting on page break** (#139)
+- **Gradient `stop-opacity`** plumbed through `layout.GradientStop` to the rasterizer (#146)
+- **JPEG parser out-of-bounds** found by fuzz testing (#169)
+- **CSS Custom property `var()` references** in `align-items` (#128)
+
+### Audits
+
+- **`core` package** — correctness fixes, hardening, gradual API cleanup; sentinel errors for parser failures (#165)
+- **`content` package** — operator validation against ISO 32000 operator set; coverage to 100% on operator emission paths (#166)
+- **`image` package** — limits on dimension and component count; fuzz suite for JPEG, PNG, TIFF; CMYK JPEG via Adobe APP14 (#167, #169, #173)
+- **`font` package** — sentinel errors, documented concurrency contract, coverage on subset and cmap paths (#168, #173)
+- **SVG `preserveAspectRatio`** parsed and honored; barcode fuzz suite (#178)
+
+### Changed
+
+- **Go module dependencies**:
+  - `golang.org/x/image` 0.38.0 → 0.39.0
+  - `golang.org/x/net` 0.52.0 → 0.53.0
+  - Added `golang.org/x/text/unicode/bidi` for UAX #9 bidirectional text
+- **`softprops/action-gh-release`** v2 → v3 (release CI)
+- **Internal**: `ARCHITECTURE.md` updated with the bidi dependency entry; `font/kern.go` extracted from `truetype.go`; GSUB extracted from the `Face` interface into an optional `GSUBProvider`; `unicode/grapheme` extracted as a leaf package
+- **READMEs**: end-to-end HTML-to-PDF benchmarks and performance section; Language SDKs section pointing at Java and WASM ports
+
+### Contributors
+
+- **David Richardson** ([@enquora](https://github.com/enquora)) — stress-test contributions for column, grid, flexbox, SVG layouts (#126)
 
 ## [0.6.2] - 2026-04-08
 

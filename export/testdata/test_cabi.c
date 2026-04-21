@@ -1640,6 +1640,99 @@ int main(void) {
     rc = folio_image_element_set_object_position(99999, "center");
     ASSERT(rc != 0, "image_element_set_object_position rejects bad handle");
 
+    /* ───────── v0.7.0 C ABI additions ───────── */
+
+    /* WriteOptions lifecycle */
+    uint64_t opts = folio_write_options_new();
+    ASSERT(opts != 0, "write_options_new returns handle");
+
+    rc = folio_write_options_set_use_xref_stream(opts, 1);
+    ASSERT(rc == 0, "write_options_set_use_xref_stream succeeds");
+    rc = folio_write_options_set_use_object_streams(opts, 1);
+    ASSERT(rc == 0, "write_options_set_use_object_streams succeeds");
+    rc = folio_write_options_set_object_stream_capacity(opts, 50);
+    ASSERT(rc == 0, "write_options_set_object_stream_capacity succeeds");
+    rc = folio_write_options_set_orphan_sweep(opts, 1);
+    ASSERT(rc == 0, "write_options_set_orphan_sweep succeeds");
+    rc = folio_write_options_set_clean_content_streams(opts, 1);
+    ASSERT(rc == 0, "write_options_set_clean_content_streams succeeds");
+    rc = folio_write_options_set_deduplicate_objects(opts, 1);
+    ASSERT(rc == 0, "write_options_set_deduplicate_objects succeeds");
+    rc = folio_write_options_set_recompress_streams(opts, 1);
+    ASSERT(rc == 0, "write_options_set_recompress_streams succeeds");
+
+    /* Bad handle rejections */
+    rc = folio_write_options_set_use_xref_stream(99999, 1);
+    ASSERT(rc != 0, "write_options_set rejects invalid handle");
+
+    /* Build a document and serialize with the optimizer stack */
+    uint64_t docOpt = folio_document_new_letter();
+    ASSERT(docOpt != 0, "document_new_letter for optimizer test");
+    uint64_t pgOpt = folio_document_add_page(docOpt);
+    ASSERT(pgOpt != 0, "add_page for optimizer test");
+    uint64_t bufOpt = folio_document_write_to_buffer_with_options(docOpt, opts);
+    ASSERT(bufOpt != 0, "write_to_buffer_with_options returns handle");
+    int32_t lenOpt = folio_buffer_len(bufOpt);
+    ASSERT(lenOpt > 0, "optimized buffer has data");
+    void* dataOpt = folio_buffer_data(bufOpt);
+    ASSERT(dataOpt != NULL, "optimized buffer data pointer non-null");
+    ASSERT(memcmp(dataOpt, "%PDF-", 5) == 0, "optimized output starts with %PDF-");
+    folio_buffer_free(bufOpt);
+
+    /* Zero-handle options == defaults (equivalent to write_to_buffer) */
+    uint64_t bufDefault = folio_document_write_to_buffer_with_options(docOpt, 0);
+    ASSERT(bufDefault != 0, "write_to_buffer_with_options accepts zero options");
+    folio_buffer_free(bufDefault);
+
+    folio_document_free(docOpt);
+    folio_write_options_free(opts);
+
+    /* Document.SetActualText */
+    uint64_t docAT = folio_document_new_letter();
+    rc = folio_document_set_actual_text(docAT, 0);
+    ASSERT(rc == 0, "document_set_actual_text(0) succeeds");
+    rc = folio_document_set_actual_text(docAT, 1);
+    ASSERT(rc == 0, "document_set_actual_text(1) succeeds");
+    rc = folio_document_set_actual_text(99999, 1);
+    ASSERT(rc != 0, "document_set_actual_text rejects bad handle");
+    folio_document_free(docAT);
+
+    /* Paragraph / List / Table / Columns direction + balanced setters */
+    uint64_t helvDir = folio_font_helvetica();
+    uint64_t pDir = folio_paragraph_new("dir test", helvDir, 12.0);
+    ASSERT(pDir != 0, "paragraph_new for direction test");
+    rc = folio_paragraph_set_direction(pDir, 2); /* RTL */
+    ASSERT(rc == 0, "paragraph_set_direction RTL succeeds");
+    rc = folio_paragraph_set_direction(pDir, 1); /* LTR */
+    ASSERT(rc == 0, "paragraph_set_direction LTR succeeds");
+    rc = folio_paragraph_set_direction(pDir, 99); /* out of range -> auto */
+    ASSERT(rc == 0, "paragraph_set_direction normalizes unknown code");
+    rc = folio_paragraph_set_direction(99999, 0);
+    ASSERT(rc != 0, "paragraph_set_direction rejects bad handle");
+    folio_paragraph_free(pDir);
+
+    uint64_t lDir = folio_list_new(helvDir, 12.0);
+    ASSERT(lDir != 0, "list_new for direction test");
+    rc = folio_list_set_direction(lDir, 2);
+    ASSERT(rc == 0, "list_set_direction RTL succeeds");
+    folio_list_free(lDir);
+
+    uint64_t tDir = folio_table_new();
+    ASSERT(tDir != 0, "table_new for direction test");
+    rc = folio_table_set_direction(tDir, 2);
+    ASSERT(rc == 0, "table_set_direction RTL succeeds");
+    folio_table_free(tDir);
+
+    uint64_t cBal = folio_columns_new(3);
+    ASSERT(cBal != 0, "columns_new for balanced test");
+    rc = folio_columns_set_balanced(cBal, 0);
+    ASSERT(rc == 0, "columns_set_balanced disable succeeds");
+    rc = folio_columns_set_balanced(cBal, 1);
+    ASSERT(rc == 0, "columns_set_balanced enable succeeds");
+    rc = folio_columns_set_balanced(99999, 1);
+    ASSERT(rc != 0, "columns_set_balanced rejects bad handle");
+    folio_columns_free(cBal);
+
     /* Summary */
     printf("\n%d passed, %d failed\n", passes, failures);
     return failures > 0 ? 1 : 0;

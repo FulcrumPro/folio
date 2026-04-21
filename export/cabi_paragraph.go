@@ -144,11 +144,41 @@ func folio_paragraph_add_run(pH C.uint64_t, text *C.char, fontH C.uint64_t, font
 	return errOK
 }
 
+// folio_paragraph_set_direction sets the paragraph's text direction.
+// Values: 0 = auto (detect from first strong character; default),
+// 1 = left-to-right, 2 = right-to-left. Out-of-range values are
+// treated as auto.
+//
+//export folio_paragraph_set_direction
+func folio_paragraph_set_direction(pH C.uint64_t, dir C.int32_t) C.int32_t {
+	p, errCode := loadParagraph(pH)
+	if errCode != errOK {
+		return errCode
+	}
+	p.SetDirection(layoutDirectionFromC(dir))
+	return errOK
+}
+
 // folio_paragraph_free removes a paragraph handle from the handle table.
 //
 //export folio_paragraph_free
 func folio_paragraph_free(pH C.uint64_t) {
 	ht.delete(uint64(pH))
+}
+
+// layoutDirectionFromC converts a C int32 direction code to
+// layout.Direction. Unknown values are mapped to DirectionAuto so a
+// consumer miscoding the constant does not end up with a silently
+// reversed reading direction.
+func layoutDirectionFromC(dir C.int32_t) layout.Direction {
+	switch dir {
+	case 1:
+		return layout.DirectionLTR
+	case 2:
+		return layout.DirectionRTL
+	default:
+		return layout.DirectionAuto
+	}
 }
 
 // loadParagraph retrieves a *layout.Paragraph from the handle table.

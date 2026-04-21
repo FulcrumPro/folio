@@ -169,7 +169,7 @@ func (e *Encryptor) walkEncrypt(obj PdfObject, objNum, genNum int) error {
 		// Compress data first (if applicable), then encrypt.
 		data := o.Data
 		if o.compress {
-			compressed, err := deflate(data)
+			compressed, err := DeflateStreamData(data)
 			if err != nil {
 				return fmt.Errorf("compress stream (obj %d): %w", objNum, err)
 			}

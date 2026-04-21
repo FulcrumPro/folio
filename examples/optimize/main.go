@@ -124,17 +124,20 @@ func importedTextHeavy() *document.Document {
 //     and /Encrypt before serialization.
 //   - +recompress: also re-Flate-compresses eligible stream payloads
 //     (§7.4.4) at zlib.BestCompression.
-func writeAll(f fixture) (defaultBytes, packedBytes, sweptBytes, recompressBytes []byte, err error) {
+//   - +full: every lossless toggle on — adds content-stream operator
+//     cleanup (§7.8) and structural deduplication of byte-identical
+//     indirect objects.
+func writeAll(f fixture) (defaultBytes, packedBytes, sweptBytes, recompressBytes, fullBytes []byte, err error) {
 	defaultBytes, err = f.build().ToBytes()
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("%s default: %w", f.name, err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("%s default: %w", f.name, err)
 	}
 	packedBytes, err = f.build().ToBytesWithOptions(document.WriteOptions{
 		UseXRefStream:    true,
 		UseObjectStreams: true,
 	})
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("%s xref+obj: %w", f.name, err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("%s xref+obj: %w", f.name, err)
 	}
 	sweptBytes, err = f.build().ToBytesWithOptions(document.WriteOptions{
 		UseXRefStream:    true,
@@ -142,7 +145,7 @@ func writeAll(f fixture) (defaultBytes, packedBytes, sweptBytes, recompressBytes
 		OrphanSweep:      true,
 	})
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("%s +sweep: %w", f.name, err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("%s +sweep: %w", f.name, err)
 	}
 	recompressBytes, err = f.build().ToBytesWithOptions(document.WriteOptions{
 		UseXRefStream:     true,
@@ -151,9 +154,20 @@ func writeAll(f fixture) (defaultBytes, packedBytes, sweptBytes, recompressBytes
 		RecompressStreams: true,
 	})
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("%s +recompress: %w", f.name, err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("%s +recompress: %w", f.name, err)
 	}
-	return defaultBytes, packedBytes, sweptBytes, recompressBytes, nil
+	fullBytes, err = f.build().ToBytesWithOptions(document.WriteOptions{
+		UseXRefStream:       true,
+		UseObjectStreams:    true,
+		OrphanSweep:         true,
+		CleanContentStreams: true,
+		DeduplicateObjects:  true,
+		RecompressStreams:   true,
+	})
+	if err != nil {
+		return nil, nil, nil, nil, nil, fmt.Errorf("%s +full: %w", f.name, err)
+	}
+	return defaultBytes, packedBytes, sweptBytes, recompressBytes, fullBytes, nil
 }
 
 func main() {
@@ -164,26 +178,26 @@ func main() {
 		{name: "imported text-heavy", build: importedTextHeavy},
 	}
 
-	fmt.Printf("%-22s %12s %12s %12s %12s %10s\n",
-		"fixture", "default", "xref+obj", "+sweep", "+recompress", "saved")
-	fmt.Println("---------------------- ------------ ------------ ------------ ------------ ----------")
+	fmt.Printf("%-22s %12s %12s %12s %12s %12s %10s\n",
+		"fixture", "default", "xref+obj", "+sweep", "+recompress", "+full", "saved")
+	fmt.Println("---------------------- ------------ ------------ ------------ ------------ ------------ ----------")
 
 	for _, f := range fixtures {
-		def, packed, swept, recompress, err := writeAll(f)
+		def, packed, swept, recompress, full, err := writeAll(f)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		saved := len(def) - len(recompress)
+		saved := len(def) - len(full)
 		pct := 100.0 * float64(saved) / float64(len(def))
-		fmt.Printf("%-22s %10d B %10d B %10d B %10d B %8.1f %%\n",
-			f.name, len(def), len(packed), len(swept), len(recompress), pct)
+		fmt.Printf("%-22s %10d B %10d B %10d B %10d B %10d B %8.1f %%\n",
+			f.name, len(def), len(packed), len(swept), len(recompress), len(full), pct)
 	}
 
 	// Write the imported fixture to disk so the user has concrete files
 	// to inspect with qpdf or any PDF viewer. The imported case is
 	// where the optimizer's win is most visible.
-	def, _, _, recompress, err := writeAll(fixtures[len(fixtures)-1])
+	def, _, _, _, full, err := writeAll(fixtures[len(fixtures)-1])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -192,7 +206,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "write default file: %v\n", err)
 		os.Exit(1)
 	}
-	if err := os.WriteFile("optimize-compressed.pdf", recompress, 0o644); err != nil {
+	if err := os.WriteFile("optimize-compressed.pdf", full, 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "write optimized file: %v\n", err)
 		os.Exit(1)
 	}

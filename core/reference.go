@@ -42,6 +42,12 @@ func (r *PdfIndirectReference) Num() int { return r.ObjectNumber }
 // Gen returns the generation number of the referenced object.
 func (r *PdfIndirectReference) Gen() int { return r.GenerationNumber }
 
+// SetNum updates the object number this reference points to. Used by
+// writer-side passes that renumber objects (e.g., the orphan-sweep
+// renumbering in package document) without forcing callers to touch
+// the deprecated ObjectNumber field directly.
+func (r *PdfIndirectReference) SetNum(objNum int) { r.ObjectNumber = objNum }
+
 // WriteTo serializes the indirect reference as "objNum genNum R" to w.
 func (r *PdfIndirectReference) WriteTo(w io.Writer) (int64, error) {
 	written, err := fmt.Fprintf(w, "%d %d R", r.ObjectNumber, r.GenerationNumber)

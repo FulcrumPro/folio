@@ -36,6 +36,22 @@ type WriteOptions struct {
 	// single /ObjStm. Zero means "use the writer default". Ignored
 	// unless UseObjectStreams is set.
 	ObjectStreamCapacity int
+
+	// OrphanSweep removes indirect objects unreachable from the
+	// document roots before serialization. The reachable set is
+	// computed by walking PdfIndirectReference values out of /Root,
+	// /Info, and /Encrypt (ISO 32000-1 §7.5.4 requires every "in use"
+	// xref entry to point at an object the document actually consumes;
+	// §7.7.2 names the document catalog as the reachability entry
+	// point). Surviving objects are renumbered contiguously starting
+	// at 1. The sweep is lossless: it never alters object content, only
+	// drops orphans and rewrites object numbers.
+	//
+	// Currently refused on encrypted documents because the per-object
+	// encryption key derives from the object number (§7.6.3.3); a safe
+	// interaction with the standard security handler has not yet been
+	// implemented.
+	OrphanSweep bool
 }
 
 // WriteToWithOptions is the option-aware variant of WriteTo. WriteTo is
@@ -57,6 +73,21 @@ func (w *Writer) WriteToWithOptions(out io.Writer, opts WriteOptions) (int64, er
 		// encryption (§7.6.1 requires the entire object stream to be
 		// encrypted as a unit, not the individual entries).
 		return 0, fmt.Errorf("writer: object streams are not supported with encryption in phase 1")
+	}
+	if opts.OrphanSweep && w.encryptor != nil {
+		// Same defense as the objstm refusal above: refuse before the
+		// encryption walk so a retry without OrphanSweep is not
+		// double-encrypted. The standard security handler keys each
+		// object on its number (§7.6.3.3); a sweep that renumbers
+		// objects in an encrypted document would silently invalidate
+		// the keys for every renumbered entry.
+		return 0, fmt.Errorf("writer: orphan sweep is not supported on encrypted documents")
+	}
+	if opts.OrphanSweep {
+		// Sweep before the encryption walk so encryption uses the new
+		// numbers. With encryption refused above the order is currently
+		// moot, but the placement encodes the intended invariant.
+		w.sweepOrphans()
 	}
 
 	// Encrypt all user objects in place. Done before serialization so

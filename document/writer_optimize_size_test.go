@@ -117,3 +117,39 @@ func BenchmarkWriteOptimized50(b *testing.B) {
 		})
 	}
 }
+
+// TestOptimizerSweepNeverEnlargesRealDocument is the document-level
+// equivalent of TestSweepOrphans_DocumentAPIShrinksOutput in
+// writer_sweep_test.go: enabling OrphanSweep on top of the existing
+// optimizer options must never enlarge a real, layout-built document.
+// Documents produced by the layout engine carry no orphans today, so
+// the assertion is "no enlargement," not "shrinks."
+func TestOptimizerSweepNeverEnlargesRealDocument(t *testing.T) {
+	const sections = 25
+
+	withoutSweep, err := buildSampleDocument(sections).ToBytesWithOptions(WriteOptions{
+		UseXRefStream:    true,
+		UseObjectStreams: true,
+	})
+	if err != nil {
+		t.Fatalf("without sweep: %v", err)
+	}
+	withSweep, err := buildSampleDocument(sections).ToBytesWithOptions(WriteOptions{
+		UseXRefStream:    true,
+		UseObjectStreams: true,
+		OrphanSweep:      true,
+	})
+	if err != nil {
+		t.Fatalf("with sweep: %v", err)
+	}
+	if len(withSweep) > len(withoutSweep) {
+		t.Errorf("OrphanSweep enlarged the optimized output: without=%d, with=%d",
+			len(withoutSweep), len(withSweep))
+	}
+	if !bytes.HasPrefix(withSweep, []byte("%PDF-")) {
+		t.Error("missing %PDF- header")
+	}
+	if !bytes.HasSuffix(withSweep, []byte("%%EOF\n")) {
+		t.Error("missing EOF marker")
+	}
+}

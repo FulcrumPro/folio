@@ -84,6 +84,44 @@ type WriteOptions struct {
 	// Lossless and safe to combine with UseXRefStream,
 	// UseObjectStreams, and OrphanSweep.
 	RecompressStreams bool
+
+	// DeduplicateObjects merges byte-identical indirect objects so the
+	// serialized output stores each unique payload exactly once. For
+	// every group of indirect objects whose canonical serialization
+	// (per ISO 32000-1 §7.3) produces the same bytes, the first slot
+	// is retained and every PdfIndirectReference targeting any of the
+	// other slots is rewritten to point at the survivor. Surviving
+	// objects are renumbered contiguously.
+	//
+	// The pass is most valuable on documents that re-use resources:
+	// imported pages sharing fonts or color spaces, repeated logos
+	// embedded as separate XObjects, identical ToUnicode CMaps
+	// (§9.10.3) across font dictionaries, and per-page content streams
+	// produced by templated workflows.
+	//
+	// Catalog, /Info, and /Encrypt indirect objects are excluded from
+	// dedup — they are reachability roots that the trailer slots refer
+	// to by pointer, and merging them would require relocating the
+	// trailer-side bookkeeping. They are unique in practice anyway.
+	//
+	// Currently refused on encrypted documents for the same reason as
+	// OrphanSweep: per-object encryption keys derive from the object
+	// number (§7.6.3.3) and renumbering after dedup would invalidate
+	// every key.
+	DeduplicateObjects bool
+
+	// CleanContentStreams removes redundant operators from page content
+	// streams (ISO 32000-1 §7.8): empty `q ... Q` graphics-state
+	// save/restore pairs that contain only whitespace, and identity
+	// `1 0 0 1 0 0 cm` matrix concatenations. The cleanup operates on
+	// the raw byte payload of each stream referenced from a Page
+	// dictionary's /Contents entry; the size-regression guard reverts
+	// any rewrite that fails to shrink.
+	//
+	// Currently refused on encrypted documents because rewriting
+	// payload bytes after the encryption walk would emit ciphertext
+	// that decrypts to the wrong plaintext.
+	CleanContentStreams bool
 }
 
 // WriteToWithOptions is the option-aware variant of WriteTo. WriteTo is
@@ -123,16 +161,34 @@ func (w *Writer) WriteToWithOptions(out io.Writer, opts WriteOptions) (int64, er
 		// without RecompressStreams is unaffected.
 		return 0, fmt.Errorf("writer: stream recompression is not supported on encrypted documents")
 	}
+	if opts.DeduplicateObjects && w.encryptor != nil {
+		// Same defense: dedup renumbers survivors, which would
+		// invalidate per-object encryption keys (§7.6.3.3).
+		return 0, fmt.Errorf("writer: object deduplication is not supported on encrypted documents")
+	}
+	if opts.CleanContentStreams && w.encryptor != nil {
+		// Same defense as RecompressStreams: rewriting payload bytes
+		// interacts badly with the encryption walk.
+		return 0, fmt.Errorf("writer: content stream cleanup is not supported on encrypted documents")
+	}
+	// Order: sweep → cleanup → dedup → recompress → encrypt → serialize.
+	// - Sweep first so later passes do not waste effort on orphans.
+	// - Cleanup before dedup so two streams that become byte-identical
+	//   after redundant-operator removal can be merged.
+	// - Dedup before recompress so each canonical payload is recompressed
+	//   exactly once.
+	// - Encryption walk runs last because it mutates payload bytes
+	//   (ciphertext) that no other pass should touch.
 	if opts.OrphanSweep {
-		// Sweep before the encryption walk so encryption uses the new
-		// numbers. With encryption refused above the order is currently
-		// moot, but the placement encodes the intended invariant.
 		w.sweepOrphans()
 	}
+	if opts.CleanContentStreams {
+		w.cleanContentStreams()
+	}
+	if opts.DeduplicateObjects {
+		w.deduplicateObjects()
+	}
 	if opts.RecompressStreams {
-		// Recompress AFTER the sweep: orphan streams should not be
-		// recompressed only to be dropped. AFTER sweep also means
-		// after renumbering, but recompression is renumber-agnostic.
 		w.recompressStreams()
 	}
 

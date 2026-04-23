@@ -92,6 +92,19 @@ func (s *SVG) DrawWithOptions(stream *content.Stream, x, y, w, h float64, opts R
 	// other setting the scale is uniform and a translation offset is
 	// folded in so the scaled viewBox is aligned within (w, h).
 	sx, sy, tx, ty := computeViewportTransform(s.aspectRatio, w, h, vbW, vbH)
+
+	// Slice mode scales uniformly so the viewport is fully covered,
+	// which means content overflows on one axis. Clip to the target
+	// rectangle in its own coordinate space (i.e. after the translate
+	// to (x, y), before the scale is applied) so the overflow is not
+	// visible. Meet and none modes keep content inside the target by
+	// construction, so no clip is needed there.
+	if !s.aspectRatio.None && s.aspectRatio.MeetOrSlice == ScaleSlice {
+		stream.Rectangle(0, 0, w, h)
+		stream.ClipNonZero()
+		stream.EndPath()
+	}
+
 	stream.ConcatMatrix(sx, 0, 0, sy, tx, ty)
 
 	// Flip Y axis: SVG is top-down, PDF is bottom-up.

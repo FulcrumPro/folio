@@ -33,8 +33,8 @@ const (
 	// aspect ratio differs from the viewBox aspect ratio.
 	ScaleMeet AspectMeetOrSlice = iota
 	// ScaleSlice scales uniformly so the viewport is completely covered
-	// by the viewBox; content outside the viewport is not clipped by
-	// this package, so callers should clip externally when using slice.
+	// by the viewBox. Content outside the target rectangle is clipped
+	// by [DrawWithOptions] before the scale transform is applied.
 	ScaleSlice
 )
 

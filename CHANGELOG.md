@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-04-22
+
+C ABI follow-up to v0.7.0. No Go-side behavior changes; every addition is in `export/`. C ABI exports grow from 372 to 388 (+16). The header `export/folio.h` is updated in lockstep — `scripts/audit-cabi.sh` reports Go and header in sync.
+
+### Added
+
+#### Writer optimizer (C ABI)
+
+Handle-based builder so future toggles compose without renaming existing calls. The save and buffer entry points accept a zero handle as "use defaults", so callers that only want the optimizer for a single write do not need to allocate and free an options object.
+
+- **`folio_write_options_new`** / **`folio_write_options_free`**
+- **`folio_write_options_set_use_xref_stream`** — ISO 32000-1 §7.5.8
+- **`folio_write_options_set_use_object_streams`** — §7.5.7
+- **`folio_write_options_set_object_stream_capacity`**
+- **`folio_write_options_set_orphan_sweep`**
+- **`folio_write_options_set_clean_content_streams`** — §7.8
+- **`folio_write_options_set_deduplicate_objects`**
+- **`folio_write_options_set_recompress_streams`** — §7.4.4
+- **`folio_document_save_with_options`**
+- **`folio_document_write_to_buffer_with_options`**
+
+#### Document and per-element setters (C ABI)
+
+- **`folio_document_set_actual_text`** — toggles the `/Span /ActualText` emission for shaped Arabic words (ISO 32000-2 §14.9.4)
+- **`folio_paragraph_set_direction`** — `FOLIO_DIR_AUTO` (0) / `FOLIO_DIR_LTR` (1) / `FOLIO_DIR_RTL` (2). Out-of-range values normalize to auto
+- **`folio_list_set_direction`**
+- **`folio_table_set_direction`**
+- **`folio_columns_set_balanced`**
+
+#### Header
+
+- **`FOLIO_DIR_AUTO`, `FOLIO_DIR_LTR`, `FOLIO_DIR_RTL`** preprocessor constants in `export/folio.h` so C consumers do not encode magic numbers for the direction setters
+
+### Test plan
+
+`export/testdata/test_cabi.c` gains 21 new assertions covering: `WriteOptions` lifecycle, all seven setters (happy path and bad-handle rejection), zero-options default path, an end-to-end document write with every optimizer toggle on that confirms the output starts with `%PDF-`, `folio_document_set_actual_text` happy path plus bad-handle, direction setters on Paragraph / List / Table (happy path, normalization of out-of-range codes, bad handle), `folio_columns_set_balanced` happy path and bad-handle. Total `test_cabi` assertions: 390 (384 pre-existing + 6 new blocks).
+
+### Not exposed
+
+Internal-only v0.7.0 additions remain unexported from the C ABI: `core.PdfIndirectReference.SetNum` and `core.PdfStream.WillCompress` (writer-internal); `core.DeflateStreamData` / `core.InflateStreamData` (callers can use any host-language zlib); `core.PdfArray` / `PdfDictionary` / `PdfNumber` / `PdfBoolean` / `PdfString` Go-style accessors; `font.ParseGPOS` / `ParseGSUB` / `ParseKern` and `face.GSUB` / `GPOS` / `GIDToUnicode` (font parser internals); `font.CanEncodeWinAnsiRune`, `EmbeddedFont.EncodeGIDs` / `MeasureGIDs` (shaper-internal); `layout.ShapeArabic` / `ShapeArabicWithFont` / `ShapeDevanagari*`, `ScriptOf` / `SegmentByScript`, `GraphemeBreaks` / `NextGraphemeBreak` / `GraphemeCount`, `FindKashidaCandidates` / `InsertKashidas` (run inside the layout pipeline); `layout.GSUBProvider` / `GPOSProvider` (Go interfaces); `tmpl` package (Go-specific templating). RTL and shaping for HTML-driven workflows continue to flow through `folio_document_add_html` unchanged.
+
 ## [0.7.0] - 2026-04-21
 
 No breaking API changes. Every new field, method, and package is additive; zero-value `WriteOptions` and existing constructors produce byte-identical output to v0.6.2. Several bug fixes change the visible output of affected documents — see Visual changes before regression-diffing PDFs.

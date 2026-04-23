@@ -74,6 +74,21 @@ func folio_list_add_item(listH C.uint64_t, text *C.char) C.int32_t {
 }
 
 // folio_list_free removes a list handle from the handle table.
+// folio_list_set_direction sets the list's direction. Values:
+// 0 = auto (from first strong character; default),
+// 1 = left-to-right, 2 = right-to-left. RTL lists render markers on
+// the right with text indented from the right edge.
+//
+//export folio_list_set_direction
+func folio_list_set_direction(listH C.uint64_t, dir C.int32_t) C.int32_t {
+	l, errCode := loadList(listH)
+	if errCode != errOK {
+		return errCode
+	}
+	l.SetDirection(layoutDirectionFromC(dir))
+	return errOK
+}
+
 //
 //export folio_list_free
 func folio_list_free(listH C.uint64_t) {

@@ -174,12 +174,35 @@ int32_t  folio_document_add(uint64_t doc, uint64_t element);
 int32_t  folio_document_save(uint64_t doc, const char *path);
 uint64_t folio_document_write_to_buffer(uint64_t doc);
 
+/* Optimizer-aware writer (v0.7.0). Pass opts=0 to use defaults. */
+int32_t  folio_document_save_with_options(uint64_t doc, const char *path, uint64_t opts);
+uint64_t folio_document_write_to_buffer_with_options(uint64_t doc, uint64_t opts);
+
 /* Document features */
 int32_t  folio_document_set_tagged(uint64_t doc, int32_t enabled);
 int32_t  folio_document_set_pdfa(uint64_t doc, int32_t level);
+int32_t  folio_document_set_actual_text(uint64_t doc, int32_t enabled);
 int32_t  folio_document_set_encryption(uint64_t doc, const char *user_pw, const char *owner_pw, int32_t algorithm);
 int32_t  folio_document_set_encryption_with_permissions(uint64_t doc, const char *user_pw,
              const char *owner_pw, int32_t algorithm, int32_t permissions);  /* FOLIO_PERM_* */
+
+/* ── WriteOptions (writer optimizer, v0.7.0) ──────────────────────── */
+
+/* Direction values for *_set_direction setters. */
+#define FOLIO_DIR_AUTO 0
+#define FOLIO_DIR_LTR  1
+#define FOLIO_DIR_RTL  2
+
+uint64_t folio_write_options_new(void);
+void     folio_write_options_free(uint64_t opts);
+
+int32_t  folio_write_options_set_use_xref_stream(uint64_t opts, int32_t enabled);
+int32_t  folio_write_options_set_use_object_streams(uint64_t opts, int32_t enabled);
+int32_t  folio_write_options_set_object_stream_capacity(uint64_t opts, int32_t capacity);
+int32_t  folio_write_options_set_orphan_sweep(uint64_t opts, int32_t enabled);
+int32_t  folio_write_options_set_clean_content_streams(uint64_t opts, int32_t enabled);
+int32_t  folio_write_options_set_deduplicate_objects(uint64_t opts, int32_t enabled);
+int32_t  folio_write_options_set_recompress_streams(uint64_t opts, int32_t enabled);
 
 /* Convenience: serialize document to a buffer handle (caller must folio_buffer_free). */
 uint64_t folio_document_to_bytes(uint64_t doc);
@@ -307,6 +330,7 @@ int32_t  folio_paragraph_set_space_before(uint64_t para, double pts);
 int32_t  folio_paragraph_set_space_after(uint64_t para, double pts);
 int32_t  folio_paragraph_set_background(uint64_t para, double r, double g, double b);
 int32_t  folio_paragraph_set_first_indent(uint64_t para, double pts);
+int32_t  folio_paragraph_set_direction(uint64_t para, int32_t dir);  /* FOLIO_DIR_* */
 int32_t  folio_paragraph_set_orphans(uint64_t para, int32_t n);
 int32_t  folio_paragraph_set_widows(uint64_t para, int32_t n);
 int32_t  folio_paragraph_set_ellipsis(uint64_t para, int32_t enabled);
@@ -334,6 +358,7 @@ int32_t  folio_table_set_column_widths(uint64_t table, const double *widths, int
 int32_t  folio_table_set_border_collapse(uint64_t table, int32_t enabled);
 int32_t  folio_table_set_cell_spacing(uint64_t table, double h, double v);
 int32_t  folio_table_set_auto_column_widths(uint64_t table);
+int32_t  folio_table_set_direction(uint64_t table, int32_t dir);  /* FOLIO_DIR_* */
 int32_t  folio_table_set_min_width(uint64_t table, double pts);
 
 uint64_t folio_table_add_row(uint64_t table);
@@ -425,6 +450,7 @@ void     folio_list_free(uint64_t list);
 int32_t  folio_list_set_style(uint64_t list, int32_t style);
 int32_t  folio_list_set_indent(uint64_t list, double indent);
 int32_t  folio_list_set_leading(uint64_t list, double leading);
+int32_t  folio_list_set_direction(uint64_t list, int32_t dir);  /* FOLIO_DIR_* */
 int32_t  folio_list_add_item(uint64_t list, const char *text);
 uint64_t folio_list_add_nested_item(uint64_t list, const char *text);
 
@@ -695,6 +721,7 @@ void     folio_columns_free(uint64_t columns);
 
 int32_t  folio_columns_set_gap(uint64_t columns, double gap);
 int32_t  folio_columns_set_widths(uint64_t columns, const double *widths, int32_t count);
+int32_t  folio_columns_set_balanced(uint64_t columns, int32_t enabled);
 int32_t  folio_columns_add(uint64_t columns, int32_t col_index, uint64_t element);
 
 /* ── Float (text wrapping) ────────────────────────────────────────── */

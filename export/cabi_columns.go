@@ -71,6 +71,22 @@ func folio_columns_add(colsH C.uint64_t, colIndex C.int32_t, elemH C.uint64_t) C
 	return errOK
 }
 
+// folio_columns_set_balanced controls height-balanced sequential
+// packing across columns. Enabled by default per CSS Multi-column
+// Layout (`column-fill: balance`); disabling produces round-robin
+// distribution across columns at layout time. Any non-zero value
+// enables balanced fill.
+//
+//export folio_columns_set_balanced
+func folio_columns_set_balanced(colsH C.uint64_t, balanced C.int32_t) C.int32_t {
+	c, errCode := loadColumns(colsH)
+	if errCode != errOK {
+		return errCode
+	}
+	c.SetBalanced(balanced != 0)
+	return errOK
+}
+
 //export folio_columns_free
 func folio_columns_free(colsH C.uint64_t) {
 	ht.delete(uint64(colsH))

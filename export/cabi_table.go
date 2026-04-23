@@ -243,6 +243,20 @@ func loadRow(h C.uint64_t) (*layout.Row, C.int32_t) {
 	return r, errOK
 }
 
+// folio_table_set_direction sets the table's column order direction.
+// Values: 0 = auto, 1 = left-to-right, 2 = right-to-left. RTL reverses
+// the column order so the first added cell appears on the right.
+//
+//export folio_table_set_direction
+func folio_table_set_direction(tH C.uint64_t, dir C.int32_t) C.int32_t {
+	t, errCode := loadTable(tH)
+	if errCode != errOK {
+		return errCode
+	}
+	t.SetDirection(layoutDirectionFromC(dir))
+	return errOK
+}
+
 // loadCell retrieves a *layout.Cell from the handle table.
 func loadCell(h C.uint64_t) (*layout.Cell, C.int32_t) {
 	v := ht.load(uint64(h))

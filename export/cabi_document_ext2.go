@@ -116,3 +116,19 @@ func folio_document_set_right_margins(docH C.uint64_t, top, right, bottom, left 
 	})
 	return errOK
 }
+
+// folio_document_set_actual_text controls whether the writer wraps
+// shaped Arabic words in /Span /ActualText marked-content sequences
+// (ISO 32000-2 §14.9.4). Enabled by default. Disabling shaves a few
+// dozen bytes per shaped Arabic word at the cost of copy/paste
+// fidelity in PDF readers.
+//
+//export folio_document_set_actual_text
+func folio_document_set_actual_text(docH C.uint64_t, enabled C.int32_t) C.int32_t {
+	doc, errCode := loadDoc(docH)
+	if errCode != errOK {
+		return errCode
+	}
+	doc.SetActualText(enabled != 0)
+	return errOK
+}

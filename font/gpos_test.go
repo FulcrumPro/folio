@@ -524,6 +524,427 @@ func TestParseGPOSAnchorFormats2And3(t *testing.T) {
 	}
 }
 
+// TestParseGPOSMarkMarkPosFormat1 checks the LookupType 6 parser: a
+// mark1 whose anchor sits at (100, 400) attaching to a mark2 whose
+// anchor sits at (150, 900) must yield an offset of (50, 500), i.e.
+// mark2.X - mark1.X, mark2.Y - mark1.Y. The byte layout of a
+// MarkMarkPosFormat1 subtable is identical to MarkBasePosFormat1, so
+// markBasePosBody is reused here with the mark1/mark2 glyph IDs
+// standing in for mark/base.
+func TestParseGPOSMarkMarkPosFormat1(t *testing.T) {
+	const (
+		mark1GID uint16 = 61 // attaching mark (e.g. shadda on top)
+		mark2GID uint16 = 60 // underlying mark (e.g. fatha)
+	)
+	body := markBasePosBody(mark1GID, mark2GID, 100, 400, 150, 900, 1)
+	gpos := buildGPOSHeader("mkmk", 6, body, 0)
+	font := wrapTTF(gpos)
+
+	g := ParseGPOS(font)
+	if g == nil {
+		t.Fatal("ParseGPOS returned nil")
+	}
+	dx, dy, ok := g.MarkMarkOffset(mark1GID, mark2GID, GPOSMkmk)
+	if !ok {
+		t.Fatal("MarkMarkOffset returned ok=false, want true")
+	}
+	if dx != 50 || dy != 500 {
+		t.Errorf("MarkMarkOffset = (%d, %d), want (50, 500)", dx, dy)
+	}
+	// The reverse pair must miss: mark2 is not in the mark1 array.
+	if _, _, okMiss := g.MarkMarkOffset(mark2GID, mark1GID, GPOSMkmk); okMiss {
+		t.Error("MarkMarkOffset with swapped operands should return ok=false")
+	}
+	if _, _, okMiss := g.MarkMarkOffset(999, mark2GID, GPOSMkmk); okMiss {
+		t.Error("MarkMarkOffset for unknown mark1 should return ok=false")
+	}
+	if _, _, okMiss := g.MarkMarkOffset(mark1GID, 999, GPOSMkmk); okMiss {
+		t.Error("MarkMarkOffset for unknown mark2 should return ok=false")
+	}
+	// Mark-to-base storage must remain independent: mkmk data must not
+	// bleed into the mark feature.
+	if _, _, okMiss := g.MarkOffset(mark2GID, mark1GID, GPOSMark); okMiss {
+		t.Error("mkmk data must not populate the mark feature's MarkOffset path")
+	}
+}
+
+// TestParseGPOSMarkMarkExtensionWrap verifies that LookupType 6 is
+// followed through a LookupType 9 extension subtable, matching the
+// treatment of LookupType 2 and 4.
+func TestParseGPOSMarkMarkExtensionWrap(t *testing.T) {
+	body := markBasePosBody(61, 60, 10, 40, 30, 90, 1)
+	gpos := buildGPOSHeader("mkmk", 6, body, 6)
+	font := wrapTTF(gpos)
+
+	g := ParseGPOS(font)
+	if g == nil {
+		t.Fatal("ParseGPOS returned nil")
+	}
+	dx, dy, ok := g.MarkMarkOffset(61, 60, GPOSMkmk)
+	if !ok {
+		t.Fatal("MarkMarkOffset through extension returned ok=false")
+	}
+	if dx != 20 || dy != 50 {
+		t.Errorf("MarkMarkOffset through extension = (%d, %d), want (20, 50)", dx, dy)
+	}
+}
+
+// TestMarkMarkOffsetNilReceiver covers the nil-safety contract; the
+// draw pipeline relies on a zero-value return when GPOS parsing
+// yielded nothing.
+func TestMarkMarkOffsetNilReceiver(t *testing.T) {
+	var g *GPOSAdjustments
+	if _, _, ok := g.MarkMarkOffset(1, 2, GPOSMkmk); ok {
+		t.Error("MarkMarkOffset on nil receiver must return ok=false")
+	}
+}
+
+// markMarkPosBodyMultiClass assembles a MarkMarkPosFormat1 subtable
+// with markClassCount=2, two mark1 glyphs in different classes, and
+// one mark2 that carries two anchors (one per class). The returned
+// body exercises the class-indexed anchor lookup which is invisible
+// under the single-class test.
+//
+// Layout reminder (same as MarkBasePosFormat1):
+//
+//	posFormat(2) mark1CovOff(2) mark2CovOff(2) markClassCount(2)
+//	mark1ArrayOff(2) mark2ArrayOff(2)
+//	... Mark1Coverage, Mark2Coverage, Mark1Array, Mark2Array, Anchors
+func markMarkPosBodyMultiClass() []byte {
+	const (
+		mark1GIDA uint16 = 70 // class 0 attaching mark
+		mark1GIDB uint16 = 71 // class 1 attaching mark
+		mark2GID  uint16 = 72 // underlying mark with two anchors
+	)
+	_ = mark1GIDA
+	_ = mark1GIDB
+	_ = mark2GID
+
+	var b gposBuilder
+	b.u16(1) // posFormat
+	mark1CovOffPos := b.pos()
+	b.u16(0) // mark1CoverageOffset
+	mark2CovOffPos := b.pos()
+	b.u16(0) // mark2CoverageOffset
+	b.u16(2) // markClassCount
+	mark1ArrayOffPos := b.pos()
+	b.u16(0)
+	mark2ArrayOffPos := b.pos()
+	b.u16(0)
+
+	// Mark1 coverage: {70, 71}.
+	mark1CovOff := b.pos()
+	b.patchU16(mark1CovOffPos, uint16(mark1CovOff))
+	b.buf = append(b.buf, buildCoverageFormat1(70, 71)...)
+
+	// Mark2 coverage: {72}.
+	mark2CovOff := b.pos()
+	b.patchU16(mark2CovOffPos, uint16(mark2CovOff))
+	b.buf = append(b.buf, buildCoverageFormat1(72)...)
+
+	// Mark1Array: two entries, (class 0, anchor offset A), (class 1, anchor offset B).
+	mark1ArrayOff := b.pos()
+	b.patchU16(mark1ArrayOffPos, uint16(mark1ArrayOff))
+	b.u16(2)                // markCount
+	b.u16(0)                // mark1GIDA class
+	mark1AOffPos := b.pos() // anchor A offset
+	b.u16(0)
+	b.u16(1)                // mark1GIDB class
+	mark1BOffPos := b.pos() // anchor B offset
+	b.u16(0)
+
+	// Mark2Array: one entry with 2 anchor offsets (one per class).
+	mark2ArrayOff := b.pos()
+	b.patchU16(mark2ArrayOffPos, uint16(mark2ArrayOff))
+	b.u16(1) // mark2Count
+	mark2AOffPos := b.pos()
+	b.u16(0) // mark2 class-0 anchor offset
+	mark2BOffPos := b.pos()
+	b.u16(0) // mark2 class-1 anchor offset
+
+	// Anchors. Mark1A = (10, 20), Mark1B = (30, 40);
+	// Mark2 class-0 = (100, 200), Mark2 class-1 = (300, 400).
+	// Expected offsets:
+	//   (mark1A, mark2) class 0 → (100-10, 200-20) = (90, 180)
+	//   (mark1B, mark2) class 1 → (300-30, 400-40) = (270, 360)
+	mark1AOff := b.pos()
+	b.patchU16(mark1AOffPos, uint16(mark1AOff-mark1ArrayOff))
+	b.u16(1) // Anchor format 1
+	b.i16(10)
+	b.i16(20)
+
+	mark1BOff := b.pos()
+	b.patchU16(mark1BOffPos, uint16(mark1BOff-mark1ArrayOff))
+	b.u16(1)
+	b.i16(30)
+	b.i16(40)
+
+	mark2AOff := b.pos()
+	b.patchU16(mark2AOffPos, uint16(mark2AOff-mark2ArrayOff))
+	b.u16(1)
+	b.i16(100)
+	b.i16(200)
+
+	mark2BOff := b.pos()
+	b.patchU16(mark2BOffPos, uint16(mark2BOff-mark2ArrayOff))
+	b.u16(1)
+	b.i16(300)
+	b.i16(400)
+
+	return b.buf
+}
+
+// TestParseGPOSMarkMarkMultiClass locks down the class-indexed anchor
+// lookup: mark1A (class 0) must resolve against mark2's class-0 anchor,
+// and mark1B (class 1) against mark2's class-1 anchor. A regression
+// that hard-coded class 0 would be caught here.
+func TestParseGPOSMarkMarkMultiClass(t *testing.T) {
+	body := markMarkPosBodyMultiClass()
+	gpos := buildGPOSHeader("mkmk", 6, body, 0)
+	font := wrapTTF(gpos)
+
+	g := ParseGPOS(font)
+	if g == nil {
+		t.Fatal("ParseGPOS returned nil")
+	}
+
+	dx, dy, ok := g.MarkMarkOffset(70, 72, GPOSMkmk)
+	if !ok {
+		t.Fatal("MarkMarkOffset(70,72) ok=false")
+	}
+	if dx != 90 || dy != 180 {
+		t.Errorf("MarkMarkOffset(70,72) class 0 = (%d,%d), want (90,180)", dx, dy)
+	}
+
+	dx, dy, ok = g.MarkMarkOffset(71, 72, GPOSMkmk)
+	if !ok {
+		t.Fatal("MarkMarkOffset(71,72) ok=false")
+	}
+	if dx != 270 || dy != 360 {
+		t.Errorf("MarkMarkOffset(71,72) class 1 = (%d,%d), want (270,360)", dx, dy)
+	}
+}
+
+// TestParseGPOSMarkMarkClassOverflow covers the defensive branch in
+// anchorOffset: a mark1 whose Class is out of range for the mark2's
+// anchor slice returns ok=false rather than panicking.
+func TestParseGPOSMarkMarkClassOverflow(t *testing.T) {
+	// Build a mkmk body with markClassCount=1 but force the mark1
+	// record to claim class 5. The parser stores the class verbatim;
+	// lookup must refuse to index past the mark2 anchor slice.
+	var b gposBuilder
+	b.u16(1) // posFormat
+	mark1CovOffPos := b.pos()
+	b.u16(0)
+	mark2CovOffPos := b.pos()
+	b.u16(0)
+	b.u16(1) // markClassCount
+	mark1ArrayOffPos := b.pos()
+	b.u16(0)
+	mark2ArrayOffPos := b.pos()
+	b.u16(0)
+
+	mark1CovOff := b.pos()
+	b.patchU16(mark1CovOffPos, uint16(mark1CovOff))
+	b.buf = append(b.buf, buildCoverageFormat1(80)...)
+	mark2CovOff := b.pos()
+	b.patchU16(mark2CovOffPos, uint16(mark2CovOff))
+	b.buf = append(b.buf, buildCoverageFormat1(81)...)
+
+	mark1ArrayOff := b.pos()
+	b.patchU16(mark1ArrayOffPos, uint16(mark1ArrayOff))
+	b.u16(1)
+	b.u16(5) // out-of-range mark class
+	mark1AOffPos := b.pos()
+	b.u16(0)
+
+	mark2ArrayOff := b.pos()
+	b.patchU16(mark2ArrayOffPos, uint16(mark2ArrayOff))
+	b.u16(1)
+	mark2AOffPos := b.pos()
+	b.u16(0)
+
+	mark1AOff := b.pos()
+	b.patchU16(mark1AOffPos, uint16(mark1AOff-mark1ArrayOff))
+	b.u16(1)
+	b.i16(0)
+	b.i16(0)
+
+	mark2AOff := b.pos()
+	b.patchU16(mark2AOffPos, uint16(mark2AOff-mark2ArrayOff))
+	b.u16(1)
+	b.i16(10)
+	b.i16(20)
+
+	gpos := buildGPOSHeader("mkmk", 6, b.buf, 0)
+	font := wrapTTF(gpos)
+	g := ParseGPOS(font)
+	if g == nil {
+		t.Fatal("ParseGPOS returned nil")
+	}
+	if _, _, ok := g.MarkMarkOffset(80, 81, GPOSMkmk); ok {
+		t.Error("MarkMarkOffset with out-of-range class must return ok=false")
+	}
+}
+
+// buildGPOSHeaderDualFeature builds a GPOS table exposing two features
+// (tag1 → lookupType1 body1, tag2 → lookupType2 body2) both wired
+// through the default LangSys of a "DFLT" script. Exists to exercise
+// the mark + mkmk coexistence path.
+func buildGPOSHeaderDualFeature(tag1 string, lt1 uint16, body1 []byte, tag2 string, lt2 uint16, body2 []byte) []byte {
+	var b gposBuilder
+	b.u32(0x00010000)
+	scriptListPos := b.pos()
+	b.u16(0)
+	featureListPos := b.pos()
+	b.u16(0)
+	lookupListPos := b.pos()
+	b.u16(0)
+
+	// ScriptList.
+	scriptListOff := b.pos()
+	b.patchU16(scriptListPos, uint16(scriptListOff))
+	b.u16(1) // scriptCount
+	b.buf = append(b.buf, []byte("DFLT")...)
+	scriptRecordOffPos := b.pos()
+	b.u16(0)
+
+	scriptTableOff := b.pos()
+	b.patchU16(scriptRecordOffPos, uint16(scriptTableOff-scriptListOff))
+	defaultLangSysPos := b.pos()
+	b.u16(0)
+	b.u16(0) // langSysCount
+
+	defaultLangSysOff := b.pos()
+	b.patchU16(defaultLangSysPos, uint16(defaultLangSysOff-scriptTableOff))
+	b.u16(0)      // lookupOrder
+	b.u16(0xFFFF) // requiredFeatureIndex
+	b.u16(2)      // featureIndexCount
+	b.u16(0)      // feature 0
+	b.u16(1)      // feature 1
+
+	// FeatureList.
+	featureListOff := b.pos()
+	b.patchU16(featureListPos, uint16(featureListOff))
+	b.u16(2) // featureCount
+	b.buf = append(b.buf, []byte(tag1)...)
+	f1OffPos := b.pos()
+	b.u16(0)
+	b.buf = append(b.buf, []byte(tag2)...)
+	f2OffPos := b.pos()
+	b.u16(0)
+
+	feat1Off := b.pos()
+	b.patchU16(f1OffPos, uint16(feat1Off-featureListOff))
+	b.u16(0) // featureParams
+	b.u16(1) // lookupIndexCount
+	b.u16(0) // lookup 0
+
+	feat2Off := b.pos()
+	b.patchU16(f2OffPos, uint16(feat2Off-featureListOff))
+	b.u16(0)
+	b.u16(1)
+	b.u16(1) // lookup 1
+
+	// LookupList.
+	lookupListOff := b.pos()
+	b.patchU16(lookupListPos, uint16(lookupListOff))
+	b.u16(2) // lookupCount
+	l1OffPos := b.pos()
+	b.u16(0)
+	l2OffPos := b.pos()
+	b.u16(0)
+
+	// Lookup 0 (feature 1).
+	lookup1Off := b.pos()
+	b.patchU16(l1OffPos, uint16(lookup1Off-lookupListOff))
+	b.u16(lt1)
+	b.u16(0) // lookupFlag
+	b.u16(1) // subTableCount
+	sub1OffPos := b.pos()
+	b.u16(0)
+
+	sub1Off := b.pos()
+	b.patchU16(sub1OffPos, uint16(sub1Off-lookup1Off))
+	b.buf = append(b.buf, body1...)
+
+	// Lookup 1 (feature 2).
+	lookup2Off := b.pos()
+	b.patchU16(l2OffPos, uint16(lookup2Off-lookupListOff))
+	b.u16(lt2)
+	b.u16(0)
+	b.u16(1)
+	sub2OffPos := b.pos()
+	b.u16(0)
+
+	sub2Off := b.pos()
+	b.patchU16(sub2OffPos, uint16(sub2Off-lookup2Off))
+	b.buf = append(b.buf, body2...)
+
+	return b.buf
+}
+
+// TestParseGPOSMarkAndMkmkCoexist builds a GPOS blob that carries both
+// a mark (LookupType 4) subtable and an mkmk (LookupType 6) subtable.
+// Each must populate its own storage slot; neither must bleed into
+// the other's maps. Catches any accidental shared accumulator.
+func TestParseGPOSMarkAndMkmkCoexist(t *testing.T) {
+	markBody := markBasePosBody(50, 100, 200, 300, 500, 800, 1)
+	mkmkBody := markBasePosBody(61, 60, 100, 400, 150, 950, 1)
+
+	gpos := buildGPOSHeaderDualFeature("mark", 4, markBody, "mkmk", 6, mkmkBody)
+	font := wrapTTF(gpos)
+	g := ParseGPOS(font)
+	if g == nil {
+		t.Fatal("ParseGPOS returned nil")
+	}
+
+	// Mark feature resolves.
+	dx, dy, ok := g.MarkOffset(100, 50, GPOSMark)
+	if !ok || dx != 300 || dy != 500 {
+		t.Errorf("MarkOffset = (%d,%d,%v), want (300,500,true)", dx, dy, ok)
+	}
+	// Mkmk feature resolves independently.
+	dx, dy, ok = g.MarkMarkOffset(61, 60, GPOSMkmk)
+	if !ok || dx != 50 || dy != 550 {
+		t.Errorf("MarkMarkOffset = (%d,%d,%v), want (50,550,true)", dx, dy, ok)
+	}
+	// Mark data must not leak into mkmk storage and vice versa.
+	if len(g.MarkMarks[GPOSMark]) != 0 {
+		t.Errorf("MarkMarks[GPOSMark] should be empty, got %v", g.MarkMarks[GPOSMark])
+	}
+	if len(g.Mark2Bases[GPOSMark]) != 0 {
+		t.Errorf("Mark2Bases[GPOSMark] should be empty, got %v", g.Mark2Bases[GPOSMark])
+	}
+	if len(g.Marks[GPOSMkmk]) != 0 {
+		t.Errorf("Marks[GPOSMkmk] should be empty, got %v", g.Marks[GPOSMkmk])
+	}
+	if len(g.Bases[GPOSMkmk]) != 0 {
+		t.Errorf("Bases[GPOSMkmk] should be empty, got %v", g.Bases[GPOSMkmk])
+	}
+}
+
+// TestParseGPOSMkmkOnlyReturnsNonNil pins the nil-guard at the bottom
+// of ParseGPOS: a font whose GPOS table carries only an mkmk feature
+// (no kern, no mark) must still produce a non-nil result. A regression
+// that forgot to include MarkMarks/Mark2Bases in the guard would make
+// mkmk-only fonts silently lose their positioning data.
+func TestParseGPOSMkmkOnlyReturnsNonNil(t *testing.T) {
+	body := markBasePosBody(61, 60, 100, 400, 150, 950, 1)
+	gpos := buildGPOSHeader("mkmk", 6, body, 0)
+	g := ParseGPOS(wrapTTF(gpos))
+	if g == nil {
+		t.Fatal("ParseGPOS with only mkmk feature returned nil")
+	}
+	if len(g.Pairs) != 0 || len(g.Marks) != 0 || len(g.Bases) != 0 {
+		t.Errorf("mkmk-only font populated non-mkmk maps: pairs=%d marks=%d bases=%d",
+			len(g.Pairs), len(g.Marks), len(g.Bases))
+	}
+	if len(g.MarkMarks[GPOSMkmk]) == 0 || len(g.Mark2Bases[GPOSMkmk]) == 0 {
+		t.Error("mkmk-only font did not populate MarkMarks/Mark2Bases")
+	}
+}
+
 // TestParseGPOSExtensionWrap wraps a PairPosFormat1 subtable inside a
 // LookupType 9 Extension and verifies it still resolves.
 func TestParseGPOSExtensionWrap(t *testing.T) {

@@ -432,25 +432,52 @@ func drawWordEmbeddedWithMarks(stream *content.Stream, word Word) {
 
 		// Emit each Extend/ZWJ mark bracketed by Td moves that shift
 		// the text matrix from the cluster-end position back to the
-		// base origin plus the GPOS offset, and then back to the
-		// cluster-end position for the next mark or next cluster.
+		// mark's target origin, and then back to the cluster-end
+		// position for the next mark or next cluster.
 		//
 		// After Tj of the base (plus SpacingMarks), the text matrix is
 		// at clusterEnd = (clusterAdvance, 0) relative to the cluster
-		// start. A mark's origin must sit at (markDx, markDy) relative
-		// to the base's origin (the cluster start), so the first Td
-		// moves by (markDx - clusterAdvance, markDy) and the closing
-		// Td moves by (clusterAdvance - markDx, -markDy). Marks have
-		// zero advance, so Tj of the mark does not shift the matrix.
+		// start. Mark 0 anchors against the base via LookupType 4; its
+		// origin sits at (dx, dy) relative to the cluster start. Marks
+		// 1..n-1 consult LookupType 6 against the previously-placed
+		// mark: given the (prevDx, prevDy) origin of the previous
+		// mark and a mark-to-mark delta (mkmkDx, mkmkDy), the new
+		// mark's origin is (prevDx + mkmkDx, prevDy + mkmkDy). This
+		// is how Arabic shadda+fatha, Hebrew dagesh+niqqud, and
+		// Vietnamese ế-style stacks avoid collisions. On miss (no
+		// LookupType 6 anchor for the pair) the mark falls back to
+		// mark-to-base against the cluster base, matching the
+		// single-mark path above. Marks have zero advance, so Tj of
+		// the mark does not shift the matrix.
+		var prevDxPts, prevDyPts float64
+		var prevMarkGID uint16
+		havePrevMark := false
 		for _, m := range extendMarks {
 			markGID := face.GlyphIndex(m.r)
-			dx, dy, ok := gpos.MarkOffset(baseGID, markGID, font.GPOSMark)
-			if ok {
-				dxPts := float64(dx) * scale
-				dyPts := float64(dy) * scale
+			var dxPts, dyPts float64
+			placed := false
+			if havePrevMark {
+				if mx, my, ok := gpos.MarkMarkOffset(markGID, prevMarkGID, font.GPOSMkmk); ok {
+					dxPts = prevDxPts + float64(mx)*scale
+					dyPts = prevDyPts + float64(my)*scale
+					placed = true
+				}
+			}
+			if !placed {
+				if dx, dy, ok := gpos.MarkOffset(baseGID, markGID, font.GPOSMark); ok {
+					dxPts = float64(dx) * scale
+					dyPts = float64(dy) * scale
+					placed = true
+				}
+			}
+			if placed {
 				stream.MoveText(dxPts-clusterAdvance, dyPts)
 				stream.ShowTextHex(ef.EncodeString(string(m.r)))
 				stream.MoveText(clusterAdvance-dxPts, -dyPts)
+				prevDxPts = dxPts
+				prevDyPts = dyPts
+				prevMarkGID = markGID
+				havePrevMark = true
 			} else {
 				stream.ShowTextHex(ef.EncodeString(string(m.r)))
 			}

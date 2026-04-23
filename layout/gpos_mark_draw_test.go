@@ -342,6 +342,291 @@ func TestGPOSMarkAttachmentMeasureAgreesWithDraw(t *testing.T) {
 	}
 }
 
+// addStackedShadda extends the lam+fatha fixture with a shadda (U+0651)
+// that carries LookupType 6 data saying it stacks on top of the fatha
+// rather than anchoring against the lam base. Mark1 (attaching) =
+// shadda with anchor (100, 400); Mark2 (underlying) = fatha with
+// anchor (150, 950) for class 0. LookupType 6 offset =
+// (150-100, 950-400) = (50, 550) FUnits relative to the fatha's origin.
+// Y differs from the mark-to-base offset (500 FUnits) so that any
+// bug swapping mkmk for mark-to-base fails on both axes.
+func addStackedShadda(face *mockGPOSFace) uint16 {
+	const shaddaGID uint16 = 61
+	face.cmap[0x0651] = shaddaGID
+	face.advance[shaddaGID] = 0
+	if face.gpos.MarkMarks == nil {
+		face.gpos.MarkMarks = map[font.GPOSFeature]map[uint16]font.MarkRecord{}
+	}
+	if face.gpos.Mark2Bases == nil {
+		face.gpos.Mark2Bases = map[font.GPOSFeature]map[uint16]font.BaseRecord{}
+	}
+	face.gpos.MarkMarks[font.GPOSMkmk] = map[uint16]font.MarkRecord{
+		shaddaGID: {Class: 0, Anchor: font.Anchor{X: 100, Y: 400}},
+	}
+	face.gpos.Mark2Bases[font.GPOSMkmk] = map[uint16]font.BaseRecord{
+		60: {Anchors: []font.Anchor{{X: 150, Y: 950}}}, // fatha GID 60
+	}
+	return shaddaGID
+}
+
+// TestGPOSMarkMarkAttachmentStacksSecondMark verifies that when mkmk
+// data is present for the (mark2 = mark[i-1], mark1 = mark[i]) pair,
+// the second mark's Td bracket opens at (prevDx + mkmkDx - clusterAdv,
+// prevDy + mkmkDy) rather than at the plain mark-to-base offset. With
+// the fixture above:
+//
+//	fatha origin (mark-to-base) = (300, 500) FUnits → (3.6, 6.0) pt
+//	shadda origin (stacked)     = (300+50, 500+550) FUnits → (4.2, 12.6) pt
+//	clusterAdvance = 8.4 pt
+//
+// First mark open Td:  (3.6 - 8.4, 6) = (-4.8, 6)
+// Second mark open Td: (4.2 - 8.4, 12.6) = (-4.2, 12.6)
+// Second mark close Td: (8.4 - 4.2, -12.6) = (4.2, -12.6)
+func TestGPOSMarkMarkAttachmentStacksSecondMark(t *testing.T) {
+	face := newLamFathaFace()
+	_ = addStackedShadda(face)
+	ef := font.NewEmbeddedFont(face)
+
+	word := Word{
+		Text:     "\u0644\u064E\u0651", // lam + fatha + shadda
+		Embedded: ef,
+		FontSize: 12,
+	}
+	b := capturedWordStream(word)
+
+	// Collect every Td after the initial MoveText.
+	var tds []string
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasSuffix(line, " Td") {
+			tds = append(tds, line)
+		}
+	}
+	// Initial + two open + two close = 5 Tds total.
+	if len(tds) != 5 {
+		t.Fatalf("expected 5 Td ops, got %d:\n%s", len(tds), b)
+	}
+	// tds[0]: MoveText(0, 0).
+	// tds[1]: fatha open  -> "-4.8 6 Td"
+	// tds[2]: fatha close -> "4.8 -6 Td"
+	// tds[3]: shadda open (stacked) -> "-4.2 12.6 Td"
+	// tds[4]: shadda close           -> "4.2 -12.6 Td"
+	if !strings.Contains(tds[3], "-4.2 12.6 Td") {
+		t.Errorf("shadda open Td = %q, want stacked offset -4.2 12.6 Td:\n%s", tds[3], b)
+	}
+	if !strings.Contains(tds[4], "4.2 -12.6 Td") {
+		t.Errorf("shadda close Td = %q, want 4.2 -12.6 Td:\n%s", tds[4], b)
+	}
+}
+
+// TestGPOSMarkMarkAttachmentThreeStackedMarks exercises transitive
+// stacking: a fourth glyph (dammatan, U+064C) stacks on shadda, which
+// itself stacks on fatha, which anchors to lam. This confirms that
+// prevDxPts/prevDyPts accumulate across marks rather than collapsing
+// to the previous mark's mkmk delta only.
+//
+//	lam      class-0 anchor (500, 800)
+//	fatha    class 0, anchor (200, 300)   → origin (300, 500) = (3.6, 6.0)
+//	shadda   mkmk class 0 on fatha's (150, 950) with mark1 anchor
+//	         (100, 400) → delta (50, 550) → origin (350, 1050) = (4.2, 12.6)
+//	dammatan mkmk class 0 on shadda's (120, 1100) with mark1 anchor
+//	         (80, 500) → delta (40, 600) → origin (390, 1650) = (4.68, 19.8)
+func TestGPOSMarkMarkAttachmentThreeStackedMarks(t *testing.T) {
+	face := newLamFathaFace()
+	_ = addStackedShadda(face)
+	const dammatanGID uint16 = 62
+	face.cmap[0x064C] = dammatanGID // dammatan
+	face.advance[dammatanGID] = 0
+	face.gpos.MarkMarks[font.GPOSMkmk][dammatanGID] = font.MarkRecord{
+		Class:  0,
+		Anchor: font.Anchor{X: 80, Y: 500},
+	}
+	face.gpos.Mark2Bases[font.GPOSMkmk][61 /* shadda */] = font.BaseRecord{
+		Anchors: []font.Anchor{{X: 120, Y: 1100}},
+	}
+
+	ef := font.NewEmbeddedFont(face)
+	word := Word{
+		Text:     "\u0644\u064E\u0651\u064C", // lam + fatha + shadda + dammatan
+		Embedded: ef,
+		FontSize: 12,
+	}
+	b := capturedWordStream(word)
+
+	var tds []string
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasSuffix(line, " Td") {
+			tds = append(tds, line)
+		}
+	}
+	// Initial + three open + three close = 7 Tds total.
+	if len(tds) != 7 {
+		t.Fatalf("expected 7 Td ops (initial + 3*(open+close)), got %d:\n%s", len(tds), b)
+	}
+	// tds[5]: dammatan open  -> want "-3.72 19.8 Td"
+	// tds[6]: dammatan close -> want "3.72 -19.8 Td"
+	if !strings.Contains(tds[5], "-3.72 19.8 Td") {
+		t.Errorf("dammatan open Td = %q, want -3.72 19.8 Td (prevDx + mkmkDx accumulation):\n%s", tds[5], b)
+	}
+	if !strings.Contains(tds[6], "3.72 -19.8 Td") {
+		t.Errorf("dammatan close Td = %q, want 3.72 -19.8 Td:\n%s", tds[6], b)
+	}
+	// Open/close pairs must sum to zero on both axes.
+	var netX, netY float64
+	for i, td := range tds {
+		if i == 0 {
+			continue // initial MoveText(0, 0)
+		}
+		var tx, ty float64
+		n, err := fmt.Sscanf(td, "%f %f Td", &tx, &ty)
+		if err != nil || n != 2 {
+			t.Fatalf("unparseable Td %q: %v", td, err)
+		}
+		netX += tx
+		netY += ty
+	}
+	if !almostEqual(netX, 0, 1e-9) || !almostEqual(netY, 0, 1e-9) {
+		t.Errorf("Td bracket pairs must cancel; net = (%v, %v)", netX, netY)
+	}
+}
+
+// TestGPOSMarkMarkFallbackWithWrongGID verifies the mkmk miss path is
+// keyed by glyph ID, not by feature-presence. The font carries mkmk
+// data for a *different* mark1 GID than the one being placed; the
+// current mark must fall back to mark-to-base against the cluster
+// base, not silently reuse whatever mkmk state is nearby.
+func TestGPOSMarkMarkFallbackWithWrongGID(t *testing.T) {
+	face := newLamFathaFace()
+	const shaddaGID uint16 = 61
+	face.cmap[0x0651] = shaddaGID
+	face.advance[shaddaGID] = 0
+	// Shadda has mark-to-base data sharing class 0 with fatha, so lam's
+	// existing class-0 anchor positions it.
+	face.gpos.Marks[font.GPOSMark][shaddaGID] = font.MarkRecord{
+		Class:  0,
+		Anchor: font.Anchor{X: 200, Y: 300},
+	}
+	// Populate mkmk, but only for an unrelated GID 99 as mark1 — the
+	// actual shadda glyph (GID 61) must miss.
+	face.gpos.MarkMarks = map[font.GPOSFeature]map[uint16]font.MarkRecord{
+		font.GPOSMkmk: {99: {Class: 0, Anchor: font.Anchor{X: 100, Y: 400}}},
+	}
+	face.gpos.Mark2Bases = map[font.GPOSFeature]map[uint16]font.BaseRecord{
+		font.GPOSMkmk: {60: {Anchors: []font.Anchor{{X: 150, Y: 950}}}},
+	}
+
+	ef := font.NewEmbeddedFont(face)
+	word := Word{
+		Text:     "\u0644\u064E\u0651",
+		Embedded: ef,
+		FontSize: 12,
+	}
+	b := capturedWordStream(word)
+
+	var tds []string
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasSuffix(line, " Td") {
+			tds = append(tds, line)
+		}
+	}
+	if len(tds) != 5 {
+		t.Fatalf("expected 5 Td ops, got %d:\n%s", len(tds), b)
+	}
+	// Shadda must land at mark-to-base offset (-4.8, 6), not at the
+	// mkmk-stacked offset (-4.2, 12.6).
+	if !strings.Contains(tds[3], "-4.8 6 Td") {
+		t.Errorf("shadda open Td = %q, want mark-to-base fallback -4.8 6 Td (wrong-GID mkmk miss):\n%s", tds[3], b)
+	}
+}
+
+// TestGPOSMarkMarkFallsBackWhenPairUnknown verifies that when LookupType
+// 6 has no entry for (mark[i], mark[i-1]), the mark falls back to
+// mark-to-base against the cluster base. Here shadda declares a
+// mark-to-base anchor (class 0 on lam) but no mkmk relation to fatha:
+// the shadda must land at its mark-to-base offset, not stacked.
+func TestGPOSMarkMarkFallsBackWhenPairUnknown(t *testing.T) {
+	face := newLamFathaFace()
+	const shaddaGID uint16 = 61
+	face.cmap[0x0651] = shaddaGID
+	face.advance[shaddaGID] = 0
+	// Give shadda a mark-to-base record sharing class 0 so lam's
+	// existing class-0 anchor serves it. Expected offset equals the
+	// fatha offset: (300, 500) FUnits → (3.6, 6.0) pt.
+	face.gpos.Marks[font.GPOSMark][shaddaGID] = font.MarkRecord{
+		Class:  0,
+		Anchor: font.Anchor{X: 200, Y: 300},
+	}
+	// No MarkMarks / Mark2Bases populated: mkmk lookup must miss.
+
+	ef := font.NewEmbeddedFont(face)
+	word := Word{
+		Text:     "\u0644\u064E\u0651",
+		Embedded: ef,
+		FontSize: 12,
+	}
+	b := capturedWordStream(word)
+
+	var tds []string
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasSuffix(line, " Td") {
+			tds = append(tds, line)
+		}
+	}
+	if len(tds) != 5 {
+		t.Fatalf("expected 5 Td ops, got %d:\n%s", len(tds), b)
+	}
+	// Both marks should land at the same (-4.8, 6) open because both
+	// resolve to the lam class-0 anchor via mark-to-base fallback.
+	if !strings.Contains(tds[3], "-4.8") || !strings.Contains(tds[3], "6 Td") {
+		t.Errorf("fallback shadda open Td = %q, want mark-to-base -4.8 6 Td:\n%s", tds[3], b)
+	}
+}
+
+// TestGPOSMarkMarkMeasureAgreesWithDraw locks down the invariant for
+// stacked marks: mkmk positioning is purely visual (zero-advance marks,
+// paired Td brackets that cancel), so MeasureString must still equal
+// the net horizontal advance of the draw stream.
+func TestGPOSMarkMarkMeasureAgreesWithDraw(t *testing.T) {
+	face := newLamFathaFace()
+	_ = addStackedShadda(face)
+	ef := font.NewEmbeddedFont(face)
+
+	word := Word{
+		Text:     "\u0644\u064E\u0651",
+		Embedded: ef,
+		FontSize: 12,
+	}
+	measured := ef.MeasureString(word.Text, word.FontSize)
+
+	b := capturedWordStream(word)
+	netTdX := 0.0
+	seenInitial := false
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasSuffix(line, " Td") {
+			continue
+		}
+		if !seenInitial {
+			seenInitial = true
+			continue
+		}
+		var tx, ty float64
+		n, err := fmt.Sscanf(line, "%f %f Td", &tx, &ty)
+		if err != nil || n != 2 {
+			t.Fatalf("unparseable Td line %q: %v", line, err)
+		}
+		netTdX += tx
+	}
+	baseAdv := float64(face.advance[50]) / float64(face.upem) * word.FontSize
+	drawAdvance := baseAdv + netTdX
+	if !almostEqual(drawAdvance, measured, 1e-9) {
+		t.Errorf("mkmk draw advance = %v, MeasureString = %v — must agree", drawAdvance, measured)
+	}
+}
+
 func almostEqual(a, b, eps float64) bool {
 	d := a - b
 	if d < 0 {

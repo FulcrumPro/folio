@@ -87,6 +87,10 @@ extern "C" {
 #define FOLIO_PDFA_3B          3
 #define FOLIO_PDFA_1B          4
 #define FOLIO_PDFA_1A          5
+#define FOLIO_PDFA_3A          6   /* ISO 19005-3:2012 Level A */
+#define FOLIO_PDFA_4           7   /* ISO 19005-4:2020 base, PDF 2.0 */
+#define FOLIO_PDFA_4F          8   /* ISO 19005-4:2020 with files */
+#define FOLIO_PDFA_4E          9   /* ISO 19005-4:2020 engineering */
 
 /* Encryption algorithms (document.EncryptionAlgorithm) */
 #define FOLIO_ENCRYPT_RC4_128  0
@@ -165,6 +169,7 @@ void     folio_document_free(uint64_t doc);
 
 int32_t  folio_document_set_title(uint64_t doc, const char *title);
 int32_t  folio_document_set_author(uint64_t doc, const char *author);
+int32_t  folio_document_set_language(uint64_t doc, const char *lang);
 int32_t  folio_document_set_margins(uint64_t doc, double top, double right, double bottom, double left);
 
 uint64_t folio_document_add_page(uint64_t doc);

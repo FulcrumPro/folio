@@ -68,6 +68,21 @@ func folio_document_set_author(docH C.uint64_t, author *C.char) C.int32_t {
 	return errOK
 }
 
+// folio_document_set_language sets the document's default natural
+// language as a BCP 47 / RFC 3066 tag (e.g. "en-US"). When non-empty
+// it is written to the catalog /Lang entry (ISO 32000-2 §14.9.2) and
+// is required for PDF/A Level A conformance (ISO 19005-2 §6.7.2).
+//
+//export folio_document_set_language
+func folio_document_set_language(docH C.uint64_t, lang *C.char) C.int32_t {
+	doc, errCode := loadDoc(docH)
+	if errCode != errOK {
+		return errCode
+	}
+	doc.Info.Language = C.GoString(lang)
+	return errOK
+}
+
 // folio_document_set_margins sets the page margins in points (top, right, bottom, left).
 //
 //export folio_document_set_margins

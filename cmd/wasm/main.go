@@ -186,8 +186,24 @@ func renderHTML(_ js.Value, args []js.Value) any {
 	switch settings.PdfProfile {
 	case "pdfa1b":
 		doc.SetPdfA(document.PdfAConfig{Level: document.PdfA1B})
+	case "pdfa1a":
+		doc.SetPdfA(document.PdfAConfig{Level: document.PdfA1A})
 	case "pdfa2b":
 		doc.SetPdfA(document.PdfAConfig{Level: document.PdfA2B})
+	case "pdfa2u":
+		doc.SetPdfA(document.PdfAConfig{Level: document.PdfA2U})
+	case "pdfa2a":
+		doc.SetPdfA(document.PdfAConfig{Level: document.PdfA2A})
+	case "pdfa3b":
+		doc.SetPdfA(document.PdfAConfig{Level: document.PdfA3B})
+	case "pdfa3a":
+		doc.SetPdfA(document.PdfAConfig{Level: document.PdfA3A})
+	case "pdfa4":
+		doc.SetPdfA(document.PdfAConfig{Level: document.PdfA4})
+	case "pdfa4f":
+		doc.SetPdfA(document.PdfAConfig{Level: document.PdfA4F})
+	case "pdfa4e":
+		doc.SetPdfA(document.PdfAConfig{Level: document.PdfA4E})
 	case "pdfua1":
 		doc.SetTagged(true)
 	}

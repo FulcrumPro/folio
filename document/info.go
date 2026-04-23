@@ -21,6 +21,14 @@ type Info struct {
 	Producer     string // application that produced the PDF
 	CreationDate time.Time
 	ModDate      time.Time
+
+	// Language is the default natural language of all text in the
+	// document, expressed as a BCP 47 / RFC 3066 language tag
+	// (e.g. "en-US", "es", "fr-CA"). When non-empty it is written
+	// to the document catalog as /Lang (ISO 32000-2 §14.9.2) and
+	// declared in the XMP dc:language property. PDF/A Level A
+	// (accessibility-conformance) requires this entry.
+	Language string
 }
 
 // toDict converts Info to a PdfDictionary. Only non-zero fields are included.
@@ -56,6 +64,9 @@ func (info *Info) toDict() *core.PdfDictionary {
 }
 
 // isEmpty reports whether all fields are zero-valued.
+// Language is intentionally excluded: it is written to the catalog,
+// not the /Info dictionary, and a document with only Language set
+// should still produce no /Info entry.
 func (info *Info) isEmpty() bool {
 	return info.Title == "" && info.Author == "" && info.Subject == "" &&
 		info.Keywords == "" && info.Creator == "" && info.Producer == "" &&

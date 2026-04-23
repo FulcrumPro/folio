@@ -36,9 +36,9 @@
 // filter, switch, foreignObject. Per-character text positioning via
 // x/y/dx/dy attribute lists is not supported; text rotate, textPath,
 // and lengthAdjust are not supported. Stroke gradients collapse to the
-// first stop color. Slice mode under preserveAspectRatio scales content
-// correctly but this package does not emit a PDF clip path, so callers
-// that need strict viewport clipping with slice should clip externally.
+// first stop color because painting a stroke with an arbitrary gradient
+// requires PDF tiling/shading patterns, which this package does not
+// emit today.
 //
 // # Usage
 //

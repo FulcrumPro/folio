@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **SVG `preserveAspectRatio` slice viewport clip** — when an SVG is drawn with `slice` meet-or-slice, the renderer now emits a PDF clip path on the target rectangle before the viewport transform. Previously the uniform scale was applied correctly but content outside the target rectangle leaked onto the page. Callers that already clipped externally will continue to work (#196)
+
 ## [0.7.1] - 2026-04-22
 
 C ABI follow-up to v0.7.0. No Go-side behavior changes; every addition is in `export/`. C ABI exports grow from 372 to 388 (+16). The header `export/folio.h` is updated in lockstep — `scripts/audit-cabi.sh` reports Go and header in sync.
@@ -45,7 +51,6 @@ Handle-based builder so future toggles compose without renaming existing calls. 
 ### Not exposed
 
 Internal-only v0.7.0 additions remain unexported from the C ABI: `core.PdfIndirectReference.SetNum` and `core.PdfStream.WillCompress` (writer-internal); `core.DeflateStreamData` / `core.InflateStreamData` (callers can use any host-language zlib); `core.PdfArray` / `PdfDictionary` / `PdfNumber` / `PdfBoolean` / `PdfString` Go-style accessors; `font.ParseGPOS` / `ParseGSUB` / `ParseKern` and `face.GSUB` / `GPOS` / `GIDToUnicode` (font parser internals); `font.CanEncodeWinAnsiRune`, `EmbeddedFont.EncodeGIDs` / `MeasureGIDs` (shaper-internal); `layout.ShapeArabic` / `ShapeArabicWithFont` / `ShapeDevanagari*`, `ScriptOf` / `SegmentByScript`, `GraphemeBreaks` / `NextGraphemeBreak` / `GraphemeCount`, `FindKashidaCandidates` / `InsertKashidas` (run inside the layout pipeline); `layout.GSUBProvider` / `GPOSProvider` (Go interfaces); `tmpl` package (Go-specific templating). RTL and shaping for HTML-driven workflows continue to flow through `folio_document_add_html` unchanged.
-
 ## [0.7.0] - 2026-04-21
 
 No breaking API changes. Every new field, method, and package is additive; zero-value `WriteOptions` and existing constructors produce byte-identical output to v0.6.2. Several bug fixes change the visible output of affected documents — see Visual changes before regression-diffing PDFs.

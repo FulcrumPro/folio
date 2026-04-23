@@ -4,8 +4,7 @@
 package html
 
 import (
-	"os"
-	"path/filepath"
+	"io/fs"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -77,8 +76,9 @@ type cssDecl struct {
 // document and parses their CSS. Linked stylesheets are processed before <style>
 // blocks so that inline styles override external ones by source order.
 // fetchURL, if non-nil, is called for HTTP/HTTPS hrefs; it should return the
-// CSS bytes or an error. Local file paths are resolved against basePath.
-func parseStyleBlocks(doc *html.Node, basePath string, fetchURL func(string) ([]byte, error)) *styleSheet {
+// CSS bytes or an error. Local file paths are resolved against baseFS (if
+// non-nil), else against basePath.
+func parseStyleBlocks(doc *html.Node, baseFS fs.FS, basePath string, fetchURL func(string) ([]byte, error)) *styleSheet {
 	ss := &styleSheet{}
 
 	// First pass: collect <link rel="stylesheet"> elements and load them.
@@ -101,11 +101,7 @@ func parseStyleBlocks(doc *html.Node, basePath string, fetchURL func(string) ([]
 				if isURL(href) && fetchURL != nil {
 					data, err = fetchURL(href)
 				} else {
-					path := href
-					if !filepath.IsAbs(path) && basePath != "" {
-						path = filepath.Join(basePath, path)
-					}
-					data, err = os.ReadFile(path)
+					data, err = readAsset(baseFS, basePath, href)
 				}
 				if err == nil {
 					ss.parseCSS(string(data))

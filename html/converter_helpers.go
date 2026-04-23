@@ -5,7 +5,6 @@ package html
 
 import (
 	"math"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -572,10 +571,7 @@ func (c *converter) resolveBackgroundImage(style computedStyle) *layout.Backgrou
 			}
 			img = loaded
 		} else {
-			if !filepath.IsAbs(imgPath) && c.opts.BasePath != "" {
-				imgPath = filepath.Join(c.opts.BasePath, imgPath)
-			}
-			loaded, err := loadImage(imgPath)
+			loaded, err := c.loadLocalImage(imgPath)
 			if err != nil {
 				return nil
 			}

@@ -7,12 +7,13 @@ package html
 
 import (
 	"fmt"
+	"net/http"
 
 	folioimage "github.com/carlos7ags/folio/image"
 )
 
 // makeCSSFetcher is a stub for WASM builds — returns nil (no HTTP fetching).
-func makeCSSFetcher(_ URLPolicy) func(string) ([]byte, error) {
+func makeCSSFetcher(_ URLPolicy, _ *http.Client) func(string) ([]byte, error) {
 	return nil
 }
 

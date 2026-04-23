@@ -17,8 +17,11 @@ const (
 	// an explicit anchor of a base glyph. ISO 14496-22 §6.3 LookupType 4.
 	GPOSMark GPOSFeature = "mark"
 
-	// GPOSMkmk is the Mark-to-Mark Positioning feature. Recognized for
-	// future use; LookupType 6 is not implemented in this iteration.
+	// GPOSMkmk is the Mark-to-Mark Positioning feature. It positions a
+	// combining mark glyph on an explicit anchor of another combining
+	// mark — the mechanism behind stacked diacritics such as Arabic
+	// shadda + fatha, Hebrew dagesh + niqqud, and Vietnamese tone marks
+	// on already-diacritic vowels. ISO 14496-22 §6.3 LookupType 6.
 	GPOSMkmk GPOSFeature = "mkmk"
 )
 
@@ -63,12 +66,22 @@ type GPOSAdjustments struct {
 
 	// Bases holds LookupType 4 base records keyed by base glyph ID.
 	Bases map[GPOSFeature]map[uint16]BaseRecord
+
+	// MarkMarks holds LookupType 6 top-mark records keyed by the
+	// attaching (mark1) glyph ID. Shape mirrors Marks.
+	MarkMarks map[GPOSFeature]map[uint16]MarkRecord
+
+	// Mark2Bases holds LookupType 6 underlying-mark records keyed by
+	// the receiving (mark2) glyph ID. Shape mirrors Bases: each entry
+	// exposes one anchor per mark class of the attaching mark.
+	Mark2Bases map[GPOSFeature]map[uint16]BaseRecord
 }
 
 // ParseGPOS reads the GPOS table from raw font bytes and extracts
-// LookupType 2 (Pair Positioning) and LookupType 4 (Mark-to-Base
-// Positioning) data for the "kern" and "mark" features. Extension
-// lookups (LookupType 9) are unwrapped for types 2 and 4.
+// LookupType 2 (Pair Positioning), LookupType 4 (Mark-to-Base), and
+// LookupType 6 (Mark-to-Mark) data for the "kern", "mark", and "mkmk"
+// features. Extension lookups (LookupType 9) are unwrapped for types
+// 2, 4, and 6.
 //
 // Script selection follows the same preference order as GSUB:
 // "arab" and "latn" when present, "DFLT" as a fallback.
@@ -105,15 +118,19 @@ func ParseGPOS(data []byte) *GPOSAdjustments {
 	}
 
 	result := &GPOSAdjustments{
-		Pairs: make(map[GPOSFeature]map[[2]uint16]PairAdjustment),
-		Marks: make(map[GPOSFeature]map[uint16]MarkRecord),
-		Bases: make(map[GPOSFeature]map[uint16]BaseRecord),
+		Pairs:      make(map[GPOSFeature]map[[2]uint16]PairAdjustment),
+		Marks:      make(map[GPOSFeature]map[uint16]MarkRecord),
+		Bases:      make(map[GPOSFeature]map[uint16]BaseRecord),
+		MarkMarks:  make(map[GPOSFeature]map[uint16]MarkRecord),
+		Mark2Bases: make(map[GPOSFeature]map[uint16]BaseRecord),
 	}
 	for feat, lookupIndices := range featureToLookups {
 		pairs := make(map[[2]uint16]PairAdjustment)
 		marks := make(map[uint16]MarkRecord)
 		bases := make(map[uint16]BaseRecord)
-		parseGPOSLookups(gpos, lookupListOff, lookupIndices, pairs, marks, bases)
+		markMarks := make(map[uint16]MarkRecord)
+		mark2Bases := make(map[uint16]BaseRecord)
+		parseGPOSLookups(gpos, lookupListOff, lookupIndices, pairs, marks, bases, markMarks, mark2Bases)
 		if len(pairs) > 0 {
 			result.Pairs[feat] = pairs
 		}
@@ -123,8 +140,15 @@ func ParseGPOS(data []byte) *GPOSAdjustments {
 		if len(bases) > 0 {
 			result.Bases[feat] = bases
 		}
+		if len(markMarks) > 0 {
+			result.MarkMarks[feat] = markMarks
+		}
+		if len(mark2Bases) > 0 {
+			result.Mark2Bases[feat] = mark2Bases
+		}
 	}
-	if len(result.Pairs) == 0 && len(result.Marks) == 0 && len(result.Bases) == 0 {
+	if len(result.Pairs) == 0 && len(result.Marks) == 0 && len(result.Bases) == 0 &&
+		len(result.MarkMarks) == 0 && len(result.Mark2Bases) == 0 {
 		return nil
 	}
 	return result
@@ -158,16 +182,38 @@ func (g *GPOSAdjustments) MarkOffset(baseGID, markGID uint16, feature GPOSFeatur
 	if g == nil {
 		return 0, 0, false
 	}
-	marks, mok := g.Marks[feature]
-	if !mok {
+	return anchorOffset(g.Marks[feature], g.Bases[feature], markGID, baseGID)
+}
+
+// MarkMarkOffset returns the (dx, dy) offset in FUnits that positions
+// the attaching mark1 glyph so its anchor coincides with mark2's anchor
+// for the same class. mark1 is the mark riding on top; mark2 is the
+// already-placed mark playing the "base" role. Returns ok=false when
+// either glyph is absent from the feature's mark1/mark2 arrays, or when
+// mark2 has no anchor declared for mark1's class.
+//
+// Note: the parameter order is (mark1, mark2) to match the ISO 14496-22
+// §6.3 spec naming, which is the reverse of MarkOffset(base, mark).
+// Callers porting from MarkOffset must swap the operands.
+//
+// The formula mirrors LookupType 4: dx = mark2Anchor.X - mark1Anchor.X,
+// dy = mark2Anchor.Y - mark1Anchor.Y.
+func (g *GPOSAdjustments) MarkMarkOffset(mark1GID, mark2GID uint16, feature GPOSFeature) (dx, dy int16, ok bool) {
+	if g == nil {
+		return 0, 0, false
+	}
+	return anchorOffset(g.MarkMarks[feature], g.Mark2Bases[feature], mark1GID, mark2GID)
+}
+
+// anchorOffset is the shared anchor-subtraction used by MarkOffset and
+// MarkMarkOffset. markGID selects the attaching mark (Class + Anchor);
+// baseGID selects the receiving glyph (one anchor per mark class).
+func anchorOffset(marks map[uint16]MarkRecord, bases map[uint16]BaseRecord, markGID, baseGID uint16) (int16, int16, bool) {
+	if marks == nil || bases == nil {
 		return 0, 0, false
 	}
 	mark, hasMark := marks[markGID]
 	if !hasMark {
-		return 0, 0, false
-	}
-	bases, bok := g.Bases[feature]
-	if !bok {
 		return 0, 0, false
 	}
 	base, hasBase := bases[baseGID]
@@ -226,11 +272,13 @@ func matchGPOSFeatures(gpos []byte, off int, allowed []int, targetTags map[strin
 
 // parseGPOSLookups walks each referenced lookup and dispatches its
 // subtables to the appropriate LookupType parser. LookupType 9
-// (Extension Positioning) is unwrapped inline for types 2 and 4.
+// (Extension Positioning) is unwrapped inline for types 2, 4, and 6.
 func parseGPOSLookups(gpos []byte, listOff int, indices []int,
 	pairs map[[2]uint16]PairAdjustment,
 	marks map[uint16]MarkRecord,
 	bases map[uint16]BaseRecord,
+	markMarks map[uint16]MarkRecord,
+	mark2Bases map[uint16]BaseRecord,
 ) {
 	if listOff+2 > len(gpos) {
 		return
@@ -244,7 +292,7 @@ func parseGPOSLookups(gpos []byte, listOff int, indices []int,
 			continue
 		}
 		lookupOff := listOff + int(be16(gpos, listOff+2+idx*2))
-		parseGPOSLookup(gpos, lookupOff, pairs, marks, bases)
+		parseGPOSLookup(gpos, lookupOff, pairs, marks, bases, markMarks, mark2Bases)
 	}
 }
 
@@ -255,6 +303,8 @@ func parseGPOSLookup(gpos []byte, lookupOff int,
 	pairs map[[2]uint16]PairAdjustment,
 	marks map[uint16]MarkRecord,
 	bases map[uint16]BaseRecord,
+	markMarks map[uint16]MarkRecord,
+	mark2Bases map[uint16]BaseRecord,
 ) {
 	if lookupOff+6 > len(gpos) {
 		return
@@ -287,6 +337,8 @@ func parseGPOSLookup(gpos []byte, lookupOff int,
 			parsePairPos(gpos, off, pairs)
 		case 4:
 			parseMarkBasePos(gpos, off, marks, bases)
+		case 6:
+			parseMarkMarkPos(gpos, off, markMarks, mark2Bases)
 		}
 	}
 }
@@ -532,6 +584,49 @@ func parseMarkBasePos(gpos []byte, off int,
 
 	parseMarkArray(gpos, markArrayOff, markCov, marks)
 	parseBaseArray(gpos, baseArrayOff, baseCov, markClassCount, bases)
+}
+
+// parseMarkMarkPos reads a MarkMarkPosFormat1 subtable.
+//
+// Layout (ISO 14496-22 §6.3 LookupType 6):
+//
+//	posFormat         uint16 (==1)
+//	mark1CoverageOff  Offset16
+//	mark2CoverageOff  Offset16
+//	markClassCount    uint16
+//	mark1ArrayOff     Offset16
+//	mark2ArrayOff     Offset16
+//
+// The Mark1Array is a MarkArray of attaching (top) marks: each entry
+// carries a class and an anchor. The Mark2Array is structurally
+// identical to BaseArray — a matrix of anchors indexed by mark class —
+// so parseBaseArray is reused verbatim. Lookup combines a mark1's
+// class with the mark2's anchor at that class.
+func parseMarkMarkPos(gpos []byte, off int,
+	markMarks map[uint16]MarkRecord,
+	mark2Bases map[uint16]BaseRecord,
+) {
+	if off+12 > len(gpos) {
+		return
+	}
+	format := be16(gpos, off)
+	if format != 1 {
+		return
+	}
+	mark1CoverageOff := off + int(be16(gpos, off+2))
+	mark2CoverageOff := off + int(be16(gpos, off+4))
+	markClassCount := int(be16(gpos, off+6))
+	mark1ArrayOff := off + int(be16(gpos, off+8))
+	mark2ArrayOff := off + int(be16(gpos, off+10))
+
+	mark1Cov := parseCoverage(gpos, mark1CoverageOff)
+	mark2Cov := parseCoverage(gpos, mark2CoverageOff)
+	if mark1Cov == nil || mark2Cov == nil {
+		return
+	}
+
+	parseMarkArray(gpos, mark1ArrayOff, mark1Cov, markMarks)
+	parseBaseArray(gpos, mark2ArrayOff, mark2Cov, markClassCount, mark2Bases)
 }
 
 // parseMarkArray reads a MarkArray and populates marks.

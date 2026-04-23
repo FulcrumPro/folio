@@ -16,15 +16,20 @@ import (
 )
 
 // makeCSSFetcher returns a function that fetches CSS from a URL, protected
-// by the given URLPolicy. Returns nil if no URL fetching should be attempted.
-func makeCSSFetcher(policy URLPolicy) func(string) ([]byte, error) {
+// by the given URLPolicy and using the given HTTP client. Returns nil if
+// no URL fetching should be attempted. A nil client falls back to
+// http.DefaultClient.
+func makeCSSFetcher(policy URLPolicy, client *http.Client) func(string) ([]byte, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
 	return func(url string) ([]byte, error) {
 		if policy != nil {
 			if err := policy(url); err != nil {
 				return nil, err
 			}
 		}
-		resp, err := http.Get(url)
+		resp, err := client.Get(url)
 		if err != nil {
 			return nil, fmt.Errorf("fetch stylesheet %s: %w", url, err)
 		}
@@ -47,7 +52,7 @@ func (c *converter) fetchImage(url string) (*folioimage.Image, error) {
 		}
 	}
 
-	resp, err := http.Get(url)
+	resp, err := httpClientOrDefault(c.opts.Client).Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("fetch image %s: %w", url, err)
 	}

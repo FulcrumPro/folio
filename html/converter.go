@@ -5,7 +5,11 @@ package html
 
 import (
 	"fmt"
+	"io/fs"
 	"math"
+	"net/http"
+	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -21,7 +25,19 @@ type Options struct {
 	// DefaultFontSize is the root font size in points (default 12).
 	DefaultFontSize float64
 	// BasePath is the base directory for resolving relative image/font/CSS paths.
+	// Used when BaseFS is nil. Paths are forwarded with filepath.Join, so
+	// OS-native separators and absolute references both work.
 	BasePath string
+	// BaseFS is the filesystem used to resolve relative paths for images,
+	// fonts, and linked stylesheets. When non-nil, it takes precedence over
+	// BasePath for relative paths. Absolute paths still fall through to the
+	// OS filesystem so existing absolute path references keep working.
+	// System-font fallback lookup in FallbackFontPath / hardcoded candidates
+	// is unaffected and always reads from the OS filesystem.
+	// Typical uses: embed.FS for embedded assets, fstest.MapFS in tests,
+	// os.DirFS(dir) or (*os.Root).FS() for sandboxed directory access.
+	// BaseFS paths must be forward-slash separated (fs.FS convention).
+	BaseFS fs.FS
 	// PageWidth is the page width in points (default 612 = US Letter).
 	PageWidth float64
 	// PageHeight is the page height in points (default 792 = US Letter).
@@ -35,6 +51,9 @@ type Options struct {
 	// Return nil to allow the fetch, or an error to block it.
 	// If nil, all URLs are allowed.
 	URLPolicy URLPolicy
+	// Client is the HTTP client used to fetch remote images and stylesheets.
+	// If nil, http.DefaultClient is used.
+	Client *http.Client
 }
 
 // URLPolicy controls whether the HTML converter may fetch a remote URL.
@@ -50,17 +69,62 @@ func (o *Options) defaults() Options {
 			out.DefaultFontSize = o.DefaultFontSize
 		}
 		out.BasePath = o.BasePath
+		out.BaseFS = o.BaseFS
 		if o.PageWidth > 0 {
 			out.PageWidth = o.PageWidth
 		}
 		if o.PageHeight > 0 {
 			out.PageHeight = o.PageHeight
 		}
+		if o.FallbackFontPath != "" {
+			out.FallbackFontPath = o.FallbackFontPath
+		}
 		if o.URLPolicy != nil {
 			out.URLPolicy = o.URLPolicy
 		}
+		if o.Client != nil {
+			out.Client = o.Client
+		}
 	}
 	return out
+}
+
+// readAsset reads a relative or absolute path using BaseFS / BasePath rules.
+// Resolution order:
+//  1. Absolute paths → os.ReadFile (bypasses BaseFS so existing absolute-path
+//     references in CSS/HTML keep working even when BaseFS is set).
+//  2. BaseFS != nil → fs.ReadFile(BaseFS, normalized-p). The path is normalized
+//     to fs.FS form: backslashes → slashes, a leading "/" is stripped, and the
+//     result must satisfy fs.ValidPath (so ".." escapes are rejected up front
+//     rather than relying on each fs.FS implementation to enforce it).
+//  3. BasePath != "" → os.ReadFile(filepath.Join(BasePath, p)).
+//  4. Fallback → os.ReadFile(p) (cwd-relative).
+func readAsset(baseFS fs.FS, basePath, p string) ([]byte, error) {
+	if filepath.IsAbs(p) {
+		return os.ReadFile(p)
+	}
+	if baseFS != nil {
+		fsPath := filepath.ToSlash(p)
+		fsPath = strings.TrimPrefix(fsPath, "./")
+		fsPath = strings.TrimPrefix(fsPath, "/")
+		fsPath = path.Clean(fsPath)
+		if !fs.ValidPath(fsPath) {
+			return nil, fmt.Errorf("invalid path for BaseFS: %q", p)
+		}
+		return fs.ReadFile(baseFS, fsPath)
+	}
+	if basePath != "" {
+		return os.ReadFile(filepath.Join(basePath, p))
+	}
+	return os.ReadFile(p)
+}
+
+// httpClientOrDefault returns the configured HTTP client or http.DefaultClient.
+func httpClientOrDefault(c *http.Client) *http.Client {
+	if c != nil {
+		return c
+	}
+	return http.DefaultClient
 }
 
 // ConvertResult holds the full result of an HTML → layout conversion,
@@ -168,7 +232,7 @@ func ConvertFull(htmlStr string, opts *Options) (*ConvertResult, error) {
 	style := defaultStyle()
 	style.FontSize = o.DefaultFontSize
 
-	ss := parseStyleBlocks(doc, o.BasePath, makeCSSFetcher(o.URLPolicy))
+	ss := parseStyleBlocks(doc, o.BaseFS, o.BasePath, makeCSSFetcher(o.URLPolicy, o.Client))
 
 	c := &converter{opts: o, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth, counters: make(map[string][]int), urlPolicy: o.URLPolicy}
 
@@ -185,7 +249,7 @@ func ConvertFull(htmlStr string, opts *Options) (*ConvertResult, error) {
 	}
 
 	// Load @font-face fonts.
-	c.loadFontFaces(ss.fontFaces, o.BasePath)
+	c.loadFontFaces(ss.fontFaces)
 
 	elems := c.walkChildren(doc, style)
 	result := &ConvertResult{Elements: elems, Absolutes: c.absolutes, Metadata: c.metadata}
@@ -216,7 +280,7 @@ func Convert(htmlStr string, opts *Options) ([]layout.Element, error) {
 	style := defaultStyle()
 	style.FontSize = o.DefaultFontSize
 
-	ss := parseStyleBlocks(doc, o.BasePath, makeCSSFetcher(o.URLPolicy))
+	ss := parseStyleBlocks(doc, o.BaseFS, o.BasePath, makeCSSFetcher(o.URLPolicy, o.Client))
 
 	c := &converter{opts: o, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth, counters: make(map[string][]int), urlPolicy: o.URLPolicy}
 
@@ -230,7 +294,7 @@ func Convert(htmlStr string, opts *Options) ([]layout.Element, error) {
 	}
 
 	// Load @font-face fonts.
-	c.loadFontFaces(ss.fontFaces, o.BasePath)
+	c.loadFontFaces(ss.fontFaces)
 
 	return c.walkChildren(doc, style), nil
 }
@@ -279,8 +343,8 @@ type pendingOverlay struct {
 // loadFontFaces loads @font-face fonts into the converter's embeddedFonts map.
 // Supports both file paths and base64-encoded data URIs (data:font/truetype;base64,...).
 // Data URI support enables fully self-contained HTML templates without external
-// font file dependencies.
-func (c *converter) loadFontFaces(faces []fontFaceRule, basePath string) {
+// font file dependencies. File paths are resolved through BaseFS/BasePath.
+func (c *converter) loadFontFaces(faces []fontFaceRule) {
 	for _, ff := range faces {
 		src := ff.src
 		if src == "" {
@@ -294,12 +358,11 @@ func (c *converter) loadFontFaces(faces []fontFaceRule, basePath string) {
 			// Data URI: decode base64 font data inline.
 			face, err = decodeFontDataURI(src)
 		} else {
-			// File path: resolve relative to basePath.
-			path := src
-			if !filepath.IsAbs(path) && basePath != "" {
-				path = filepath.Join(basePath, path)
+			var data []byte
+			data, err = readAsset(c.opts.BaseFS, c.opts.BasePath, src)
+			if err == nil {
+				face, err = font.ParseFont(data)
 			}
-			face, err = font.LoadFont(path)
 		}
 
 		if err != nil {

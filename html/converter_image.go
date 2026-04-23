@@ -6,7 +6,6 @@ package html
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -44,11 +43,7 @@ func (c *converter) convertImage(n *html.Node, style computedStyle) []layout.Ele
 	} else if isURL(src) {
 		img, err = c.fetchImage(src)
 	} else {
-		imgPath := src
-		if !filepath.IsAbs(imgPath) && c.opts.BasePath != "" {
-			imgPath = filepath.Join(c.opts.BasePath, imgPath)
-		}
-		img, err = loadImage(imgPath)
+		img, err = c.loadLocalImage(src)
 	}
 	if err != nil {
 		if alt != "" {
@@ -259,12 +254,8 @@ func (c *converter) convertImgSVG(src string, style computedStyle) []layout.Elem
 			return nil
 		}
 	} else {
-		// Local file path.
-		imgPath := src
-		if !filepath.IsAbs(imgPath) && c.opts.BasePath != "" {
-			imgPath = filepath.Join(c.opts.BasePath, imgPath)
-		}
-		svgData, err = os.ReadFile(imgPath)
+		// Local file path resolved through BaseFS / BasePath.
+		svgData, err = readAsset(c.opts.BaseFS, c.opts.BasePath, src)
 		if err != nil {
 			return nil
 		}
@@ -298,36 +289,47 @@ func isURL(s string) bool {
 // fetchImage is implemented in fetch_image.go (with net/http)
 // and fetch_image_wasm.go (stub for WASM builds).
 
-// loadImage attempts to load an image file (JPEG, PNG, TIFF, WebP, GIF).
-func loadImage(path string) (*folioimage.Image, error) {
-	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
+// loadLocalImage loads an image referenced by a relative or absolute path,
+// resolving through BaseFS / BasePath. The image format is detected from
+// the file extension first, then by magic bytes.
+func (c *converter) loadLocalImage(p string) (*folioimage.Image, error) {
+	data, err := readAsset(c.opts.BaseFS, c.opts.BasePath, p)
+	if err != nil {
+		return nil, err
+	}
+	return decodeImageBytes(data, filepath.Ext(p))
+}
+
+// decodeImageBytes decodes image bytes to a folio Image. ext is a hint like
+// ".png" / ".jpg"; content sniffing is used when the extension is unknown.
+func decodeImageBytes(data []byte, ext string) (*folioimage.Image, error) {
+	switch strings.ToLower(ext) {
 	case ".jpg", ".jpeg":
-		return folioimage.LoadJPEG(path)
+		return folioimage.NewJPEG(data)
 	case ".png":
-		return folioimage.LoadPNG(path)
+		return folioimage.NewPNG(data)
 	case ".tif", ".tiff":
-		return folioimage.LoadTIFF(path)
+		return folioimage.NewTIFF(data)
 	case ".webp":
-		return folioimage.LoadWebP(path)
+		return folioimage.NewWebP(data)
 	case ".gif":
-		return folioimage.LoadGIF(path)
-	default:
-		// Try reading raw bytes and detecting format.
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-		// Content sniffing: try formats by magic bytes.
-		if len(data) >= 4 && string(data[:4]) == "RIFF" && len(data) >= 12 && string(data[8:12]) == "WEBP" {
-			return folioimage.NewWebP(data)
-		}
-		if len(data) >= 6 && (string(data[:6]) == "GIF87a" || string(data[:6]) == "GIF89a") {
-			return folioimage.NewGIF(data)
-		}
-		if img, err := folioimage.NewJPEG(data); err == nil {
-			return img, nil
-		}
+		return folioimage.NewGIF(data)
+	}
+	// Content sniffing: try formats by magic bytes.
+	if len(data) >= 4 && string(data[:4]) == "RIFF" && len(data) >= 12 && string(data[8:12]) == "WEBP" {
+		return folioimage.NewWebP(data)
+	}
+	if len(data) >= 6 && (string(data[:6]) == "GIF87a" || string(data[:6]) == "GIF89a") {
+		return folioimage.NewGIF(data)
+	}
+	if len(data) >= 2 && data[0] == 0xFF && data[1] == 0xD8 {
+		return folioimage.NewJPEG(data)
+	}
+	if len(data) >= 4 && string(data[:4]) == "\x89PNG" {
 		return folioimage.NewPNG(data)
 	}
+	if img, err := folioimage.NewJPEG(data); err == nil {
+		return img, nil
+	}
+	return folioimage.NewPNG(data)
 }

@@ -16,6 +16,8 @@ import (
 // PdfALevel specifies the PDF/A conformance level.
 type PdfALevel int
 
+// New PdfALevel constants must be appended to this block. The numeric
+// values are part of the C ABI surface (see export/folio.h FOLIO_PDFA_*).
 const (
 	// PdfA2B is PDF/A-2b (ISO 19005-2:2011, Level B).
 	// Based on PDF 1.7. Allows transparency. Requires font embedding,
@@ -28,7 +30,8 @@ const (
 	// PdfA2A is PDF/A-2a (Level A). Adds structure tagging requirement.
 	PdfA2A
 
-	// PdfA3B is PDF/A-3b. Like A-2b but allows file attachments.
+	// PdfA3B is PDF/A-3b (ISO 19005-3:2012, Level B). Like A-2b but
+	// allows associated file attachments (§6.4).
 	PdfA3B
 
 	// PdfA1B is PDF/A-1b (ISO 19005-1:2005, Level B).
@@ -38,6 +41,24 @@ const (
 
 	// PdfA1A is PDF/A-1a (Level A). Like 1b but adds structure tagging.
 	PdfA1A
+
+	// PdfA3A is PDF/A-3a (ISO 19005-3:2012, Level A). Adds structure
+	// tagging on top of A-3b; inherits attachment support from part 3.
+	PdfA3A
+
+	// PdfA4 is PDF/A-4 (ISO 19005-4:2020). Based on PDF 2.0. Has no
+	// conformance level letter; XMP carries pdfaid:rev = "2020"
+	// (§6.5). Forbids embedded files unless the level is PdfA4F or
+	// PdfA4E.
+	PdfA4
+
+	// PdfA4F is PDF/A-4f (ISO 19005-4:2020). Like PdfA4 but permits
+	// embedded files. Successor to PDF/A-3 for invoice/data carriers.
+	PdfA4F
+
+	// PdfA4E is PDF/A-4e (ISO 19005-4:2020). Engineering profile;
+	// permits 3D, RichMedia, and embedded files. Successor to PDF/E-1.
+	PdfA4E
 )
 
 // PdfAConfig holds PDF/A conformance settings.
@@ -112,11 +133,12 @@ type XMPProperty struct {
 // or via [Document.ValidatePdfA].
 func (d *Document) SetPdfA(config PdfAConfig) {
 	d.pdfA = &config
-	// Level A (any part) requires tagged PDF.
-	if config.Level == PdfA2A || config.Level == PdfA1A {
+	// Level A (any part) requires tagged PDF (ISO 19005-1 §6.8,
+	// ISO 19005-2 §6.7.3, ISO 19005-3 §6.7.3). PDF/A-4 has no Level A.
+	if isLevelA(config.Level) {
 		d.tagged = true
 	}
-	// PDF/A disallows encryption.
+	// PDF/A disallows encryption (ISO 19005-1 §6.1.3, etc.).
 	d.encryption = nil
 }
 
@@ -131,15 +153,23 @@ func (d *Document) ValidatePdfA() error {
 	return d.validatePdfA(d.pages)
 }
 
-// pdfALevelString returns the conformance level letter.
+// pdfALevelString returns the conformance level letter for the
+// pdfaid:conformance XMP property. Returns "" when the level has no
+// conformance letter (PDF/A-4 base profile, ISO 19005-4 §6.5).
 func pdfALevelString(level PdfALevel) string {
 	switch level {
 	case PdfA1B, PdfA2B, PdfA3B:
 		return "B"
 	case PdfA2U:
 		return "U"
-	case PdfA1A, PdfA2A:
+	case PdfA1A, PdfA2A, PdfA3A:
 		return "A"
+	case PdfA4F:
+		return "F"
+	case PdfA4E:
+		return "E"
+	case PdfA4:
+		return ""
 	default:
 		return "B"
 	}
@@ -150,8 +180,10 @@ func pdfAPartNumber(level PdfALevel) int {
 	switch level {
 	case PdfA1B, PdfA1A:
 		return 1
-	case PdfA3B:
+	case PdfA3B, PdfA3A:
 		return 3
+	case PdfA4, PdfA4F, PdfA4E:
+		return 4
 	default:
 		return 2
 	}
@@ -162,13 +194,42 @@ func isPdfA1(level PdfALevel) bool {
 	return level == PdfA1B || level == PdfA1A
 }
 
-// pdfVersionForPdfA returns the PDF version string for the given level.
-// PDF/A-1 is based on PDF 1.4; PDF/A-2 and later on PDF 1.7.
-func pdfVersionForPdfA(level PdfALevel) string {
-	if isPdfA1(level) {
-		return "1.4"
+// isPdfA4 returns true if the level is a PDF/A-4 variant.
+func isPdfA4(level PdfALevel) bool {
+	return level == PdfA4 || level == PdfA4F || level == PdfA4E
+}
+
+// isLevelA returns true if the level is an accessibility-conformance
+// (Level A) variant. PDF/A-4 has no Level A equivalent.
+func isLevelA(level PdfALevel) bool {
+	return level == PdfA1A || level == PdfA2A || level == PdfA3A
+}
+
+// allowsAttachments returns true if the level permits embedded files
+// in the /EmbeddedFiles name tree (ISO 19005-3 §6.4 for part 3;
+// ISO 19005-4 §6.8 for A-4f / A-4e).
+func allowsAttachments(level PdfALevel) bool {
+	switch level {
+	case PdfA3B, PdfA3A, PdfA4F, PdfA4E:
+		return true
+	default:
+		return false
 	}
-	return "1.7"
+}
+
+// pdfVersionForPdfA returns the PDF version string for the given level.
+// PDF/A-1 is based on PDF 1.4 (ISO 19005-1 §6.1.2);
+// PDF/A-2 and PDF/A-3 on PDF 1.7 (ISO 19005-2 §6.1.2);
+// PDF/A-4 on PDF 2.0 (ISO 19005-4 §6.1).
+func pdfVersionForPdfA(level PdfALevel) string {
+	switch {
+	case isPdfA1(level):
+		return "1.4"
+	case isPdfA4(level):
+		return "2.0"
+	default:
+		return "1.7"
+	}
 }
 
 // validatePdfA checks that the document meets PDF/A requirements.
@@ -202,14 +263,24 @@ func (d *Document) validatePdfA(allPages []*Page) error {
 		}
 	}
 
-	// File attachments are only permitted in PDF/A-3B (ISO 19005-3 §6.4).
-	if len(d.attachments) > 0 && d.pdfA.Level != PdfA3B {
-		return fmt.Errorf("pdfa: file attachments are only permitted in PDF/A-3B; current level does not allow them")
+	// File attachments are only permitted in parts/levels that explicitly
+	// allow them: PDF/A-3 (ISO 19005-3 §6.4) and PDF/A-4f / PDF/A-4e
+	// (ISO 19005-4 §6.8). Plain PDF/A-4 forbids them.
+	if len(d.attachments) > 0 && !allowsAttachments(d.pdfA.Level) {
+		return fmt.Errorf("pdfa: file attachments are only permitted in PDF/A-3 (a/b) or PDF/A-4f / PDF/A-4e; current level does not allow them")
 	}
 
 	// Title is required.
 	if d.Info.Title == "" {
 		return fmt.Errorf("pdfa: document Title is required for PDF/A conformance")
+	}
+
+	// Level A (accessibility-conformance) requires a declared natural
+	// language for all text (ISO 19005-2 §6.7.2 / 19005-3 §6.7.2).
+	// Folio satisfies this via the catalog /Lang entry, populated from
+	// Info.Language. Per-structure Lang is not yet exposed.
+	if isLevelA(d.pdfA.Level) && d.Info.Language == "" {
+		return fmt.Errorf("pdfa: Info.Language is required for Level A (accessibility-conformance) variants; set Info.Language to a BCP 47 / RFC 3066 tag (e.g. \"en-US\")")
 	}
 
 	return nil
@@ -228,6 +299,7 @@ func buildXMPMetadata(info Info, level PdfALevel, xmpSchemas []XMPSchema, xmpPro
 
 	title := xmlEscape(info.Title)
 	author := xmlEscape(info.Author)
+	language := xmlEscape(info.Language)
 	creator := xmlEscape(info.Creator)
 	if creator == "" {
 		creator = "Folio"
@@ -245,7 +317,7 @@ func buildXMPMetadata(info Info, level PdfALevel, xmpSchemas []XMPSchema, xmpPro
 	b.WriteString(`<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">`)
 	b.WriteString("\n")
 
-	// Dublin Core (title, creator)
+	// Dublin Core (title, creator, language)
 	b.WriteString(`<rdf:Description rdf:about=""`)
 	b.WriteString(` xmlns:dc="http://purl.org/dc/elements/1.1/">`)
 	b.WriteString("\n")
@@ -255,6 +327,12 @@ func buildXMPMetadata(info Info, level PdfALevel, xmpSchemas []XMPSchema, xmpPro
 	}
 	if author != "" {
 		b.WriteString(`<dc:creator><rdf:Seq><rdf:li>` + author + `</rdf:li></rdf:Seq></dc:creator>`)
+		b.WriteString("\n")
+	}
+	if language != "" {
+		// dc:language mirrors the catalog /Lang entry. PDF/A Level A
+		// (ISO 19005-2 §6.7.2) and PDF/UA-1 conformance check for it.
+		b.WriteString(`<dc:language><rdf:Bag><rdf:li>` + language + `</rdf:li></rdf:Bag></dc:language>`)
 		b.WriteString("\n")
 	}
 	b.WriteString(`</rdf:Description>`)
@@ -282,21 +360,36 @@ func buildXMPMetadata(info Info, level PdfALevel, xmpSchemas []XMPSchema, xmpPro
 	b.WriteString(`</rdf:Description>`)
 	b.WriteString("\n")
 
-	// PDF/A identification
+	// PDF/A identification (ISO 19005-1 §6.7.11, 19005-2 §6.7.11,
+	// 19005-3 §6.7.11, 19005-4 §6.5).
+	//
+	// Parts 1–3 carry pdfaid:part + pdfaid:conformance.
+	// Part 4 carries pdfaid:part + pdfaid:rev = "2020"; conformance is
+	// only present for the A-4f / A-4e profiles (values "F" / "E").
 	b.WriteString(`<rdf:Description rdf:about=""`)
 	b.WriteString(` xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">`)
 	b.WriteString("\n")
 	fmt.Fprintf(&b, `<pdfaid:part>%d</pdfaid:part>`, part)
 	b.WriteString("\n")
-	b.WriteString(`<pdfaid:conformance>` + conf + `</pdfaid:conformance>`)
-	b.WriteString("\n")
+	if isPdfA4(level) {
+		b.WriteString(`<pdfaid:rev>2020</pdfaid:rev>`)
+		b.WriteString("\n")
+	}
+	if conf != "" {
+		b.WriteString(`<pdfaid:conformance>` + conf + `</pdfaid:conformance>`)
+		b.WriteString("\n")
+	}
 	b.WriteString(`</rdf:Description>`)
 	b.WriteString("\n")
 
-	// PDF/A-3 requires a single pdfaExtension:schemas block. The built-in pdfaf
-	// schema (for /AF) and any caller-supplied schemas (e.g. Factur-X fx:) are
-	// merged into one <rdf:Bag> to avoid the "duplicate property" XMP parse error.
-	if level == PdfA3B || len(xmpSchemas) > 0 {
+	// Any level that allows associated files (PDF/A-3 a/b, PDF/A-4f,
+	// PDF/A-4e) needs the pdfaf extension schema declared so that
+	// validators recognise the AFRelationship key on filespecs.
+	// The built-in pdfaf schema and any caller-supplied schemas
+	// (e.g. Factur-X fx:) are merged into one <rdf:Bag> to keep a
+	// single pdfaExtension:schemas block.
+	emitAFSchema := allowsAttachments(level)
+	if emitAFSchema || len(xmpSchemas) > 0 {
 		b.WriteString(`<rdf:Description rdf:about=""`)
 		b.WriteString(` xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/"`)
 		b.WriteString(` xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#"`)
@@ -305,10 +398,11 @@ func buildXMPMetadata(info Info, level PdfALevel, xmpSchemas []XMPSchema, xmpPro
 		b.WriteString(`<pdfaExtension:schemas><rdf:Bag>`)
 		b.WriteString("\n")
 
-		// Built-in pdfaf schema (AF associated files, PDF/A-3 §6.4).
-		if level == PdfA3B {
+		// Built-in pdfaf schema (AF associated files, ISO 19005-3 §6.4
+		// and ISO 19005-4 §6.8).
+		if emitAFSchema {
 			b.WriteString(`<rdf:li rdf:parseType="Resource">`)
-			b.WriteString(`<pdfaSchema:schema>PDF/A-3 Association File Attachment</pdfaSchema:schema>`)
+			b.WriteString(`<pdfaSchema:schema>PDF/A Associated File Attachment</pdfaSchema:schema>`)
 			b.WriteString(`<pdfaSchema:namespaceURI>http://www.aiim.org/pdfa/ns/f#</pdfaSchema:namespaceURI>`)
 			b.WriteString(`<pdfaSchema:prefix>pdfaf</pdfaSchema:prefix>`)
 			b.WriteString(`<pdfaSchema:property><rdf:Seq><rdf:li rdf:parseType="Resource">`)

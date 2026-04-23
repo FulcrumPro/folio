@@ -598,6 +598,13 @@ func (d *Document) WriteToWithOptions(w io.Writer, opts WriteOptions) (int64, er
 	catalog := core.NewPdfDictionary()
 	catalog.Set("Type", core.NewPdfName("Catalog"))
 
+	// /Lang declares the document's default natural language
+	// (ISO 32000-2 §14.9.2). Required for PDF/A Level A
+	// (ISO 19005-2 §6.7.2) when per-structure Lang is not set.
+	if d.Info.Language != "" {
+		catalog.Set("Lang", core.NewPdfLiteralString(d.Info.Language))
+	}
+
 	pagesDict := core.NewPdfDictionary()
 	pagesDict.Set("Type", core.NewPdfName("Pages"))
 	pagesDict.Set("Count", core.NewPdfInteger(len(allPages)))

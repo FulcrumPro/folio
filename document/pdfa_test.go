@@ -392,8 +392,8 @@ func TestPdfA2bRejectsAttachment(t *testing.T) {
 	if err == nil {
 		t.Error("expected error when attaching file to PDF/A-2B document")
 	}
-	if err != nil && !strings.Contains(err.Error(), "PDF/A-3B") {
-		t.Errorf("expected error mentioning PDF/A-3B, got: %v", err)
+	if err != nil && !strings.Contains(err.Error(), "PDF/A-3") {
+		t.Errorf("expected error mentioning PDF/A-3, got: %v", err)
 	}
 }
 
@@ -771,5 +771,267 @@ func TestXMPPropertyBlockNamespaceEscaping(t *testing.T) {
 	}
 	if !strings.Contains(pdf, `xmlns:edge="urn:edge:ns&amp;v2#"`) {
 		t.Error("expected XML-escaped namespace URI in xmlns attribute")
+	}
+}
+
+// --- PDF/A-3a (ISO 19005-3:2012, Level A) ---
+
+func TestPdfA3aBasic(t *testing.T) {
+	doc := NewDocument(PageSizeLetter)
+	doc.Info.Title = "PDF/A-3a Test"
+	doc.Info.Language = "en-US"
+	doc.SetPdfA(PdfAConfig{Level: PdfA3A})
+
+	var buf bytes.Buffer
+	if _, err := doc.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo failed: %v", err)
+	}
+
+	pdf := buf.String()
+
+	if !strings.Contains(pdf, "<pdfaid:part>3</pdfaid:part>") {
+		t.Error("expected PDF/A part 3")
+	}
+	if !strings.Contains(pdf, "<pdfaid:conformance>A</pdfaid:conformance>") {
+		t.Error("expected PDF/A conformance A")
+	}
+}
+
+func TestPdfA3aEnablesTagging(t *testing.T) {
+	doc := NewDocument(PageSizeLetter)
+	doc.Info.Title = "Tagged A-3a"
+	doc.Info.Language = "en"
+	doc.SetPdfA(PdfAConfig{Level: PdfA3A})
+
+	if !doc.tagged {
+		t.Error("PDF/A-3a should enable tagged PDF automatically")
+	}
+}
+
+func TestPdfA3aAllowsAttachment(t *testing.T) {
+	doc := NewDocument(PageSizeLetter)
+	doc.Info.Title = "A-3a Attachment"
+	doc.Info.Language = "en"
+	doc.SetPdfA(PdfAConfig{Level: PdfA3A})
+
+	doc.AttachFile(FileAttachment{
+		FileName: "data.xml",
+		MIMEType: "application/xml",
+		Data:     []byte(`<data/>`),
+	})
+
+	var buf bytes.Buffer
+	if _, err := doc.WriteTo(&buf); err != nil {
+		t.Fatalf("PDF/A-3a should permit attachments: %v", err)
+	}
+
+	pdf := buf.String()
+	if !strings.Contains(pdf, "/EmbeddedFiles") {
+		t.Error("expected /EmbeddedFiles in A-3a output")
+	}
+	// pdfaExtension AF schema must also be declared for A-3a.
+	if !strings.Contains(pdf, "http://www.aiim.org/pdfa/ns/f#") {
+		t.Error("expected pdfaf schema declaration in A-3a XMP")
+	}
+}
+
+// --- PDF/A-4 (ISO 19005-4:2020) ---
+
+func TestPdfA4Basic(t *testing.T) {
+	doc := NewDocument(PageSizeLetter)
+	doc.Info.Title = "PDF/A-4 Test"
+	doc.SetPdfA(PdfAConfig{Level: PdfA4})
+	doc.AddPage()
+
+	var buf bytes.Buffer
+	if _, err := doc.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo failed: %v", err)
+	}
+
+	pdf := buf.String()
+
+	if !strings.HasPrefix(pdf, "%PDF-2.0") {
+		t.Error("expected PDF 2.0 header for PDF/A-4")
+	}
+	if !strings.Contains(pdf, "<pdfaid:part>4</pdfaid:part>") {
+		t.Error("expected PDF/A part 4")
+	}
+	if !strings.Contains(pdf, "<pdfaid:rev>2020</pdfaid:rev>") {
+		t.Error("expected pdfaid:rev 2020 for PDF/A-4")
+	}
+	// Plain PDF/A-4 must NOT carry a pdfaid:conformance element.
+	if strings.Contains(pdf, "<pdfaid:conformance>") {
+		t.Error("plain PDF/A-4 must not emit pdfaid:conformance")
+	}
+}
+
+func TestPdfA4DoesNotEnableTagging(t *testing.T) {
+	doc := NewDocument(PageSizeLetter)
+	doc.Info.Title = "A-4"
+	doc.SetPdfA(PdfAConfig{Level: PdfA4})
+
+	if doc.tagged {
+		t.Error("PDF/A-4 has no Level A and should not auto-enable tagging")
+	}
+}
+
+func TestPdfA4RejectsAttachment(t *testing.T) {
+	doc := NewDocument(PageSizeLetter)
+	doc.Info.Title = "A-4 Attachment Rejection"
+	doc.SetPdfA(PdfAConfig{Level: PdfA4})
+
+	doc.AttachFile(FileAttachment{
+		FileName: "data.xml",
+		MIMEType: "application/xml",
+		Data:     []byte(`<data/>`),
+	})
+
+	var buf bytes.Buffer
+	_, err := doc.WriteTo(&buf)
+	if err == nil {
+		t.Error("plain PDF/A-4 must not allow embedded files")
+	}
+}
+
+func TestPdfA4fAllowsAttachment(t *testing.T) {
+	doc := NewDocument(PageSizeLetter)
+	doc.Info.Title = "A-4f Attachment"
+	doc.SetPdfA(PdfAConfig{Level: PdfA4F})
+
+	doc.AttachFile(FileAttachment{
+		FileName: "invoice.xml",
+		MIMEType: "application/xml",
+		Data:     []byte(`<invoice/>`),
+	})
+
+	var buf bytes.Buffer
+	if _, err := doc.WriteTo(&buf); err != nil {
+		t.Fatalf("PDF/A-4f must permit attachments: %v", err)
+	}
+
+	pdf := buf.String()
+	if !strings.Contains(pdf, "<pdfaid:part>4</pdfaid:part>") {
+		t.Error("expected PDF/A part 4")
+	}
+	if !strings.Contains(pdf, "<pdfaid:conformance>F</pdfaid:conformance>") {
+		t.Error("expected pdfaid:conformance F for PDF/A-4f")
+	}
+	if !strings.Contains(pdf, "<pdfaid:rev>2020</pdfaid:rev>") {
+		t.Error("expected pdfaid:rev 2020")
+	}
+	if !strings.Contains(pdf, "/EmbeddedFiles") {
+		t.Error("expected /EmbeddedFiles in A-4f output")
+	}
+	if !strings.Contains(pdf, "http://www.aiim.org/pdfa/ns/f#") {
+		t.Error("expected pdfaf schema declaration in A-4f XMP")
+	}
+}
+
+func TestPdfA4eConformance(t *testing.T) {
+	doc := NewDocument(PageSizeLetter)
+	doc.Info.Title = "A-4e"
+	doc.SetPdfA(PdfAConfig{Level: PdfA4E})
+
+	var buf bytes.Buffer
+	if _, err := doc.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo failed: %v", err)
+	}
+
+	pdf := buf.String()
+	if !strings.Contains(pdf, "<pdfaid:conformance>E</pdfaid:conformance>") {
+		t.Error("expected pdfaid:conformance E for PDF/A-4e")
+	}
+	if !strings.HasPrefix(pdf, "%PDF-2.0") {
+		t.Error("expected PDF 2.0 header for PDF/A-4e")
+	}
+}
+
+// --- Level A language requirement (ISO 19005-2 §6.7.2) ---
+
+func TestPdfALevelARequiresLanguage(t *testing.T) {
+	cases := []struct {
+		name  string
+		level PdfALevel
+	}{
+		{"PdfA1A", PdfA1A},
+		{"PdfA2A", PdfA2A},
+		{"PdfA3A", PdfA3A},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := NewDocument(PageSizeLetter)
+			doc.Info.Title = "Level A No Lang"
+			// Info.Language intentionally omitted.
+			doc.SetPdfA(PdfAConfig{Level: tc.level})
+
+			var buf bytes.Buffer
+			_, err := doc.WriteTo(&buf)
+			if err == nil {
+				t.Errorf("%s should require Info.Language", tc.name)
+			}
+			if err != nil && !strings.Contains(err.Error(), "Language") {
+				t.Errorf("expected language error, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestPdfALevelBNoLanguageRequired(t *testing.T) {
+	// Level B variants must still write successfully with no Language set.
+	doc := NewDocument(PageSizeLetter)
+	doc.Info.Title = "Level B No Lang"
+	doc.SetPdfA(PdfAConfig{Level: PdfA2B})
+
+	var buf bytes.Buffer
+	if _, err := doc.WriteTo(&buf); err != nil {
+		t.Fatalf("Level B must not require Language: %v", err)
+	}
+}
+
+func TestPdfALanguageInCatalog(t *testing.T) {
+	doc := NewDocument(PageSizeLetter)
+	doc.Info.Title = "Lang Test"
+	doc.Info.Language = "fr-CA"
+	doc.SetPdfA(PdfAConfig{Level: PdfA2A})
+
+	var buf bytes.Buffer
+	if _, err := doc.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo failed: %v", err)
+	}
+
+	pdf := buf.String()
+	if !strings.Contains(pdf, "/Lang (fr-CA)") {
+		t.Error("expected /Lang (fr-CA) in catalog")
+	}
+	// dc:language mirrors the catalog /Lang in XMP.
+	if !strings.Contains(pdf, "<rdf:li>fr-CA</rdf:li>") {
+		t.Error("expected dc:language entry in XMP")
+	}
+}
+
+func TestPdfA4UsesPdf2(t *testing.T) {
+	cases := []struct {
+		name  string
+		level PdfALevel
+	}{
+		{"PdfA4", PdfA4},
+		{"PdfA4F", PdfA4F},
+		{"PdfA4E", PdfA4E},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := NewDocument(PageSizeLetter)
+			doc.Info.Title = "Version Check"
+			doc.SetPdfA(PdfAConfig{Level: tc.level})
+			doc.AddPage()
+
+			var buf bytes.Buffer
+			if _, err := doc.WriteTo(&buf); err != nil {
+				t.Fatalf("WriteTo failed: %v", err)
+			}
+			if !strings.HasPrefix(buf.String(), "%PDF-2.0") {
+				t.Errorf("%s expected PDF 2.0 header", tc.name)
+			}
+		})
 	}
 }

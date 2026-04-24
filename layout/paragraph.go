@@ -104,6 +104,14 @@ func (p *Paragraph) SetLeading(l float64) *Paragraph {
 	return p
 }
 
+// Runs returns a copy of the paragraph's text runs for inspection.
+// Mutating the returned slice does not affect the paragraph.
+func (p *Paragraph) Runs() []TextRun {
+	out := make([]TextRun, len(p.runs))
+	copy(out, p.runs)
+	return out
+}
+
 // SetAlign sets the horizontal text alignment. When this method is called
 // explicitly, the alignment is treated as an author override and will not
 // be changed by the automatic RTL default (which would otherwise flip the

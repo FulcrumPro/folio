@@ -544,7 +544,7 @@ func parseSelectorPart(s string) selectorPart {
 		// Handle double colon (::pseudo-element).
 		if strings.HasPrefix(pseudo, ":") {
 			pe := strings.ToLower(pseudo[1:])
-			if pe == "before" || pe == "after" || pe == "marker" {
+			if pe == "before" || pe == "after" || pe == "marker" || pe == "placeholder" {
 				part.pseudoElement = pe
 			}
 		} else {

@@ -37,10 +37,12 @@ func (c *converter) convertInputText(n *html.Node, style computedStyle, inputTyp
 	placeholder := getAttr(n, "placeholder")
 
 	displayText := value
-	textColor := style.Color
+	textStyle := style
+	showingPlaceholder := false
 	if displayText == "" && placeholder != "" {
 		displayText = placeholder
-		textColor = layout.ColorGray
+		textStyle.Color = layout.ColorGray
+		showingPlaceholder = true
 	}
 	if displayText == "" {
 		displayText = " " // ensure the box has content for sizing
@@ -49,9 +51,14 @@ func (c *converter) convertInputText(n *html.Node, style computedStyle, inputTyp
 		displayText = strings.Repeat("●", len([]rune(value)))
 	}
 
-	f := resolveFont(style)
-	p := layout.NewParagraph(displayText, f, style.FontSize)
-	p.SetLeading(style.LineHeight)
+	if showingPlaceholder {
+		c.applyPlaceholderStyle(n, &textStyle)
+	}
+
+	f := resolveFont(textStyle)
+	run := layout.TextRun{Text: displayText, Font: f, FontSize: textStyle.FontSize, Color: textStyle.Color}
+	p := layout.NewStyledParagraph(run)
+	p.SetLeading(textStyle.LineHeight)
 
 	div := layout.NewDiv()
 	div.Add(p)
@@ -65,14 +72,36 @@ func (c *converter) convertInputText(n *html.Node, style computedStyle, inputTyp
 		div.SetBackground(layout.ColorWhite)
 	}
 
-	run := layout.TextRun{Text: displayText, Font: f, FontSize: style.FontSize, Color: textColor}
-	_ = run // we used NewParagraph above
-
 	if style.hasBorder() {
 		div.SetBorders(buildCellBorders(style))
 	}
 
 	return []layout.Element{div}
+}
+
+// applyPlaceholderStyle applies CSS ::placeholder declarations onto style.
+// Supported sub-properties: color, font-style, font-weight, font-size.
+func (c *converter) applyPlaceholderStyle(n *html.Node, style *computedStyle) {
+	if c.sheet == nil {
+		return
+	}
+	for _, d := range c.sheet.matchingPseudoElementDeclarations(n, "placeholder") {
+		switch d.property {
+		case "color":
+			if clr, ok := parseColor(d.value); ok {
+				style.Color = clr
+			}
+		case "font-style":
+			style.FontStyle = parseFontStyle(d.value)
+		case "font-weight":
+			style.FontWeight = parseFontWeight(d.value)
+		case "font-size":
+			fs := parseFontSize(d.value, style.FontSize)
+			if fs > 0 {
+				style.FontSize = fs
+			}
+		}
+	}
 }
 
 // convertCheckboxRadio renders a checkbox or radio button as a small box/circle with optional check.
@@ -204,19 +233,25 @@ func (c *converter) convertTextarea(n *html.Node, style computedStyle) []layout.
 	placeholder := getAttr(n, "placeholder")
 
 	displayText := text
-	textColor := style.Color
+	textStyle := style
+	showingPlaceholder := false
 	if displayText == "" && placeholder != "" {
 		displayText = placeholder
-		textColor = layout.ColorGray
+		textStyle.Color = layout.ColorGray
+		showingPlaceholder = true
 	}
 	if displayText == "" {
 		displayText = " \n \n " // empty textarea placeholder (3 lines)
 	}
 
-	f := resolveFont(style)
-	run := layout.TextRun{Text: displayText, Font: f, FontSize: style.FontSize, Color: textColor}
+	if showingPlaceholder {
+		c.applyPlaceholderStyle(n, &textStyle)
+	}
+
+	f := resolveFont(textStyle)
+	run := layout.TextRun{Text: displayText, Font: f, FontSize: textStyle.FontSize, Color: textStyle.Color}
 	p := layout.NewStyledParagraph(run)
-	p.SetLeading(style.LineHeight)
+	p.SetLeading(textStyle.LineHeight)
 
 	div := layout.NewDiv()
 	div.Add(p)

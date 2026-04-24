@@ -18,6 +18,8 @@ import (
 
 	"github.com/carlos7ags/folio/font"
 	"github.com/carlos7ags/folio/layout"
+
+	htmlparse "golang.org/x/net/html"
 )
 
 func TestConvertSimpleParagraph(t *testing.T) {
@@ -2301,6 +2303,288 @@ li:nth-of-type(3n+1) { color: red; }
 	}
 	if len(elems) < 1 {
 		t.Fatal("expected at least 1 element")
+	}
+}
+
+// --- :empty pseudo-class (CSS Selectors Level 3 semantics) ---
+
+// findElements returns every element node in doc with the given tag name.
+func findElements(doc *htmlparse.Node, tag string) []*htmlparse.Node {
+	var out []*htmlparse.Node
+	var walk func(n *htmlparse.Node)
+	walk = func(n *htmlparse.Node) {
+		if n.Type == htmlparse.ElementNode && n.Data == tag {
+			out = append(out, n)
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	return out
+}
+
+// emptyMatchCases drives :empty unit tests. CSS Selectors Level 3 says
+// :empty matches an element with no children at all (text, including
+// whitespace, counts as content; comments do NOT).
+func TestCSSEmptyPseudoMatchesElement(t *testing.T) {
+	tests := []struct {
+		name string
+		html string
+		want bool
+	}{
+		{"truly empty", `<div><p></p></div>`, true},
+		{"text content", `<div><p>x</p></div>`, false},
+		{"whitespace text", `<div><p>   </p></div>`, false},
+		{"element child", `<div><p><span></span></p></div>`, false},
+		{"comment only matches per CSS3", `<div><p><!--c--></p></div>`, true},
+		{"void element child", `<div><p><br></p></div>`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc, err := htmlparse.Parse(strings.NewReader(tt.html))
+			if err != nil {
+				t.Fatal(err)
+			}
+			paras := findElements(doc, "p")
+			if len(paras) != 1 {
+				t.Fatalf("expected 1 <p>, got %d", len(paras))
+			}
+			got := pseudoMatches("empty", paras[0])
+			if got != tt.want {
+				t.Errorf("pseudoMatches(empty) = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCSSEmptyPseudoEndToEnd(t *testing.T) {
+	// Smoke test: stylesheet referencing :empty must not break Convert.
+	src := `<style>
+p:empty { color: red; }
+</style>
+<div><p></p><p>not empty</p></div>`
+	if _, err := Convert(src, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCSSEmptyWithCombinator(t *testing.T) {
+	// :empty composed with an adjacent-sibling combinator must reach
+	// the right cells. The second <td> (which follows an empty <td>)
+	// is the only one that should match `td:empty + td`.
+	doc, err := htmlparse.Parse(strings.NewReader(
+		`<table><tr><td></td><td>second</td><td>third</td></tr></table>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tds := findElements(doc, "td")
+	if len(tds) != 3 {
+		t.Fatalf("expected 3 <td>, got %d", len(tds))
+	}
+	sel := parseSelector("td:empty + td")
+	want := []bool{false, true, false}
+	for i, td := range tds {
+		got := selectorMatches(sel, td)
+		if got != want[i] {
+			t.Errorf("td[%d]: selectorMatches(td:empty + td) = %v, want %v", i, got, want[i])
+		}
+	}
+}
+
+// --- ::placeholder pseudo-element ---
+
+// colorApprox returns true if two colors are equal within 1/255 in each channel.
+// CSS hex parsing produces 0.50196..., not 0.5, so layout.ColorGreen != #008000
+// even though they render identically.
+func colorApprox(a, b layout.Color) bool {
+	return abs(a.R-b.R) < 0.005 && abs(a.G-b.G) < 0.005 && abs(a.B-b.B) < 0.005
+}
+
+// findFirstParagraphRun walks elems looking for a Div whose first child
+// is a *layout.Paragraph and returns that paragraph's first run.
+func findFirstParagraphRun(t *testing.T, elems []layout.Element) layout.TextRun {
+	t.Helper()
+	for _, e := range elems {
+		div, ok := e.(*layout.Div)
+		if !ok {
+			continue
+		}
+		for _, c := range div.Children() {
+			if p, ok := c.(*layout.Paragraph); ok {
+				runs := p.Runs()
+				if len(runs) == 0 {
+					t.Fatal("paragraph has no runs")
+				}
+				return runs[0]
+			}
+		}
+	}
+	t.Fatal("no Div containing a Paragraph found")
+	return layout.TextRun{}
+}
+
+func TestCSSPlaceholderColorAppliedInput(t *testing.T) {
+	src := `<style>input::placeholder { color: #ff0000; }</style>
+<input type="text" placeholder="Search...">`
+	elems, err := Convert(src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := findFirstParagraphRun(t, elems)
+	if run.Color != layout.ColorRed {
+		t.Errorf("placeholder color = %+v, want ColorRed (%+v)", run.Color, layout.ColorRed)
+	}
+	if run.Text != "Search..." {
+		t.Errorf("placeholder text = %q, want %q", run.Text, "Search...")
+	}
+}
+
+func TestCSSPlaceholderColorAppliedTextarea(t *testing.T) {
+	src := `<style>textarea::placeholder { color: #008000; }</style>
+<textarea placeholder="Enter notes..."></textarea>`
+	elems, err := Convert(src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := findFirstParagraphRun(t, elems)
+	if !colorApprox(run.Color, layout.ColorGreen) {
+		t.Errorf("placeholder color = %+v, want ColorGreen (%+v)", run.Color, layout.ColorGreen)
+	}
+}
+
+func TestCSSPlaceholderItalicResolvesItalicFont(t *testing.T) {
+	src := `<style>input::placeholder { font-style: italic; }</style>
+<input type="text" placeholder="Search...">`
+	elems, err := Convert(src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := findFirstParagraphRun(t, elems)
+	if run.Font != font.HelveticaOblique {
+		t.Errorf("placeholder font = %v, want HelveticaOblique", run.Font)
+	}
+}
+
+func TestCSSPlaceholderNumericFontWeightResolvesBold(t *testing.T) {
+	// font-weight: 700 must be normalized to "bold" via parseFontWeight,
+	// not stored verbatim (which would silently fail to bold the font).
+	src := `<style>input::placeholder { font-weight: 700; }</style>
+<input type="text" placeholder="Search...">`
+	elems, err := Convert(src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := findFirstParagraphRun(t, elems)
+	if run.Font != font.HelveticaBold {
+		t.Errorf("placeholder font = %v, want HelveticaBold", run.Font)
+	}
+}
+
+func TestCSSPlaceholderSkippedWhenInputHasValue(t *testing.T) {
+	// Value is shown; the ::placeholder color must NOT be applied.
+	src := `<style>
+input { color: #000080; }
+input::placeholder { color: #ff0000; }
+</style>
+<input type="text" value="hello" placeholder="Search...">`
+	elems, err := Convert(src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := findFirstParagraphRun(t, elems)
+	if run.Text != "hello" {
+		t.Errorf("text = %q, want %q", run.Text, "hello")
+	}
+	if run.Color == layout.ColorRed {
+		t.Error("value text was incorrectly styled with ::placeholder color")
+	}
+	if !colorApprox(run.Color, layout.ColorNavy) {
+		t.Errorf("value color = %+v, want ColorNavy (%+v)", run.Color, layout.ColorNavy)
+	}
+}
+
+func TestCSSPlaceholderSkippedWhenTextareaHasContent(t *testing.T) {
+	src := `<style>
+textarea::placeholder { color: #ff0000; }
+</style>
+<textarea>real content</textarea>`
+	elems, err := Convert(src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := findFirstParagraphRun(t, elems)
+	if run.Color == layout.ColorRed {
+		t.Error("textarea body was incorrectly styled with ::placeholder color")
+	}
+}
+
+func TestCSSPlaceholderAttributeSelector(t *testing.T) {
+	// Only the email input should pick up the rule.
+	src := `<style>
+input[type=email]::placeholder { color: #ff0000; }
+</style>
+<input type="text" placeholder="text-ph">
+<input type="email" placeholder="email-ph">`
+	elems, err := Convert(src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var divs []*layout.Div
+	for _, e := range elems {
+		if d, ok := e.(*layout.Div); ok {
+			divs = append(divs, d)
+		}
+	}
+	if len(divs) < 2 {
+		t.Fatalf("expected at least 2 input divs, got %d", len(divs))
+	}
+	getRun := func(d *layout.Div) layout.TextRun {
+		for _, c := range d.Children() {
+			if p, ok := c.(*layout.Paragraph); ok {
+				return p.Runs()[0]
+			}
+		}
+		t.Fatal("no paragraph in div")
+		return layout.TextRun{}
+	}
+	textRun := getRun(divs[0])
+	emailRun := getRun(divs[1])
+	if textRun.Color == layout.ColorRed {
+		t.Error("text input placeholder picked up email-only rule")
+	}
+	if emailRun.Color != layout.ColorRed {
+		t.Errorf("email input placeholder color = %+v, want ColorRed", emailRun.Color)
+	}
+}
+
+func TestCSSPlaceholderDoesNotLeakToSiblings(t *testing.T) {
+	src := `<style>
+input::placeholder { color: #ff0000; }
+</style>
+<input type="text" placeholder="ph">
+<p>sibling paragraph</p>`
+	elems, err := Convert(src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Find the sibling paragraph (not inside the input Div).
+	var siblingPara *layout.Paragraph
+	for _, e := range elems {
+		if p, ok := e.(*layout.Paragraph); ok {
+			siblingPara = p
+			break
+		}
+	}
+	if siblingPara == nil {
+		t.Fatal("sibling paragraph not found")
+	}
+	runs := siblingPara.Runs()
+	if len(runs) == 0 {
+		t.Fatal("sibling paragraph has no runs")
+	}
+	if runs[0].Color == layout.ColorRed {
+		t.Error("sibling <p> incorrectly received ::placeholder color")
 	}
 }
 

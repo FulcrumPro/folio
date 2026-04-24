@@ -168,6 +168,16 @@ func pseudoMatches(pseudo string, n *html.Node) bool {
 	case pseudo == "root":
 		// :root matches the document element (<html>).
 		return n.Parent != nil && n.Parent.Type == html.DocumentNode
+	case pseudo == "empty":
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			if c.Type == html.ElementNode {
+				return false
+			}
+			if c.Type == html.TextNode && c.Data != "" {
+				return false
+			}
+		}
+		return true
 	case pseudo == "first-of-type":
 		return typeIndex(n) == 1
 	case pseudo == "last-of-type":

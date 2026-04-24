@@ -33,6 +33,12 @@ const (
 	ScriptHangul
 	ScriptCyrillic
 	ScriptGreek
+	ScriptGujarati
+	ScriptGurmukhi
+	ScriptKannada
+	ScriptMalayalam
+	ScriptOriya
+	ScriptTelugu
 )
 
 // ScriptOf returns the Script that r belongs to. ASCII letters take a fast
@@ -74,6 +80,18 @@ func ScriptOf(r rune) Script {
 		return ScriptBengali
 	case unicode.Is(unicode.Tamil, r):
 		return ScriptTamil
+	case unicode.Is(unicode.Gujarati, r):
+		return ScriptGujarati
+	case unicode.Is(unicode.Gurmukhi, r):
+		return ScriptGurmukhi
+	case unicode.Is(unicode.Kannada, r):
+		return ScriptKannada
+	case unicode.Is(unicode.Malayalam, r):
+		return ScriptMalayalam
+	case unicode.Is(unicode.Oriya, r):
+		return ScriptOriya
+	case unicode.Is(unicode.Telugu, r):
+		return ScriptTelugu
 	case unicode.Is(unicode.Thai, r):
 		return ScriptThai
 	}

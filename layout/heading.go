@@ -72,6 +72,12 @@ func NewHeadingEmbedded(text string, level HeadingLevel, ef *font.EmbeddedFont) 
 
 // SetRuns replaces the heading's paragraph runs with the given styled runs.
 func (h *Heading) SetRuns(runs []TextRun) *Heading {
+	for i := range runs {
+		if runs[i].InlineElement != nil || runs[i].IsLineBreak {
+			continue
+		}
+		runs[i].Text = normalizeText(runs[i].Text)
+	}
 	h.para.runs = runs
 	return h
 }

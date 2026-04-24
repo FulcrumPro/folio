@@ -223,7 +223,7 @@ type Row struct {
 // AddCell adds a cell with text using a standard font.
 func (r *Row) AddCell(text string, f *font.Standard, fontSize float64) *Cell {
 	c := &Cell{
-		text:     text,
+		text:     normalizeText(text),
 		font:     f,
 		fontSize: fontSize,
 		align:    AlignLeft,
@@ -239,7 +239,7 @@ func (r *Row) AddCell(text string, f *font.Standard, fontSize float64) *Cell {
 // AddCellEmbedded adds a cell with text using an embedded font.
 func (r *Row) AddCellEmbedded(text string, ef *font.EmbeddedFont, fontSize float64) *Cell {
 	c := &Cell{
-		text:     text,
+		text:     normalizeText(text),
 		embedded: ef,
 		fontSize: fontSize,
 		align:    AlignLeft,

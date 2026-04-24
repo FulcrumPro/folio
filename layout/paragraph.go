@@ -43,6 +43,7 @@ func NewParagraph(text string, f *font.Standard, fontSize float64) *Paragraph {
 	if fontSize <= 0 {
 		panic("layout.NewParagraph: fontSize must be positive")
 	}
+	text = normalizeText(text)
 	return &Paragraph{
 		runs:    []TextRun{{Text: text, Font: f, FontSize: fontSize}},
 		leading: 1.2,
@@ -59,6 +60,7 @@ func NewParagraphEmbedded(text string, ef *font.EmbeddedFont, fontSize float64) 
 	if fontSize <= 0 {
 		panic("layout.NewParagraphEmbedded: fontSize must be positive")
 	}
+	text = normalizeText(text)
 	return &Paragraph{
 		runs:    []TextRun{{Text: text, Embedded: ef, FontSize: fontSize}},
 		leading: 1.2,
@@ -79,6 +81,7 @@ func NewStyledParagraph(runs ...TextRun) *Paragraph {
 		if r.Font == nil && r.Embedded == nil {
 			panic(fmt.Sprintf("layout.NewStyledParagraph: run %d has nil Font and nil Embedded", i))
 		}
+		runs[i].Text = normalizeText(runs[i].Text)
 	}
 	return &Paragraph{
 		runs:    runs,
@@ -94,6 +97,7 @@ func (p *Paragraph) AddRun(r TextRun) *Paragraph {
 	if r.InlineElement == nil && !r.IsLineBreak && r.Font == nil && r.Embedded == nil {
 		panic("layout.Paragraph.AddRun: run has nil Font and nil Embedded")
 	}
+	r.Text = normalizeText(r.Text)
 	p.runs = append(p.runs, r)
 	return p
 }

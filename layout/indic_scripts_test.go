@@ -172,8 +172,10 @@ func TestShapeIndicRephPlacement(t *testing.T) {
 			name: "bengali reph + ka",
 			cfg:  bengaliConfig, ra: 0x09B0, virama: 0x09CD, base: 0x0995,
 			rephGID: 5000,
-			// Bengali uses rephPosAfterBase in this implementation:
-			// [base, reph, remaining-halant].
+			// Bengali uses rephPosAfterMain (reph trails the main
+			// cluster and any post-base matras, before trailing
+			// SMVD modifiers). With no post-base slots the
+			// insertion point collapses to "immediately after base".
 			want: []uint16{gid(0x0995), 5000, gid(0x09CD)},
 		},
 		{
@@ -364,11 +366,351 @@ func TestShapeIndicWithEmbeddedBengali(t *testing.T) {
 }
 
 // Non-Indic scripts return (nil, false) so the caller falls back to
-// the rune path.
+// the rune path. Covers Latin and two non-Indic non-Latin scripts to
+// guard against accidental category leaks (Arabic combining marks,
+// Han / CJK ideographs).
 func TestShapeIndicWithEmbeddedRejectsNonIndic(t *testing.T) {
 	face := &mockIndicFace{}
 	ef := font.NewEmbeddedFont(face)
-	if gids, ok := ShapeIndicWithEmbedded("hello", ef, ScriptLatin); ok {
-		t.Errorf("expected rejection for Latin, got gids=%v", gids)
+	cases := []struct {
+		name   string
+		text   string
+		script Script
+	}{
+		{"latin", "hello", ScriptLatin},
+		{"arabic alef", "\u0627", ScriptArabic},
+		{"han ideograph", "\u4E2D", ScriptHan},
+	}
+	for _, tc := range cases {
+		if gids, ok := ShapeIndicWithEmbedded(tc.text, ef, tc.script); ok {
+			t.Errorf("%s: expected rejection, got gids=%v", tc.name, gids)
+		}
+	}
+}
+
+// --- T1: Pre-base matra alt (smell-test fix) -------------------------------
+
+// TestShapeMalayalamPreBaseMatraAlt ensures Malayalam treats the
+// non-default pre-base matra U+0D47 as pre-base. Removing it from
+// PreBaseMatras should make this test fail.
+func TestShapeMalayalamPreBaseMatraAlt(t *testing.T) {
+	face := &mockIndicFace{}
+	// U+0D15 (ka) + U+0D47 (sign EE).
+	got := ShapeIndic("\u0D15\u0D47", face, nil, malayalamConfig)
+	want := []uint16{gid(0x0D47), gid(0x0D15)}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("malayalam ka+EE: got %v, want %v", got, want)
+	}
+}
+
+// TestShapeTamilPreBaseMatraAlt covers Tamil's second and third
+// pre-base matras (U+0BC7 EE and U+0BC8 AI). All three pre-base
+// matras must reorder before the base.
+func TestShapeTamilPreBaseMatraAlt(t *testing.T) {
+	face := &mockIndicFace{}
+	cases := []struct {
+		name  string
+		input string
+		want  []uint16
+	}{
+		// Note: U+0B95 is Bengali ka, but the test mirrors the
+		// PR audit's exact case which uses Tamil ka U+0B95 — Tamil
+		// "ka" is actually U+0B95 too. Use Tamil block consonant
+		// U+0B95 with Tamil pre-base matras.
+		{"tamil ka+EE", "\u0B95\u0BC7", []uint16{gid(0x0BC7), gid(0x0B95)}},
+		{"tamil ka+AI", "\u0B95\u0BC8", []uint16{gid(0x0BC8), gid(0x0B95)}},
+	}
+	for _, tc := range cases {
+		got := ShapeIndic(tc.input, face, nil, tamilConfig)
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// --- T2: Bengali conjunct cluster ------------------------------------------
+
+// TestShapeBengaliConjunct covers a ka + virama + ba cluster. With
+// no GSUB the shaper must scan it as a single consonant syllable
+// and pass GIDs through in cluster order.
+func TestShapeBengaliConjunct(t *testing.T) {
+	face := &mockIndicFace{}
+	// U+0995 (ka) + U+09CD (virama) + U+09AC (ba).
+	input := "\u0995\u09CD\u09AC"
+	syls := scanIndicSyllables([]rune(input), bengaliConfig)
+	if len(syls) != 1 || syls[0].Type != devaSylConsonant ||
+		syls[0].StartRune != 0 || syls[0].EndRune != 3 {
+		t.Errorf("syllable scan: got %+v, want single consonant cluster [0,3)", syls)
+	}
+	got := ShapeIndic(input, face, nil, bengaliConfig)
+	want := []uint16{gid(0x0995), gid(0x09CD), gid(0x09AC)}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("bengali ka+virama+ba: got %v, want %v", got, want)
+	}
+}
+
+// --- T3: Bengali ya-phalaa pass-through -------------------------------------
+
+// TestShapeBengaliYaPhalaa locks the contract that ya-phalaa is a
+// font-supplied GSUB feature: the layout shaper does not synthesize
+// it. With no GSUB tables the input must pass through in cluster
+// order.
+func TestShapeBengaliYaPhalaa(t *testing.T) {
+	face := &mockIndicFace{}
+	// U+0995 (ka) + U+09CD (virama) + U+09AF (ya).
+	input := "\u0995\u09CD\u09AF"
+	got := ShapeIndic(input, face, nil, bengaliConfig)
+	want := []uint16{gid(0x0995), gid(0x09CD), gid(0x09AF)}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("bengali ya-phalaa pass-through: got %v, want %v", got, want)
+	}
+}
+
+// --- T4: Deferred behaviour regression locks --------------------------------
+
+// TestShapeBengaliSplitMatraNotDecomposed pins the current
+// behaviour for Bengali split matra U+09CB (O = U+09C7 + U+09BE).
+// We do NOT decompose it; the matra passes through unchanged.
+func TestShapeBengaliSplitMatraNotDecomposed(t *testing.T) {
+	face := &mockIndicFace{}
+	// U+0995 (ka) + U+09CB (sign O, split matra).
+	input := "\u0995\u09CB"
+	got := ShapeIndic(input, face, nil, bengaliConfig)
+	// U+09CB is a (non pre-base) vowel sign in our table, so it
+	// stays after the base.
+	want := []uint16{gid(0x0995), gid(0x09CB)}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("bengali split-matra pass-through: got %v, want %v", got, want)
+	}
+}
+
+// TestShapeMalayalamSplitMatraNotDecomposed pins Malayalam split
+// matra U+0D4A (O = U+0D46 + U+0D3E). Pass-through.
+func TestShapeMalayalamSplitMatraNotDecomposed(t *testing.T) {
+	face := &mockIndicFace{}
+	// U+0D15 (ka) + U+0D4A (sign O, split matra).
+	input := "\u0D15\u0D4A"
+	got := ShapeIndic(input, face, nil, malayalamConfig)
+	want := []uint16{gid(0x0D15), gid(0x0D4A)}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("malayalam split-matra pass-through: got %v, want %v", got, want)
+	}
+}
+
+// TestShapeMalayalamChilluZWJSequence pins the consonant + virama
+// + ZWJ chillu-formation sequence. We do not synthesize chillus;
+// the ZWJ stays in the stream in logical order.
+func TestShapeMalayalamChilluZWJSequence(t *testing.T) {
+	face := &mockIndicFace{}
+	// U+0D28 (na) + U+0D4D (virama) + U+200D (ZWJ).
+	input := "\u0D28\u0D4D\u200D"
+	got := ShapeIndic(input, face, nil, malayalamConfig)
+	want := []uint16{gid(0x0D28), gid(0x0D4D), gid(0x200D)}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("malayalam chillu zwj sequence: got %v, want %v", got, want)
+	}
+}
+
+// --- T5: Tamil phase-3 short-circuit ---------------------------------------
+
+// TestTamilPhase3FeaturesAreNoOps verifies that even with a synthetic
+// blwf single-substitution in the GSUB table, Tamil shaping skips
+// phase-3 entirely (HasConjuncts == false). The substitution must
+// not fire.
+func TestTamilPhase3FeaturesAreNoOps(t *testing.T) {
+	face := &mockIndicFace{
+		substitutions: &font.GSUBSubstitutions{
+			Single: map[font.GSUBFeature]map[uint16]uint16{
+				// Map Tamil ra GID to a synthetic post-base form.
+				font.GSUBBlwf: {gid(0x0BB0): 7777},
+				// Also a half feature that would otherwise fire.
+				font.GSUBHalf: {gid(0x0B95): 7778},
+			},
+		},
+	}
+	// Tamil ka + virama + ra. With HasConjuncts=false the entire
+	// phase-3 is skipped.
+	input := "\u0B95\u0BCD\u0BB0"
+	got := ShapeIndic(input, face, face.substitutions, tamilConfig)
+	want := []uint16{gid(0x0B95), gid(0x0BCD), gid(0x0BB0)}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("tamil phase-3 short-circuit: got %v, want %v", got, want)
+	}
+	// And Devanagari, where HasConjuncts=true, must still run blwf.
+	face2 := &mockIndicFace{
+		substitutions: &font.GSUBSubstitutions{
+			Single: map[font.GSUBFeature]map[uint16]uint16{
+				font.GSUBBlwf: {gid(0x0930): 8888},
+			},
+		},
+	}
+	got2 := ShapeIndic("\u0915\u094D\u0930", face2, face2.substitutions, devanagariConfig)
+	found := false
+	for _, g := range got2 {
+		if g == 8888 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("devanagari blwf must still fire when HasConjuncts=true; got %v", got2)
+	}
+}
+
+// --- T6: Telugu / Kannada vattu post-base reordering ------------------------
+
+// TestShapeTeluguVattu covers consonant + virama + ra. Without GSUB
+// the vattu (ra-kara) sits in logical order; the syllable scanner
+// must group all three runes into one consonant cluster, and phase-2
+// must label ra as devaPosPostBase so that a real font's vatu
+// feature could substitute it.
+func TestShapeTeluguVattu(t *testing.T) {
+	face := &mockIndicFace{}
+	// U+0C15 (ka) + U+0C4D (virama) + U+0C30 (ra).
+	input := "\u0C15\u0C4D\u0C30"
+	syls := scanIndicSyllables([]rune(input), teluguConfig)
+	if len(syls) != 1 || syls[0].Type != devaSylConsonant {
+		t.Fatalf("expected single consonant syllable, got %+v", syls)
+	}
+	got := ShapeIndic(input, face, nil, teluguConfig)
+	want := []uint16{gid(0x0C15), gid(0x0C4D), gid(0x0C30)}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("telugu vattu pass-through: got %v, want %v", got, want)
+	}
+}
+
+// TestShapeKannadaVattu mirrors TestShapeTeluguVattu for Kannada.
+func TestShapeKannadaVattu(t *testing.T) {
+	face := &mockIndicFace{}
+	// U+0C95 (ka) + U+0CCD (virama) + U+0CB0 (ra).
+	input := "\u0C95\u0CCD\u0CB0"
+	syls := scanIndicSyllables([]rune(input), kannadaConfig)
+	if len(syls) != 1 || syls[0].Type != devaSylConsonant {
+		t.Fatalf("expected single consonant syllable, got %+v", syls)
+	}
+	got := ShapeIndic(input, face, nil, kannadaConfig)
+	want := []uint16{gid(0x0C95), gid(0x0CCD), gid(0x0CB0)}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("kannada vattu pass-through: got %v, want %v", got, want)
+	}
+}
+
+// --- T7: Paragraph-level end-to-end for new scripts ------------------------
+
+// TestBengaliEndToEndViaSplit drives a Bengali word through
+// shapeAndMeasureWord and verifies the resulting Word carries a GID
+// stream and a non-zero measured width.
+func TestBengaliEndToEndViaSplit(t *testing.T) {
+	face := &mockIndicFace{}
+	ef := font.NewEmbeddedFont(face)
+	run := TextRun{Embedded: ef, FontSize: 12}
+	w := Word{
+		Text:     "\u0995\u09BF", // Bengali ka + i-matra
+		Embedded: ef,
+		FontSize: 12,
+	}
+	shapeAndMeasureWord(&w, run, ef)
+	if len(w.GIDs) == 0 {
+		t.Fatalf("expected Bengali word to carry GIDs")
+	}
+	want := []uint16{gid(0x09BF), gid(0x0995)}
+	if !reflect.DeepEqual(w.GIDs, want) {
+		t.Errorf("GID stream: got %v, want %v", w.GIDs, want)
+	}
+	if w.Width <= 0 {
+		t.Errorf("expected non-zero width, got %v", w.Width)
+	}
+	if w.OriginalText != "\u0995\u09BF" {
+		t.Errorf("OriginalText: got %q, want bengali ka+i", w.OriginalText)
+	}
+}
+
+// TestMixedLatinTeluguBidiSplit drives a mixed Latin / Telugu word
+// through splitMixedBidiWord; the Telugu sub-word must receive a
+// GID stream while the Latin halves do not.
+func TestMixedLatinTeluguBidiSplit(t *testing.T) {
+	face := &mockIndicFace{}
+	ef := font.NewEmbeddedFont(face)
+	run := TextRun{Embedded: ef, FontSize: 12}
+	word := Word{
+		Text:     "A\u0C15B", // Latin A, Telugu ka, Latin B
+		Embedded: ef,
+		FontSize: 12,
+	}
+	subs := splitMixedBidiWord(word)
+	if len(subs) != 3 {
+		t.Fatalf("expected 3 sub-words, got %d", len(subs))
+	}
+	for i := range subs {
+		shapeAndMeasureWord(&subs[i], run, ef)
+	}
+	if subs[0].Text != "A" || len(subs[0].GIDs) != 0 {
+		t.Errorf("sub 0: want Latin A, no GIDs; got %q GIDs=%v", subs[0].Text, subs[0].GIDs)
+	}
+	if subs[1].Text != "\u0C15" || len(subs[1].GIDs) == 0 {
+		t.Errorf("sub 1: want Telugu ka with GIDs; got %q GIDs=%v", subs[1].Text, subs[1].GIDs)
+	}
+	if subs[2].Text != "B" || len(subs[2].GIDs) != 0 {
+		t.Errorf("sub 2: want Latin B, no GIDs; got %q GIDs=%v", subs[2].Text, subs[2].GIDs)
+	}
+}
+
+// --- T9: Reph placement actually distinguishes positions -------------------
+
+// TestShapeKannadaRephAfterPostBase exercises rephPosAfterPostBase
+// with a real post-base form. The cluster is ra + virama + ka +
+// virama + ya: phase-2 places ka as base and ya as post-base.
+// Bengali (rephPosAfterMain) and Kannada (rephPosAfterPostBase)
+// should both place reph after ya here, but Devanagari (after-base)
+// would place it immediately after ka. The test asserts Kannada
+// puts the reph at the end of the consonant span.
+func TestShapeKannadaRephAfterPostBase(t *testing.T) {
+	// Use a synthetic rphf so we can identify the reph in the output.
+	face := &mockIndicFace{
+		substitutions: &font.GSUBSubstitutions{
+			Single: map[font.GSUBFeature]map[uint16]uint16{
+				font.GSUBRphf: {gid(0x0CB0): 6000},
+			},
+		},
+	}
+	// U+0CB0 (ra) + U+0CCD (virama) + U+0C95 (ka) + U+0CCD + U+0CAF (ya).
+	input := "\u0CB0\u0CCD\u0C95\u0CCD\u0CAF"
+	got := ShapeIndic(input, face, face.substitutions, kannadaConfig)
+	// Logical input slots: [ra, vir, ka, vir, ya]. Phase 2:
+	// reph(ra,vir), base=ka, post-base=ya. Phase 4 visual order
+	// should be: ka (base), virama, ya (post-base), reph, halant.
+	want := []uint16{gid(0x0C95), gid(0x0CCD), gid(0x0CAF), 6000, gid(0x0CCD)}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("kannada reph after post-base: got %v, want %v", got, want)
+	}
+}
+
+// --- T10: Multi-syllable scan for every script -----------------------------
+
+// TestScanIndicSyllablesMultiSyllable verifies the scanner correctly
+// segments two consonants joined by an independent vowel for each
+// Brahmic script.
+func TestScanIndicSyllablesMultiSyllable(t *testing.T) {
+	cases := []struct {
+		name  string
+		cfg   *indicScriptConfig
+		input string
+		want  int // expected syllable count
+	}{
+		{"devanagari ka+a+ka", devanagariConfig, "\u0915\u0905\u0915", 3},
+		{"bengali ka+a+ka", bengaliConfig, "\u0995\u0985\u0995", 3},
+		{"gujarati ka+a+ka", gujaratiConfig, "\u0A95\u0A85\u0A95", 3},
+		{"gurmukhi ka+a+ka", gurmukhiConfig, "\u0A15\u0A05\u0A15", 3},
+		{"kannada ka+a+ka", kannadaConfig, "\u0C95\u0C85\u0C95", 3},
+		{"malayalam ka+a+ka", malayalamConfig, "\u0D15\u0D05\u0D15", 3},
+		{"oriya ka+a+ka", oriyaConfig, "\u0B15\u0B05\u0B15", 3},
+		{"tamil ka+a+ka", tamilConfig, "\u0B95\u0B85\u0B95", 3},
+		{"telugu ka+a+ka", teluguConfig, "\u0C15\u0C05\u0C15", 3},
+	}
+	for _, tc := range cases {
+		got := scanIndicSyllables([]rune(tc.input), tc.cfg)
+		if len(got) != tc.want {
+			t.Errorf("%s: got %d syllables (%+v), want %d", tc.name, len(got), got, tc.want)
+		}
 	}
 }

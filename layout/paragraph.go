@@ -553,21 +553,6 @@ func shapeAndMeasureWord(w *Word, run TextRun, measurer font.TextMeasurer) {
 	}
 }
 
-// isDevanagariWord reports whether s contains any Devanagari
-// codepoints. Since splitMixedBidiWord has already segmented at
-// script transitions, any Devanagari rune in s means the whole word
-// is Devanagari (modulo inherited Common runes such as ZWJ/ZWNJ).
-// Retained for tests and external callers that depend on it; the
-// live dispatch path uses indicScriptOfWord.
-func isDevanagariWord(s string) bool {
-	for _, r := range s {
-		if r >= devaBlockStart && r <= devaBlockEnd {
-			return true
-		}
-	}
-	return false
-}
-
 // computeBaseline returns the distance from the top of the line box to the
 // text baseline using CSS half-leading (CSS 2.1 §10.8.1):
 //

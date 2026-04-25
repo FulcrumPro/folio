@@ -62,13 +62,7 @@ import "github.com/carlos7ags/folio/font"
 // etc.) are thin wrappers that select a config and delegate to
 // ShapeIndic.
 
-// Devanagari block constants. These are retained for callers that
-// check Devanagari membership (paragraph layout's fast-path
-// isDevanagariWord) without pulling in the full script dispatch.
 const (
-	devaBlockStart = 0x0900
-	devaBlockEnd   = 0x097F
-
 	devaVirama    = 0x094D // halant
 	devaNukta     = 0x093C
 	devaRa        = 0x0930

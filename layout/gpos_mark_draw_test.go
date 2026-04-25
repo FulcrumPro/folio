@@ -634,3 +634,240 @@ func almostEqual(a, b, eps float64) bool {
 	}
 	return d <= eps
 }
+
+// newCursiveFace returns a mock face with three glyphs and a cursive
+// chain among them. The chain is encoded directly in the GPOS Cursives
+// map so the parser is not exercised here — the draw integration is.
+//
+//	GID 1: exit (700, 0).
+//	GID 2: entry (50, 0), exit (650, 30).
+//	GID 3: entry (60, 20).
+//
+// Expected CursiveOffset values:
+//
+//	(1 → 2): exit(700,0)   - entry(50,0)  = (650, 0)
+//	(2 → 3): exit(650,30)  - entry(60,20) = (590, 10)
+func newCursiveFace() *mockGPOSFace {
+	face := &mockGPOSFace{
+		upem: 1000,
+		advance: map[uint16]int{
+			1: 600,
+			2: 600,
+			3: 600,
+		},
+		cmap: map[rune]uint16{},
+		gpos: &font.GPOSAdjustments{
+			Cursives: map[font.GPOSFeature]map[uint16]font.CursiveRecord{
+				font.GPOSCurs: {
+					1: {Exit: font.Anchor{X: 700, Y: 0}, HasExit: true},
+					2: {
+						Entry: font.Anchor{X: 50, Y: 0}, HasEntry: true,
+						Exit: font.Anchor{X: 650, Y: 30}, HasExit: true,
+					},
+					3: {Entry: font.Anchor{X: 60, Y: 20}, HasEntry: true},
+				},
+			},
+		},
+	}
+	return face
+}
+
+// TestGPOSCursiveJoinTwoGlyphs renders a two-glyph cursive run and
+// asserts the draw stream contains the expected per-glyph Td shift.
+// At fontSize=10 with upem=1000, FUnit→pt scale is 1/100.
+//
+//	dx = (700 - 50) / 1000 * 10 = 6.5 pt
+//	dy = (0   - 0)  / 1000 * 10 = 0
+//
+// The first glyph emits without a Td; the second emits with "6.5 0 Td".
+func TestGPOSCursiveJoinTwoGlyphs(t *testing.T) {
+	face := newCursiveFace()
+	ef := font.NewEmbeddedFont(face)
+	word := Word{
+		Embedded: ef,
+		FontSize: 10,
+		GIDs:     []uint16{1, 2},
+	}
+	b := capturedWordStream(word)
+
+	// One initial Td (MoveText), one cursive Td between glyphs.
+	if countTdOps(b) != 2 {
+		t.Fatalf("expected 2 Td ops (initial + cursive), got %d:\n%s", countTdOps(b), b)
+	}
+	if !bytes.Contains(b, []byte("6.5 0 Td")) {
+		t.Errorf("missing cursive Td '6.5 0 Td' in stream:\n%s", b)
+	}
+}
+
+// TestGPOSCursiveJoinThreeGlyphs verifies cumulative cursive offset
+// across a three-glyph chain. Each link contributes its own Td bracket;
+// the second Td (5.9, +0.1) carries the dy non-zero so the close-Td of
+// 0,-0.1 appears in the stream as well.
+//
+//	link 1 dx = 6.5, dy = 0    → "6.5 0 Td"
+//	link 2 dx = 5.9, dy = 0.1  → "5.9 0.1 Td"  + close "0 -0.1 Td"
+func TestGPOSCursiveJoinThreeGlyphs(t *testing.T) {
+	face := newCursiveFace()
+	ef := font.NewEmbeddedFont(face)
+	word := Word{
+		Embedded: ef,
+		FontSize: 10,
+		GIDs:     []uint16{1, 2, 3},
+	}
+	b := capturedWordStream(word)
+
+	if !bytes.Contains(b, []byte("6.5 0 Td")) {
+		t.Errorf("missing link-1 cursive Td '6.5 0 Td':\n%s", b)
+	}
+	if !bytes.Contains(b, []byte("5.9 0.1 Td")) {
+		t.Errorf("missing link-2 cursive Td '5.9 0.1 Td':\n%s", b)
+	}
+	if !bytes.Contains(b, []byte("0 -0.1 Td")) {
+		t.Errorf("missing link-2 close Td '0 -0.1 Td':\n%s", b)
+	}
+}
+
+// TestGPOSCursiveFallbackWithoutCursData verifies that a GID stream
+// without GPOS curs data falls through to the standard EncodeGIDs path:
+// a single Tj with no inter-glyph Td.
+func TestGPOSCursiveFallbackWithoutCursData(t *testing.T) {
+	face := newCursiveFace()
+	face.gpos = nil
+	ef := font.NewEmbeddedFont(face)
+	word := Word{
+		Embedded: ef,
+		FontSize: 10,
+		GIDs:     []uint16{1, 2, 3},
+	}
+	b := capturedWordStream(word)
+	if countTdOps(b) != 1 {
+		t.Errorf("without curs data expect only initial Td, got %d:\n%s", countTdOps(b), b)
+	}
+	tjCount := 0
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasSuffix(strings.TrimSpace(line), " Tj") {
+			tjCount++
+		}
+	}
+	if tjCount != 1 {
+		t.Errorf("expected single Tj for non-cursive GID stream, got %d:\n%s", tjCount, b)
+	}
+}
+
+// newLigatureBaseFace builds a face whose cluster base glyph is a
+// ligature (LookupType 5 carrier) with two components. Two distinct
+// marks attach to component 0 and component 1 respectively. The mark
+// classes also differ to exercise the (component, class) grid.
+//
+//	Ligature GID 80 = "ffi"-style 2-component glyph (one combined glyph).
+//	Component 0 anchor for class 0: (300, 700).  → first-mark target
+//	Component 1 anchor for class 1: (1100, 700). → last-mark target
+//	Mark A (GID 90, class 0) anchor at (50, 100)
+//	Mark B (GID 91, class 1) anchor at (40, 80)
+//
+//	Base advance = 1500 FUnits → 18 pt at fontSize=12.
+//	Mark A target: (300-50, 700-100) = (250, 600) FUnits → (3, 7.2) pt
+//	Mark B target: (1100-40, 700-80) = (1060, 620) FUnits → (12.72, 7.44) pt
+//
+// Mark A is the first cluster mark, so the heuristic puts it on
+// component 0. Mark B is the second, so it lands on component 1.
+func newLigatureBaseFace() *mockGPOSFace {
+	const (
+		ligGID   uint16 = 80
+		markAGID uint16 = 90
+		markBGID uint16 = 91
+		// Use private-use codepoints so grapheme classification keeps
+		// them as the base / Extend roles we want.
+		ligRune   = rune(0xE000)
+		markARune = rune(0x0300) // combining grave: Extend
+		markBRune = rune(0x0301) // combining acute: Extend
+	)
+	face := &mockGPOSFace{
+		upem: 1000,
+		advance: map[uint16]int{
+			ligGID:   1500,
+			markAGID: 0,
+			markBGID: 0,
+		},
+		cmap: map[rune]uint16{
+			ligRune:   ligGID,
+			markARune: markAGID,
+			markBRune: markBGID,
+		},
+		gpos: &font.GPOSAdjustments{
+			LigatureMarks: map[font.GPOSFeature]map[uint16]font.MarkRecord{
+				font.GPOSMark: {
+					markAGID: {Class: 0, Anchor: font.Anchor{X: 50, Y: 100}},
+					markBGID: {Class: 1, Anchor: font.Anchor{X: 40, Y: 80}},
+				},
+			},
+			LigatureBases: map[font.GPOSFeature]map[uint16]font.LigatureRecord{
+				font.GPOSMark: {
+					ligGID: {
+						Components: [][]font.Anchor{
+							{{X: 300, Y: 700}, {}},
+							{{}, {X: 1100, Y: 700}},
+						},
+						Present: [][]bool{
+							{true, false},
+							{false, true},
+						},
+					},
+				},
+			},
+		},
+	}
+	return face
+}
+
+// TestGPOSMarkLigatureTwoComponentMarks renders a ligature base with
+// two combining marks and asserts each mark lands on its expected
+// component. The component-attribution heuristic (first→0, rest→last)
+// is the contract under test here; if the heuristic shifts, this test
+// must move with it.
+func TestGPOSMarkLigatureTwoComponentMarks(t *testing.T) {
+	face := newLigatureBaseFace()
+	ef := font.NewEmbeddedFont(face)
+	// Ligature base + two marks.
+	word := Word{
+		Text:     string([]rune{0xE000, 0x0300, 0x0301}),
+		Embedded: ef,
+		FontSize: 12,
+	}
+	b := capturedWordStream(word)
+
+	// The cluster advances by the ligature base width = 18 pt. Mark A
+	// open Td: (3 - 18, 7.2) = (-15, 7.2). Close Td: (15, -7.2).
+	if !bytes.Contains(b, []byte("-15 7.2 Td")) {
+		t.Errorf("missing mark A open Td '-15 7.2 Td' (component 0 anchor):\n%s", b)
+	}
+	if !bytes.Contains(b, []byte("15 -7.2 Td")) {
+		t.Errorf("missing mark A close Td '15 -7.2 Td':\n%s", b)
+	}
+	// Mark B open Td: (12.72 - 18, 7.44) = (-5.28, 7.44). Close: (5.28, -7.44).
+	if !bytes.Contains(b, []byte("-5.28 7.44 Td")) {
+		t.Errorf("missing mark B open Td '-5.28 7.44 Td' (component 1 anchor):\n%s", b)
+	}
+	if !bytes.Contains(b, []byte("5.28 -7.44 Td")) {
+		t.Errorf("missing mark B close Td '5.28 -7.44 Td':\n%s", b)
+	}
+}
+
+// TestGPOSMarkLigatureFallsBackToType4 verifies that when a cluster
+// base has no Type 5 ligature record, mark resolution falls through to
+// Type 4 mark-to-base unchanged. This is the regression guard against
+// any accidental Type 5 hijacking of plain marks.
+func TestGPOSMarkLigatureFallsBackToType4(t *testing.T) {
+	face := newLamFathaFace()
+	ef := font.NewEmbeddedFont(face)
+	word := Word{
+		Text:     "\u0644\u064E",
+		Embedded: ef,
+		FontSize: 12,
+	}
+	b := capturedWordStream(word)
+	// The Type 4 mark-to-base path emits "-4.8 6 Td" / "4.8 -6 Td".
+	if !bytes.Contains(b, []byte("-4.8 6 Td")) {
+		t.Errorf("Type 4 fallback should still emit '-4.8 6 Td':\n%s", b)
+	}
+}

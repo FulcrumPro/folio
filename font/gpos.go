@@ -23,6 +23,13 @@ const (
 	// shadda + fatha, Hebrew dagesh + niqqud, and Vietnamese tone marks
 	// on already-diacritic vowels. ISO 14496-22 §6.3 LookupType 6.
 	GPOSMkmk GPOSFeature = "mkmk"
+
+	// GPOSCurs is the Cursive Attachment feature. It chains glyphs along
+	// the script baseline by joining the previous glyph's exit anchor to
+	// the next glyph's entry anchor — the mechanism behind Arabic
+	// nastaliq-style joining and similar connected scripts.
+	// ISO 14496-22 §6.3 LookupType 3.
+	GPOSCurs GPOSFeature = "curs"
 )
 
 // PairAdjustment holds the XAdvance delta to apply to the first glyph of
@@ -54,6 +61,29 @@ type BaseRecord struct {
 	Anchors []Anchor
 }
 
+// CursiveRecord captures the entry/exit anchors a single glyph
+// contributes to LookupType 3 cursive attachment. Either anchor may be
+// absent (zero offset in the source EntryExitRecord); HasEntry/HasExit
+// disambiguate "absent" from "present at (0,0)".
+type CursiveRecord struct {
+	Entry, Exit       Anchor
+	HasEntry, HasExit bool
+}
+
+// LigatureRecord captures the per-component anchors a ligature base
+// glyph exposes for LookupType 5 (Mark-to-Ligature). Components is
+// indexed first by component index (0 = leftmost component for LTR
+// ligatures, in glyph order) and then by mark class.
+//
+// Present is a parallel grid that disambiguates "no anchor declared"
+// (the source ligatureAnchorOffset was 0) from "anchor declared at
+// (0, 0)". Consumers must check Present[component][markClass] before
+// trusting the anchor value.
+type LigatureRecord struct {
+	Components [][]Anchor
+	Present    [][]bool
+}
+
 // GPOSAdjustments holds parsed GPOS positioning data grouped by feature
 // tag. A nil map or nil outer struct means "feature absent".
 type GPOSAdjustments struct {
@@ -75,13 +105,29 @@ type GPOSAdjustments struct {
 	// the receiving (mark2) glyph ID. Shape mirrors Bases: each entry
 	// exposes one anchor per mark class of the attaching mark.
 	Mark2Bases map[GPOSFeature]map[uint16]BaseRecord
+
+	// Cursives holds LookupType 3 cursive attachment records keyed by
+	// glyph ID. The shape is one record per coverage entry; consumers
+	// pair them at runtime via CursiveOffset(prev, curr).
+	Cursives map[GPOSFeature]map[uint16]CursiveRecord
+
+	// LigatureMarks holds LookupType 5 mark records keyed by mark glyph
+	// ID. Shape mirrors Marks but lives in its own slot so a font can
+	// carry both LookupType 4 and LookupType 5 marks without aliasing.
+	LigatureMarks map[GPOSFeature]map[uint16]MarkRecord
+
+	// LigatureBases holds LookupType 5 ligature base records keyed by
+	// ligature glyph ID. Each record exposes a per-component grid of
+	// anchors indexed [component][markClass].
+	LigatureBases map[GPOSFeature]map[uint16]LigatureRecord
 }
 
 // ParseGPOS reads the GPOS table from raw font bytes and extracts
-// LookupType 2 (Pair Positioning), LookupType 4 (Mark-to-Base), and
-// LookupType 6 (Mark-to-Mark) data for the "kern", "mark", and "mkmk"
-// features. Extension lookups (LookupType 9) are unwrapped for types
-// 2, 4, and 6.
+// LookupType 2 (Pair Positioning), LookupType 3 (Cursive Attachment),
+// LookupType 4 (Mark-to-Base), LookupType 5 (Mark-to-Ligature), and
+// LookupType 6 (Mark-to-Mark) data for the "kern", "curs", "mark", and
+// "mkmk" features. Extension lookups (LookupType 9) are unwrapped for
+// types 2, 3, 4, 5, and 6.
 //
 // Script selection follows the same preference order as GSUB:
 // "arab" and "latn" when present, "DFLT" as a fallback.
@@ -111,6 +157,7 @@ func ParseGPOS(data []byte) *GPOSAdjustments {
 		"kern": GPOSKern,
 		"mark": GPOSMark,
 		"mkmk": GPOSMkmk,
+		"curs": GPOSCurs,
 	}
 	featureToLookups := matchGPOSFeatures(gpos, featureListOff, featureIndices, targetTags)
 	if len(featureToLookups) == 0 {
@@ -118,40 +165,72 @@ func ParseGPOS(data []byte) *GPOSAdjustments {
 	}
 
 	result := &GPOSAdjustments{
-		Pairs:      make(map[GPOSFeature]map[[2]uint16]PairAdjustment),
-		Marks:      make(map[GPOSFeature]map[uint16]MarkRecord),
-		Bases:      make(map[GPOSFeature]map[uint16]BaseRecord),
-		MarkMarks:  make(map[GPOSFeature]map[uint16]MarkRecord),
-		Mark2Bases: make(map[GPOSFeature]map[uint16]BaseRecord),
+		Pairs:         make(map[GPOSFeature]map[[2]uint16]PairAdjustment),
+		Marks:         make(map[GPOSFeature]map[uint16]MarkRecord),
+		Bases:         make(map[GPOSFeature]map[uint16]BaseRecord),
+		MarkMarks:     make(map[GPOSFeature]map[uint16]MarkRecord),
+		Mark2Bases:    make(map[GPOSFeature]map[uint16]BaseRecord),
+		Cursives:      make(map[GPOSFeature]map[uint16]CursiveRecord),
+		LigatureMarks: make(map[GPOSFeature]map[uint16]MarkRecord),
+		LigatureBases: make(map[GPOSFeature]map[uint16]LigatureRecord),
 	}
 	for feat, lookupIndices := range featureToLookups {
-		pairs := make(map[[2]uint16]PairAdjustment)
-		marks := make(map[uint16]MarkRecord)
-		bases := make(map[uint16]BaseRecord)
-		markMarks := make(map[uint16]MarkRecord)
-		mark2Bases := make(map[uint16]BaseRecord)
-		parseGPOSLookups(gpos, lookupListOff, lookupIndices, pairs, marks, bases, markMarks, mark2Bases)
-		if len(pairs) > 0 {
-			result.Pairs[feat] = pairs
+		acc := gposAccumulator{
+			pairs:         make(map[[2]uint16]PairAdjustment),
+			marks:         make(map[uint16]MarkRecord),
+			bases:         make(map[uint16]BaseRecord),
+			markMarks:     make(map[uint16]MarkRecord),
+			mark2Bases:    make(map[uint16]BaseRecord),
+			cursives:      make(map[uint16]CursiveRecord),
+			ligatureMarks: make(map[uint16]MarkRecord),
+			ligatureBases: make(map[uint16]LigatureRecord),
 		}
-		if len(marks) > 0 {
-			result.Marks[feat] = marks
+		parseGPOSLookups(gpos, lookupListOff, lookupIndices, &acc)
+		if len(acc.pairs) > 0 {
+			result.Pairs[feat] = acc.pairs
 		}
-		if len(bases) > 0 {
-			result.Bases[feat] = bases
+		if len(acc.marks) > 0 {
+			result.Marks[feat] = acc.marks
 		}
-		if len(markMarks) > 0 {
-			result.MarkMarks[feat] = markMarks
+		if len(acc.bases) > 0 {
+			result.Bases[feat] = acc.bases
 		}
-		if len(mark2Bases) > 0 {
-			result.Mark2Bases[feat] = mark2Bases
+		if len(acc.markMarks) > 0 {
+			result.MarkMarks[feat] = acc.markMarks
+		}
+		if len(acc.mark2Bases) > 0 {
+			result.Mark2Bases[feat] = acc.mark2Bases
+		}
+		if len(acc.cursives) > 0 {
+			result.Cursives[feat] = acc.cursives
+		}
+		if len(acc.ligatureMarks) > 0 {
+			result.LigatureMarks[feat] = acc.ligatureMarks
+		}
+		if len(acc.ligatureBases) > 0 {
+			result.LigatureBases[feat] = acc.ligatureBases
 		}
 	}
 	if len(result.Pairs) == 0 && len(result.Marks) == 0 && len(result.Bases) == 0 &&
-		len(result.MarkMarks) == 0 && len(result.Mark2Bases) == 0 {
+		len(result.MarkMarks) == 0 && len(result.Mark2Bases) == 0 &&
+		len(result.Cursives) == 0 &&
+		len(result.LigatureMarks) == 0 && len(result.LigatureBases) == 0 {
 		return nil
 	}
 	return result
+}
+
+// gposAccumulator groups the per-feature output maps so dispatcher
+// signatures stay compact as new lookup types are added.
+type gposAccumulator struct {
+	pairs         map[[2]uint16]PairAdjustment
+	marks         map[uint16]MarkRecord
+	bases         map[uint16]BaseRecord
+	markMarks     map[uint16]MarkRecord
+	mark2Bases    map[uint16]BaseRecord
+	cursives      map[uint16]CursiveRecord
+	ligatureMarks map[uint16]MarkRecord
+	ligatureBases map[uint16]LigatureRecord
 }
 
 // PairAdjust returns the horizontal XAdvance adjustment in FUnits that
@@ -203,6 +282,81 @@ func (g *GPOSAdjustments) MarkMarkOffset(mark1GID, mark2GID uint16, feature GPOS
 		return 0, 0, false
 	}
 	return anchorOffset(g.MarkMarks[feature], g.Mark2Bases[feature], mark1GID, mark2GID)
+}
+
+// CursiveOffset returns the (dx, dy) offset in FUnits needed to move
+// the current glyph so its entry anchor coincides with the previous
+// glyph's exit anchor. The result is prev.Exit - curr.Entry, which is
+// the LTR convention from ISO 14496-22 §6.3 LookupType 3. Returns
+// ok=false when either glyph is absent from the feature, when the
+// previous glyph has no exit anchor declared, or when the current
+// glyph has no entry anchor declared.
+//
+// RTL handling is left to the caller: the package is shaping-direction
+// agnostic, so a layout layer that knows the run direction (Arabic,
+// Hebrew, etc.) is responsible for flipping the dx sign when the visual
+// progression runs right-to-left.
+func (g *GPOSAdjustments) CursiveOffset(prevGID, currGID uint16, feature GPOSFeature) (dx, dy int16, ok bool) {
+	if g == nil {
+		return 0, 0, false
+	}
+	cur, ok := g.Cursives[feature]
+	if !ok || cur == nil {
+		return 0, 0, false
+	}
+	prev, hasPrev := cur[prevGID]
+	if !hasPrev || !prev.HasExit {
+		return 0, 0, false
+	}
+	curr, hasCurr := cur[currGID]
+	if !hasCurr || !curr.HasEntry {
+		return 0, 0, false
+	}
+	return prev.Exit.X - curr.Entry.X, prev.Exit.Y - curr.Entry.Y, true
+}
+
+// MarkLigatureOffset returns the (dx, dy) offset in FUnits needed to
+// move a mark glyph so its anchor coincides with the ligature base's
+// anchor for the requested component and mark class. componentIdx is
+// the zero-based component index (0 = leftmost component for LTR
+// ligatures, in glyph order). Returns ok=false when either glyph is
+// absent from the feature, when componentIdx is out of range for the
+// ligature, or when the requested component has no anchor for the
+// mark's class.
+//
+// The formula is the direct anchor subtraction from ISO 14496-22 §6.3
+// LookupType 5: dx = ligAnchor.X - markAnchor.X,
+// dy = ligAnchor.Y - markAnchor.Y.
+func (g *GPOSAdjustments) MarkLigatureOffset(ligGID uint16, componentIdx int, markGID uint16, feature GPOSFeature) (dx, dy int16, ok bool) {
+	if g == nil {
+		return 0, 0, false
+	}
+	marks := g.LigatureMarks[feature]
+	ligs := g.LigatureBases[feature]
+	if marks == nil || ligs == nil {
+		return 0, 0, false
+	}
+	mark, hasMark := marks[markGID]
+	if !hasMark {
+		return 0, 0, false
+	}
+	lig, hasLig := ligs[ligGID]
+	if !hasLig {
+		return 0, 0, false
+	}
+	if componentIdx < 0 || componentIdx >= len(lig.Components) {
+		return 0, 0, false
+	}
+	comp := lig.Components[componentIdx]
+	if int(mark.Class) >= len(comp) {
+		return 0, 0, false
+	}
+	if componentIdx >= len(lig.Present) || int(mark.Class) >= len(lig.Present[componentIdx]) ||
+		!lig.Present[componentIdx][mark.Class] {
+		return 0, 0, false
+	}
+	a := comp[mark.Class]
+	return a.X - mark.Anchor.X, a.Y - mark.Anchor.Y, true
 }
 
 // anchorOffset is the shared anchor-subtraction used by MarkOffset and
@@ -272,14 +426,9 @@ func matchGPOSFeatures(gpos []byte, off int, allowed []int, targetTags map[strin
 
 // parseGPOSLookups walks each referenced lookup and dispatches its
 // subtables to the appropriate LookupType parser. LookupType 9
-// (Extension Positioning) is unwrapped inline for types 2, 4, and 6.
-func parseGPOSLookups(gpos []byte, listOff int, indices []int,
-	pairs map[[2]uint16]PairAdjustment,
-	marks map[uint16]MarkRecord,
-	bases map[uint16]BaseRecord,
-	markMarks map[uint16]MarkRecord,
-	mark2Bases map[uint16]BaseRecord,
-) {
+// (Extension Positioning) is unwrapped inline for types 2, 3, 4, 5,
+// and 6.
+func parseGPOSLookups(gpos []byte, listOff int, indices []int, acc *gposAccumulator) {
 	if listOff+2 > len(gpos) {
 		return
 	}
@@ -292,20 +441,14 @@ func parseGPOSLookups(gpos []byte, listOff int, indices []int,
 			continue
 		}
 		lookupOff := listOff + int(be16(gpos, listOff+2+idx*2))
-		parseGPOSLookup(gpos, lookupOff, pairs, marks, bases, markMarks, mark2Bases)
+		parseGPOSLookup(gpos, lookupOff, acc)
 	}
 }
 
 // parseGPOSLookup reads a single Lookup table and calls the subtable
 // parser matching its lookup type. Extension subtables (type 9) are
 // followed to their target subtable in the same GPOS blob.
-func parseGPOSLookup(gpos []byte, lookupOff int,
-	pairs map[[2]uint16]PairAdjustment,
-	marks map[uint16]MarkRecord,
-	bases map[uint16]BaseRecord,
-	markMarks map[uint16]MarkRecord,
-	mark2Bases map[uint16]BaseRecord,
-) {
+func parseGPOSLookup(gpos []byte, lookupOff int, acc *gposAccumulator) {
 	if lookupOff+6 > len(gpos) {
 		return
 	}
@@ -334,11 +477,15 @@ func parseGPOSLookup(gpos []byte, lookupOff int,
 		}
 		switch t {
 		case 2:
-			parsePairPos(gpos, off, pairs)
+			parsePairPos(gpos, off, acc.pairs)
+		case 3:
+			parseCursivePos(gpos, off, acc.cursives)
 		case 4:
-			parseMarkBasePos(gpos, off, marks, bases)
+			parseMarkBasePos(gpos, off, acc.marks, acc.bases)
+		case 5:
+			parseMarkLigPos(gpos, off, acc.ligatureMarks, acc.ligatureBases)
 		case 6:
-			parseMarkMarkPos(gpos, off, markMarks, mark2Bases)
+			parseMarkMarkPos(gpos, off, acc.markMarks, acc.mark2Bases)
 		}
 	}
 }
@@ -696,6 +843,165 @@ func parseBaseArray(gpos []byte, off int, baseCov []uint16, markClassCount int, 
 			anchors[c] = anchor
 		}
 		out[baseCov[i]] = BaseRecord{Anchors: anchors}
+	}
+}
+
+// parseCursivePos reads a CursivePosFormat1 subtable.
+//
+// Layout (ISO 14496-22 §6.3 LookupType 3):
+//
+//	posFormat       uint16 (==1)
+//	coverageOffset  Offset16
+//	entryExitCount  uint16
+//	entryExitRecords[entryExitCount] {
+//	    entryAnchorOffset Offset16  (from subtable start; 0 = absent)
+//	    exitAnchorOffset  Offset16  (from subtable start; 0 = absent)
+//	}
+//
+// The coverage table maps positionally to entryExitRecords; coverage
+// index i selects record i. Per-glyph CursiveRecord entries are written
+// only when at least one anchor is present; HasEntry/HasExit
+// disambiguate "absent" from "(0,0)".
+func parseCursivePos(gpos []byte, off int, out map[uint16]CursiveRecord) {
+	if off+6 > len(gpos) {
+		return
+	}
+	format := be16(gpos, off)
+	if format != 1 {
+		return
+	}
+	coverageOff := off + int(be16(gpos, off+2))
+	count := int(be16(gpos, off+4))
+	if off+6+count*4 > len(gpos) {
+		return
+	}
+	covered := parseCoverage(gpos, coverageOff)
+	if covered == nil {
+		return
+	}
+	for i := 0; i < count && i < len(covered); i++ {
+		rec := off + 6 + i*4
+		entryOffRaw := int(be16(gpos, rec))
+		exitOffRaw := int(be16(gpos, rec+2))
+		var cr CursiveRecord
+		if entryOffRaw != 0 {
+			if a, ok := parseAnchor(gpos, off+entryOffRaw); ok {
+				cr.Entry = a
+				cr.HasEntry = true
+			}
+		}
+		if exitOffRaw != 0 {
+			if a, ok := parseAnchor(gpos, off+exitOffRaw); ok {
+				cr.Exit = a
+				cr.HasExit = true
+			}
+		}
+		if !cr.HasEntry && !cr.HasExit {
+			continue
+		}
+		out[covered[i]] = cr
+	}
+}
+
+// parseMarkLigPos reads a MarkLigPosFormat1 subtable.
+//
+// Layout (ISO 14496-22 §6.3 LookupType 5):
+//
+//	posFormat            uint16 (==1)
+//	markCoverageOff      Offset16
+//	ligatureCoverageOff  Offset16
+//	markClassCount       uint16
+//	markArrayOff         Offset16
+//	ligatureArrayOff     Offset16
+//
+// MarkArray reuses parseMarkArray. LigatureArray is a count followed by
+// LigatureAttach offsets; each LigatureAttach is a componentCount
+// followed by componentCount × markClassCount anchor offsets.
+func parseMarkLigPos(gpos []byte, off int,
+	marks map[uint16]MarkRecord,
+	ligatures map[uint16]LigatureRecord,
+) {
+	if off+12 > len(gpos) {
+		return
+	}
+	format := be16(gpos, off)
+	if format != 1 {
+		return
+	}
+	markCoverageOff := off + int(be16(gpos, off+2))
+	ligCoverageOff := off + int(be16(gpos, off+4))
+	markClassCount := int(be16(gpos, off+6))
+	markArrayOff := off + int(be16(gpos, off+8))
+	ligArrayOff := off + int(be16(gpos, off+10))
+
+	markCov := parseCoverage(gpos, markCoverageOff)
+	ligCov := parseCoverage(gpos, ligCoverageOff)
+	if markCov == nil || ligCov == nil {
+		return
+	}
+	parseMarkArray(gpos, markArrayOff, markCov, marks)
+	parseLigatureArray(gpos, ligArrayOff, ligCov, markClassCount, ligatures)
+}
+
+// parseLigatureArray reads a LigatureArray and populates ligatures.
+//
+// Layout:
+//
+//	ligatureCount     uint16
+//	ligatureAttachOffsets[ligatureCount] Offset16 (from LigatureArray start)
+//
+// Each LigatureAttach:
+//
+//	componentCount    uint16
+//	componentRecords[componentCount] {
+//	    ligatureAnchorOffsets[markClassCount] Offset16 (from LigatureAttach start; 0 = absent)
+//	}
+//
+// A zero anchor offset means "no anchor for this (component, mark
+// class)" pair; such slots are left as the zero Anchor in the per-
+// component slice.
+func parseLigatureArray(gpos []byte, off int, ligCov []uint16, markClassCount int, out map[uint16]LigatureRecord) {
+	if off+2 > len(gpos) {
+		return
+	}
+	count := int(be16(gpos, off))
+	if off+2+count*2 > len(gpos) {
+		return
+	}
+	for i := 0; i < count && i < len(ligCov); i++ {
+		attachOffRaw := int(be16(gpos, off+2+i*2))
+		if attachOffRaw == 0 {
+			continue
+		}
+		attachOff := off + attachOffRaw
+		if attachOff+2 > len(gpos) {
+			continue
+		}
+		componentCount := int(be16(gpos, attachOff))
+		rowSize := markClassCount * 2
+		if attachOff+2+componentCount*rowSize > len(gpos) {
+			continue
+		}
+		components := make([][]Anchor, componentCount)
+		present := make([][]bool, componentCount)
+		for c := 0; c < componentCount; c++ {
+			rowOff := attachOff + 2 + c*rowSize
+			anchors := make([]Anchor, markClassCount)
+			has := make([]bool, markClassCount)
+			for k := 0; k < markClassCount; k++ {
+				aOffRaw := int(be16(gpos, rowOff+k*2))
+				if aOffRaw == 0 {
+					continue
+				}
+				if a, ok := parseAnchor(gpos, attachOff+aOffRaw); ok {
+					anchors[k] = a
+					has[k] = true
+				}
+			}
+			components[c] = anchors
+			present[c] = has
+		}
+		out[ligCov[i]] = LigatureRecord{Components: components, Present: present}
 	}
 }
 

@@ -583,7 +583,7 @@ func TestParagraphEmbeddedNFCByteIdenticalDrawOutput(t *testing.T) {
 		drawTextLine(ctx, line.Words, 0, 100, 500, line.Align, line.IsLast)
 		return stream.Bytes()
 	}
-	composed := render("\u0622")          // alef with madda above (precomposed)
+	composed := render("\u0622")         // alef with madda above (precomposed)
 	decomposed := render("\u0627\u0653") // alef + combining madda above (decomposed)
 	if len(composed) == 0 {
 		t.Fatalf("composed render produced empty stream")

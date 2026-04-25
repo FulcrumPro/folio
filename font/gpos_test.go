@@ -1008,6 +1008,406 @@ func TestFaceKernPrefersGPOS(t *testing.T) {
 	}
 }
 
+// cursivePosBody builds a CursivePosFormat1 subtable with two glyphs
+// in coverage. glyph1 carries (entryX1, entryY1) entry / (exitX1, exitY1)
+// exit; glyph2 carries entry/exit pair 2. A zero (presence == false) on
+// either anchor causes that field to be emitted with offset 0 (absent).
+type cursiveGlyphSpec struct {
+	gid                          uint16
+	hasEntry, hasExit            bool
+	entryX, entryY, exitX, exitY int16
+}
+
+func cursivePosBody(specs ...cursiveGlyphSpec) []byte {
+	var b gposBuilder
+	b.u16(1) // posFormat
+	covOffPos := b.pos()
+	b.u16(0) // coverageOffset
+	b.u16(uint16(len(specs)))
+
+	// Reserve EntryExitRecords; patch their offsets later.
+	type recPos struct {
+		entryPos, exitPos int
+	}
+	recs := make([]recPos, len(specs))
+	for i := range specs {
+		recs[i].entryPos = b.pos()
+		b.u16(0) // entryAnchorOffset
+		recs[i].exitPos = b.pos()
+		b.u16(0) // exitAnchorOffset
+	}
+
+	// Coverage lists glyphs in order.
+	covOff := b.pos()
+	b.patchU16(covOffPos, uint16(covOff))
+	gids := make([]uint16, len(specs))
+	for i, s := range specs {
+		gids[i] = s.gid
+	}
+	b.buf = append(b.buf, buildCoverageFormat1(gids...)...)
+
+	// Anchors. All offsets are from subtable start (off = 0 in the body).
+	for i, s := range specs {
+		if s.hasEntry {
+			anchorOff := b.pos()
+			b.patchU16(recs[i].entryPos, uint16(anchorOff))
+			b.u16(1) // anchor format 1
+			b.i16(s.entryX)
+			b.i16(s.entryY)
+		}
+		if s.hasExit {
+			anchorOff := b.pos()
+			b.patchU16(recs[i].exitPos, uint16(anchorOff))
+			b.u16(1)
+			b.i16(s.exitX)
+			b.i16(s.exitY)
+		}
+	}
+	return b.buf
+}
+
+// TestParseGPOSCursivePosFormat1 asserts that two glyphs with entry/exit
+// anchors land in the Cursives map with the right anchors and presence
+// flags, and that CursiveOffset returns prev.Exit - curr.Entry.
+func TestParseGPOSCursivePosFormat1(t *testing.T) {
+	// Glyph 100: exit (700, 50). Glyph 101: entry (50, 60), exit (650, 40).
+	body := cursivePosBody(
+		cursiveGlyphSpec{gid: 100, hasExit: true, exitX: 700, exitY: 50},
+		cursiveGlyphSpec{gid: 101, hasEntry: true, hasExit: true,
+			entryX: 50, entryY: 60, exitX: 650, exitY: 40},
+	)
+	gpos := buildGPOSHeader("curs", 3, body, 0)
+	g := ParseGPOS(wrapTTF(gpos))
+	if g == nil {
+		t.Fatal("ParseGPOS returned nil")
+	}
+	cur := g.Cursives[GPOSCurs]
+	if len(cur) != 2 {
+		t.Fatalf("Cursives[curs] size = %d, want 2", len(cur))
+	}
+	rec100, ok := cur[100]
+	if !ok {
+		t.Fatal("missing record for glyph 100")
+	}
+	if rec100.HasEntry || !rec100.HasExit {
+		t.Errorf("glyph 100 presence: HasEntry=%v HasExit=%v, want false true", rec100.HasEntry, rec100.HasExit)
+	}
+	if rec100.Exit.X != 700 || rec100.Exit.Y != 50 {
+		t.Errorf("glyph 100 exit = %+v, want (700, 50)", rec100.Exit)
+	}
+	rec101 := cur[101]
+	if !rec101.HasEntry || !rec101.HasExit {
+		t.Errorf("glyph 101 presence: HasEntry=%v HasExit=%v, want both true", rec101.HasEntry, rec101.HasExit)
+	}
+	if rec101.Entry.X != 50 || rec101.Entry.Y != 60 {
+		t.Errorf("glyph 101 entry = %+v, want (50, 60)", rec101.Entry)
+	}
+
+	// CursiveOffset(100, 101): exit (700, 50) - entry (50, 60) = (650, -10).
+	dx, dy, ok := g.CursiveOffset(100, 101, GPOSCurs)
+	if !ok {
+		t.Fatal("CursiveOffset(100, 101) ok=false, want true")
+	}
+	if dx != 650 || dy != -10 {
+		t.Errorf("CursiveOffset(100, 101) = (%d, %d), want (650, -10)", dx, dy)
+	}
+
+	// Glyph 100 has no entry, so (101, 100) should miss.
+	if _, _, ok := g.CursiveOffset(101, 100, GPOSCurs); ok {
+		t.Error("CursiveOffset(101, 100) should miss: glyph 100 has no entry anchor")
+	}
+	// Unknown glyphs miss.
+	if _, _, ok := g.CursiveOffset(100, 999, GPOSCurs); ok {
+		t.Error("CursiveOffset with unknown current glyph should miss")
+	}
+	if _, _, ok := g.CursiveOffset(999, 101, GPOSCurs); ok {
+		t.Error("CursiveOffset with unknown previous glyph should miss")
+	}
+}
+
+// TestCursiveOffsetNilReceiver covers nil-safety for the cursive path.
+func TestCursiveOffsetNilReceiver(t *testing.T) {
+	var g *GPOSAdjustments
+	if _, _, ok := g.CursiveOffset(1, 2, GPOSCurs); ok {
+		t.Error("CursiveOffset on nil receiver must return ok=false")
+	}
+}
+
+// TestParseGPOSCursiveExtensionWrap verifies the type-3 dispatch follows
+// LookupType 9 extension subtables, like types 2/4/6.
+func TestParseGPOSCursiveExtensionWrap(t *testing.T) {
+	body := cursivePosBody(
+		cursiveGlyphSpec{gid: 10, hasExit: true, exitX: 100, exitY: 0},
+		cursiveGlyphSpec{gid: 11, hasEntry: true, entryX: 20, entryY: 0},
+	)
+	gpos := buildGPOSHeader("curs", 3, body, 3)
+	g := ParseGPOS(wrapTTF(gpos))
+	if g == nil {
+		t.Fatal("ParseGPOS returned nil")
+	}
+	dx, dy, ok := g.CursiveOffset(10, 11, GPOSCurs)
+	if !ok {
+		t.Fatal("CursiveOffset through extension ok=false")
+	}
+	if dx != 80 || dy != 0 {
+		t.Errorf("CursiveOffset through extension = (%d, %d), want (80, 0)", dx, dy)
+	}
+}
+
+// TestCursiveOffsetCumulativeChain exercises the LTR convention across
+// a three-glyph chain. With each link reusing the previous exit, the
+// caller's running offset should advance by exit_n − entry_(n+1).
+func TestCursiveOffsetCumulativeChain(t *testing.T) {
+	body := cursivePosBody(
+		// G1: exit (500, 10).
+		cursiveGlyphSpec{gid: 1, hasExit: true, exitX: 500, exitY: 10},
+		// G2: entry (40, -5), exit (490, 20).
+		cursiveGlyphSpec{gid: 2, hasEntry: true, hasExit: true,
+			entryX: 40, entryY: -5, exitX: 490, exitY: 20},
+		// G3: entry (60, 15).
+		cursiveGlyphSpec{gid: 3, hasEntry: true, entryX: 60, entryY: 15},
+	)
+	gpos := buildGPOSHeader("curs", 3, body, 0)
+	g := ParseGPOS(wrapTTF(gpos))
+	if g == nil {
+		t.Fatal("ParseGPOS returned nil")
+	}
+	// Link 1: prev=G1, curr=G2 → (500-40, 10-(-5)) = (460, 15).
+	dx12, dy12, ok := g.CursiveOffset(1, 2, GPOSCurs)
+	if !ok || dx12 != 460 || dy12 != 15 {
+		t.Errorf("link 1 = (%d,%d,%v), want (460,15,true)", dx12, dy12, ok)
+	}
+	// Link 2: prev=G2, curr=G3 → (490-60, 20-15) = (430, 5).
+	dx23, dy23, ok := g.CursiveOffset(2, 3, GPOSCurs)
+	if !ok || dx23 != 430 || dy23 != 5 {
+		t.Errorf("link 2 = (%d,%d,%v), want (430,5,true)", dx23, dy23, ok)
+	}
+	// Cumulative offset that the caller would apply across the run:
+	// glyph 2 sits at link1; glyph 3 sits at link1 + link2.
+	cumX, cumY := dx12+dx23, dy12+dy23
+	if cumX != 890 || cumY != 20 {
+		t.Errorf("cumulative = (%d,%d), want (890,20)", cumX, cumY)
+	}
+}
+
+// markLigPosBody builds a MarkLigPosFormat1 subtable with one mark
+// glyph (per markGID/class/anchor pair in marks) and one ligature glyph
+// whose LigatureAttach has componentCount components × markClassCount
+// mark classes; anchors[componentIdx][classIdx] supplies the (x, y) for
+// each grid cell. A nil cell anchor (presence=false) emits offset 0.
+type markLigMarkSpec struct {
+	gid    uint16
+	class  uint16
+	anchor Anchor
+}
+
+type ligAnchorSpec struct {
+	present bool
+	x, y    int16
+}
+
+func markLigPosBody(marks []markLigMarkSpec, ligGID uint16, markClassCount int, anchors [][]ligAnchorSpec) []byte {
+	var b gposBuilder
+	b.u16(1) // posFormat
+	markCovOffPos := b.pos()
+	b.u16(0)
+	ligCovOffPos := b.pos()
+	b.u16(0)
+	b.u16(uint16(markClassCount))
+	markArrayOffPos := b.pos()
+	b.u16(0)
+	ligArrayOffPos := b.pos()
+	b.u16(0)
+
+	// Mark coverage in the order of the marks slice.
+	markGIDs := make([]uint16, len(marks))
+	for i, m := range marks {
+		markGIDs[i] = m.gid
+	}
+	markCovOff := b.pos()
+	b.patchU16(markCovOffPos, uint16(markCovOff))
+	b.buf = append(b.buf, buildCoverageFormat1(markGIDs...)...)
+
+	// Ligature coverage: a single ligature glyph.
+	ligCovOff := b.pos()
+	b.patchU16(ligCovOffPos, uint16(ligCovOff))
+	b.buf = append(b.buf, buildCoverageFormat1(ligGID)...)
+
+	// MarkArray.
+	markArrayOff := b.pos()
+	b.patchU16(markArrayOffPos, uint16(markArrayOff))
+	b.u16(uint16(len(marks)))
+	markAnchorOffPositions := make([]int, len(marks))
+	for i, m := range marks {
+		b.u16(m.class)
+		markAnchorOffPositions[i] = b.pos()
+		b.u16(0) // markAnchorOffset placeholder (from MarkArray start)
+	}
+	for i, m := range marks {
+		anchorOff := b.pos()
+		b.patchU16(markAnchorOffPositions[i], uint16(anchorOff-markArrayOff))
+		b.u16(1)
+		b.i16(m.anchor.X)
+		b.i16(m.anchor.Y)
+	}
+
+	// LigatureArray: one ligature.
+	ligArrayOff := b.pos()
+	b.patchU16(ligArrayOffPos, uint16(ligArrayOff))
+	b.u16(1) // ligatureCount
+	attachOffPos := b.pos()
+	b.u16(0) // ligatureAttachOffset placeholder (from LigatureArray start)
+
+	// LigatureAttach.
+	attachOff := b.pos()
+	b.patchU16(attachOffPos, uint16(attachOff-ligArrayOff))
+	componentCount := len(anchors)
+	b.u16(uint16(componentCount))
+	// Reserve the per-component anchor offset rows.
+	rowAnchorPos := make([][]int, componentCount)
+	for c := 0; c < componentCount; c++ {
+		row := make([]int, markClassCount)
+		for k := 0; k < markClassCount; k++ {
+			row[k] = b.pos()
+			b.u16(0) // anchor offset placeholder
+		}
+		rowAnchorPos[c] = row
+	}
+	// Emit anchors for present cells; patch their offsets relative to
+	// the LigatureAttach start.
+	for c := 0; c < componentCount; c++ {
+		for k := 0; k < markClassCount; k++ {
+			cell := anchors[c][k]
+			if !cell.present {
+				continue
+			}
+			anchorOff := b.pos()
+			b.patchU16(rowAnchorPos[c][k], uint16(anchorOff-attachOff))
+			b.u16(1)
+			b.i16(cell.x)
+			b.i16(cell.y)
+		}
+	}
+	return b.buf
+}
+
+// TestParseGPOSMarkLigPosFormat1 covers the parser with a 2-component
+// ligature carrying anchors for two mark classes. Each (component, class)
+// cell is checked against MarkLigatureOffset.
+func TestParseGPOSMarkLigPosFormat1(t *testing.T) {
+	const (
+		mark0GID uint16 = 200 // class 0 mark
+		mark1GID uint16 = 201 // class 1 mark
+		ligGID   uint16 = 300
+	)
+	marks := []markLigMarkSpec{
+		{gid: mark0GID, class: 0, anchor: Anchor{X: 100, Y: 200}},
+		{gid: mark1GID, class: 1, anchor: Anchor{X: 50, Y: 50}},
+	}
+	// 2 components × 2 mark classes.
+	// Component 0: class-0 anchor (500, 800), class-1 anchor (520, 850).
+	// Component 1: class-0 anchor (1500, 800), class-1 anchor absent.
+	ligAnchors := [][]ligAnchorSpec{
+		{
+			{present: true, x: 500, y: 800},
+			{present: true, x: 520, y: 850},
+		},
+		{
+			{present: true, x: 1500, y: 800},
+			{present: false},
+		},
+	}
+	body := markLigPosBody(marks, ligGID, 2, ligAnchors)
+	gpos := buildGPOSHeader("mark", 5, body, 0)
+	g := ParseGPOS(wrapTTF(gpos))
+	if g == nil {
+		t.Fatal("ParseGPOS returned nil")
+	}
+
+	lig, ok := g.LigatureBases[GPOSMark][ligGID]
+	if !ok {
+		t.Fatal("missing LigatureRecord for ligGID")
+	}
+	if len(lig.Components) != 2 {
+		t.Fatalf("componentCount = %d, want 2", len(lig.Components))
+	}
+	if lig.Components[0][0] != (Anchor{X: 500, Y: 800}) {
+		t.Errorf("comp 0 class 0 = %+v, want (500, 800)", lig.Components[0][0])
+	}
+	if lig.Components[0][1] != (Anchor{X: 520, Y: 850}) {
+		t.Errorf("comp 0 class 1 = %+v, want (520, 850)", lig.Components[0][1])
+	}
+	if lig.Components[1][0] != (Anchor{X: 1500, Y: 800}) {
+		t.Errorf("comp 1 class 0 = %+v, want (1500, 800)", lig.Components[1][0])
+	}
+	if lig.Components[1][1] != (Anchor{}) {
+		t.Errorf("comp 1 class 1 should be zero anchor, got %+v", lig.Components[1][1])
+	}
+
+	cases := []struct {
+		lig            uint16
+		comp           int
+		mark           uint16
+		wantDX, wantDY int16
+		wantOK         bool
+	}{
+		{ligGID, 0, mark0GID, 400, 600, true},  // 500-100, 800-200
+		{ligGID, 0, mark1GID, 470, 800, true},  // 520-50,  850-50
+		{ligGID, 1, mark0GID, 1400, 600, true}, // 1500-100, 800-200
+		{ligGID, 1, mark1GID, 0, 0, false},     // class 1 absent on comp 1
+		{ligGID, 2, mark0GID, 0, 0, false},     // out of range component
+		{ligGID, -1, mark0GID, 0, 0, false},    // negative component
+		{999, 0, mark0GID, 0, 0, false},        // unknown ligature
+		{ligGID, 0, 999, 0, 0, false},          // unknown mark
+	}
+	for _, c := range cases {
+		dx, dy, ok := g.MarkLigatureOffset(c.lig, c.comp, c.mark, GPOSMark)
+		if ok != c.wantOK || (ok && (dx != c.wantDX || dy != c.wantDY)) {
+			t.Errorf("MarkLigatureOffset(%d, %d, %d) = (%d, %d, %v), want (%d, %d, %v)",
+				c.lig, c.comp, c.mark, dx, dy, ok, c.wantDX, c.wantDY, c.wantOK)
+		}
+	}
+}
+
+// TestMarkLigatureOffsetNilReceiver covers the nil-safety contract for
+// the new ligature accessor.
+func TestMarkLigatureOffsetNilReceiver(t *testing.T) {
+	var g *GPOSAdjustments
+	if _, _, ok := g.MarkLigatureOffset(1, 0, 2, GPOSMark); ok {
+		t.Error("MarkLigatureOffset on nil receiver must return ok=false")
+	}
+}
+
+// TestParseGPOSMarkLigExtensionWrap verifies that LookupType 5 is also
+// followed through a LookupType 9 extension subtable.
+func TestParseGPOSMarkLigExtensionWrap(t *testing.T) {
+	const (
+		markGID uint16 = 200
+		ligGID  uint16 = 300
+	)
+	marks := []markLigMarkSpec{
+		{gid: markGID, class: 0, anchor: Anchor{X: 10, Y: 20}},
+	}
+	ligAnchors := [][]ligAnchorSpec{
+		{{present: true, x: 110, y: 120}},
+		{{present: true, x: 210, y: 320}},
+	}
+	body := markLigPosBody(marks, ligGID, 1, ligAnchors)
+	gpos := buildGPOSHeader("mark", 5, body, 5)
+	g := ParseGPOS(wrapTTF(gpos))
+	if g == nil {
+		t.Fatal("ParseGPOS returned nil")
+	}
+	dx, dy, ok := g.MarkLigatureOffset(ligGID, 0, markGID, GPOSMark)
+	if !ok || dx != 100 || dy != 100 {
+		t.Errorf("comp 0 through extension = (%d,%d,%v), want (100,100,true)", dx, dy, ok)
+	}
+	dx, dy, ok = g.MarkLigatureOffset(ligGID, 1, markGID, GPOSMark)
+	if !ok || dx != 200 || dy != 300 {
+		t.Errorf("comp 1 through extension = (%d,%d,%v), want (200,300,true)", dx, dy, ok)
+	}
+}
+
 // TestFaceGPOSCacheIdentity exercises the GPOS one-shot cache flag.
 func TestFaceGPOSCacheIdentity(t *testing.T) {
 	face := loadTestFace(t).(*sfntFace)

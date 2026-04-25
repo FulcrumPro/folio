@@ -1421,3 +1421,359 @@ func TestFaceGPOSCacheIdentity(t *testing.T) {
 		t.Error("second GPOS call rebuilt the cached result")
 	}
 }
+
+// cursivePosBodyAnchorFormat builds a CursivePosFormat1 subtable where
+// every anchor is emitted in the requested format. Formats 2 and 3 add
+// trailing fields beyond (x, y) that parseAnchor must skip past.
+func cursivePosBodyAnchorFormat(format uint16) []byte {
+	specs := []cursiveGlyphSpec{
+		{gid: 100, hasExit: true, exitX: 700, exitY: 50},
+		{gid: 101, hasEntry: true, hasExit: true,
+			entryX: 50, entryY: 60, exitX: 650, exitY: 40},
+	}
+	var b gposBuilder
+	b.u16(1) // posFormat
+	covOffPos := b.pos()
+	b.u16(0) // coverageOffset
+	b.u16(uint16(len(specs)))
+
+	type recPos struct {
+		entryPos, exitPos int
+	}
+	recs := make([]recPos, len(specs))
+	for i := range specs {
+		recs[i].entryPos = b.pos()
+		b.u16(0)
+		recs[i].exitPos = b.pos()
+		b.u16(0)
+	}
+
+	covOff := b.pos()
+	b.patchU16(covOffPos, uint16(covOff))
+	gids := make([]uint16, len(specs))
+	for i, s := range specs {
+		gids[i] = s.gid
+	}
+	b.buf = append(b.buf, buildCoverageFormat1(gids...)...)
+
+	emit := func(x, y int16) {
+		b.u16(format)
+		b.i16(x)
+		b.i16(y)
+		switch format {
+		case 2:
+			b.u16(0) // anchor point index
+		case 3:
+			b.u16(0) // xDeviceOffset
+			b.u16(0) // yDeviceOffset
+		}
+	}
+	for i, s := range specs {
+		if s.hasEntry {
+			anchorOff := b.pos()
+			b.patchU16(recs[i].entryPos, uint16(anchorOff))
+			emit(s.entryX, s.entryY)
+		}
+		if s.hasExit {
+			anchorOff := b.pos()
+			b.patchU16(recs[i].exitPos, uint16(anchorOff))
+			emit(s.exitX, s.exitY)
+		}
+	}
+	return b.buf
+}
+
+// TestParseGPOSCursiveAnchorFormats2And3 mirrors
+// TestParseGPOSAnchorFormats2And3 for LookupType 3: anchors emitted in
+// formats 2 and 3 must yield the same X, Y as format 1, since the
+// trailing anchor-point index and Device offsets are deliberately
+// ignored.
+func TestParseGPOSCursiveAnchorFormats2And3(t *testing.T) {
+	for _, fmt := range []uint16{1, 2, 3} {
+		body := cursivePosBodyAnchorFormat(fmt)
+		gpos := buildGPOSHeader("curs", 3, body, 0)
+		g := ParseGPOS(wrapTTF(gpos))
+		if g == nil {
+			t.Fatalf("format %d: ParseGPOS returned nil", fmt)
+		}
+		rec100 := g.Cursives[GPOSCurs][100]
+		if rec100.Exit.X != 700 || rec100.Exit.Y != 50 {
+			t.Errorf("format %d: glyph 100 exit = %+v, want (700, 50)", fmt, rec100.Exit)
+		}
+		rec101 := g.Cursives[GPOSCurs][101]
+		if rec101.Entry.X != 50 || rec101.Entry.Y != 60 {
+			t.Errorf("format %d: glyph 101 entry = %+v, want (50, 60)", fmt, rec101.Entry)
+		}
+		if rec101.Exit.X != 650 || rec101.Exit.Y != 40 {
+			t.Errorf("format %d: glyph 101 exit = %+v, want (650, 40)", fmt, rec101.Exit)
+		}
+	}
+}
+
+// TestParseGPOSCursiveBothAnchorsAbsentOmitted covers the skip branch
+// in parseCursivePos: a coverage entry whose EntryExitRecord has both
+// offsets equal to zero must NOT appear in the Cursives map.
+func TestParseGPOSCursiveBothAnchorsAbsentOmitted(t *testing.T) {
+	body := cursivePosBody(
+		cursiveGlyphSpec{gid: 50}, // both offsets 0
+		cursiveGlyphSpec{gid: 51, hasExit: true, exitX: 200, exitY: 0},
+	)
+	gpos := buildGPOSHeader("curs", 3, body, 0)
+	g := ParseGPOS(wrapTTF(gpos))
+	if g == nil {
+		t.Fatal("ParseGPOS returned nil")
+	}
+	if _, ok := g.Cursives[GPOSCurs][50]; ok {
+		t.Errorf("glyph 50 should be absent from Cursives (both anchors absent), got entry %+v", g.Cursives[GPOSCurs][50])
+	}
+	if _, ok := g.Cursives[GPOSCurs][51]; !ok {
+		t.Error("glyph 51 should be present (one anchor declared)")
+	}
+}
+
+// TestGPOSCursiveLTRContractDoc pins the LTR-convention contract on
+// CursiveOffset: the package is shaping-direction agnostic and always
+// returns the LTR delta (prev.Exit - curr.Entry). Any RTL handling is
+// the layout layer's responsibility.
+func TestGPOSCursiveLTRContractDoc(t *testing.T) {
+	body := cursivePosBody(
+		cursiveGlyphSpec{gid: 1, hasExit: true, exitX: 800, exitY: 5},
+		cursiveGlyphSpec{gid: 2, hasEntry: true, entryX: 30, entryY: -5},
+	)
+	gpos := buildGPOSHeader("curs", 3, body, 0)
+	g := ParseGPOS(wrapTTF(gpos))
+	if g == nil {
+		t.Fatal("ParseGPOS returned nil")
+	}
+	dx, dy, ok := g.CursiveOffset(1, 2, GPOSCurs)
+	if !ok {
+		t.Fatal("CursiveOffset returned ok=false")
+	}
+	// LTR: dx = 800 - 30 = 770; dy = 5 - (-5) = 10. Sign is positive
+	// regardless of which run direction the caller intends.
+	if dx != 770 || dy != 10 {
+		t.Errorf("CursiveOffset = (%d, %d), want (770, 10) (LTR convention)", dx, dy)
+	}
+}
+
+// TestParseGPOSCursiveStoresLookupFlag verifies that the lookup-table
+// flag uint16 is persisted on every CursiveRecord. Today the flag is
+// not consumed by the draw path; persisting it lets a future RTL fix
+// or IGNORE_* fix read the bits without re-parsing.
+func TestParseGPOSCursiveStoresLookupFlag(t *testing.T) {
+	body := cursivePosBody(
+		cursiveGlyphSpec{gid: 1, hasExit: true, exitX: 100, exitY: 0},
+		cursiveGlyphSpec{gid: 2, hasEntry: true, entryX: 20, entryY: 0},
+	)
+	// Build a GPOS table by hand so we can inject a non-zero
+	// lookupFlag (0x0001 = RIGHT_TO_LEFT). buildGPOSHeader hard-codes
+	// the flag to 0; we patch it post-construction.
+	gpos := buildGPOSHeader("curs", 3, body, 0)
+	// Walk the lookup list and overwrite the lookupFlag field of the
+	// single Lookup table. The header layout is: GPOS header (10),
+	// then ScriptList, FeatureList, LookupList. Locate the lookup via
+	// the LookupList offset stored at GPOS+8.
+	lookupListOff := int(be16(gpos, 8))
+	// LookupList: count(2) lookupOffset(2). Single lookup.
+	lookupOff := lookupListOff + int(be16(gpos, lookupListOff+2))
+	// Lookup: lookupType(2), lookupFlag(2), subTableCount(2). Patch
+	// flag with RIGHT_TO_LEFT (0x0001).
+	gpos[lookupOff+2] = 0x00
+	gpos[lookupOff+3] = 0x01
+
+	g := ParseGPOS(wrapTTF(gpos))
+	if g == nil {
+		t.Fatal("ParseGPOS returned nil")
+	}
+	rec1, ok := g.Cursives[GPOSCurs][1]
+	if !ok {
+		t.Fatal("glyph 1 missing from Cursives")
+	}
+	if rec1.LookupFlag != 0x0001 {
+		t.Errorf("glyph 1 LookupFlag = %#x, want 0x0001", rec1.LookupFlag)
+	}
+	rec2 := g.Cursives[GPOSCurs][2]
+	if rec2.LookupFlag != 0x0001 {
+		t.Errorf("glyph 2 LookupFlag = %#x, want 0x0001", rec2.LookupFlag)
+	}
+}
+
+// markLigPosBodyAnchorFormat is a variant of markLigPosBody whose
+// every anchor (mark and ligature) is emitted in the requested format.
+// Used to exercise the format-2/3 read path on Type 5 anchors.
+func markLigPosBodyAnchorFormat(format uint16) []byte {
+	const (
+		markGID uint16 = 200
+		ligGID  uint16 = 300
+	)
+	var b gposBuilder
+	b.u16(1) // posFormat
+	markCovOffPos := b.pos()
+	b.u16(0)
+	ligCovOffPos := b.pos()
+	b.u16(0)
+	b.u16(1) // markClassCount
+	markArrayOffPos := b.pos()
+	b.u16(0)
+	ligArrayOffPos := b.pos()
+	b.u16(0)
+
+	markCovOff := b.pos()
+	b.patchU16(markCovOffPos, uint16(markCovOff))
+	b.buf = append(b.buf, buildCoverageFormat1(markGID)...)
+
+	ligCovOff := b.pos()
+	b.patchU16(ligCovOffPos, uint16(ligCovOff))
+	b.buf = append(b.buf, buildCoverageFormat1(ligGID)...)
+
+	markArrayOff := b.pos()
+	b.patchU16(markArrayOffPos, uint16(markArrayOff))
+	b.u16(1) // markCount
+	b.u16(0) // class 0
+	markAnchorOffPos := b.pos()
+	b.u16(0)
+
+	ligArrayOff := b.pos()
+	b.patchU16(ligArrayOffPos, uint16(ligArrayOff))
+	b.u16(1) // ligatureCount
+	attachOffPos := b.pos()
+	b.u16(0)
+
+	attachOff := b.pos()
+	b.patchU16(attachOffPos, uint16(attachOff-ligArrayOff))
+	b.u16(2) // componentCount
+	c0AnchorPos := b.pos()
+	b.u16(0)
+	c1AnchorPos := b.pos()
+	b.u16(0)
+
+	emit := func(x, y int16) {
+		b.u16(format)
+		b.i16(x)
+		b.i16(y)
+		switch format {
+		case 2:
+			b.u16(0)
+		case 3:
+			b.u16(0)
+			b.u16(0)
+		}
+	}
+
+	// Mark anchor at (10, 20).
+	markAnchorOff := b.pos()
+	b.patchU16(markAnchorOffPos, uint16(markAnchorOff-markArrayOff))
+	emit(10, 20)
+	// Component 0 anchor at (110, 220).
+	c0AnchorOff := b.pos()
+	b.patchU16(c0AnchorPos, uint16(c0AnchorOff-attachOff))
+	emit(110, 220)
+	// Component 1 anchor at (310, 420).
+	c1AnchorOff := b.pos()
+	b.patchU16(c1AnchorPos, uint16(c1AnchorOff-attachOff))
+	emit(310, 420)
+	return b.buf
+}
+
+// TestParseGPOSMarkLigAnchorFormats2And3 mirrors the cursive variant
+// for LookupType 5: mark and ligature anchors in formats 2 and 3 must
+// resolve identically to format 1.
+func TestParseGPOSMarkLigAnchorFormats2And3(t *testing.T) {
+	for _, fmt := range []uint16{1, 2, 3} {
+		body := markLigPosBodyAnchorFormat(fmt)
+		gpos := buildGPOSHeader("mark", 5, body, 0)
+		g := ParseGPOS(wrapTTF(gpos))
+		if g == nil {
+			t.Fatalf("format %d: ParseGPOS returned nil", fmt)
+		}
+		dx, dy, ok := g.MarkLigatureOffset(300, 0, 200, GPOSMark)
+		if !ok || dx != 100 || dy != 200 {
+			t.Errorf("format %d comp 0: (%d, %d, %v), want (100, 200, true)", fmt, dx, dy, ok)
+		}
+		dx, dy, ok = g.MarkLigatureOffset(300, 1, 200, GPOSMark)
+		if !ok || dx != 300 || dy != 400 {
+			t.Errorf("format %d comp 1: (%d, %d, %v), want (300, 400, true)", fmt, dx, dy, ok)
+		}
+	}
+}
+
+// TestParseGPOSMarkLigDoesNotPopulateType4Marks is the storage-isolation
+// regression for LookupType 5: a pure-Type-5 GPOS table must populate
+// LigatureMarks/LigatureBases without bleeding into the Type 4
+// Marks/Bases maps. A regression that aliased the two sets of maps
+// would be caught here.
+func TestParseGPOSMarkLigDoesNotPopulateType4Marks(t *testing.T) {
+	const (
+		markGID uint16 = 200
+		ligGID  uint16 = 300
+	)
+	marks := []markLigMarkSpec{
+		{gid: markGID, class: 0, anchor: Anchor{X: 10, Y: 20}},
+	}
+	ligAnchors := [][]ligAnchorSpec{
+		{{present: true, x: 110, y: 220}},
+		{{present: true, x: 310, y: 420}},
+	}
+	body := markLigPosBody(marks, ligGID, 1, ligAnchors)
+	gpos := buildGPOSHeader("mark", 5, body, 0)
+	g := ParseGPOS(wrapTTF(gpos))
+	if g == nil {
+		t.Fatal("ParseGPOS returned nil")
+	}
+	if len(g.Marks[GPOSMark]) != 0 {
+		t.Errorf("Marks[GPOSMark] should be empty for pure Type 5, got %v", g.Marks[GPOSMark])
+	}
+	if len(g.Bases[GPOSMark]) != 0 {
+		t.Errorf("Bases[GPOSMark] should be empty for pure Type 5, got %v", g.Bases[GPOSMark])
+	}
+	if len(g.LigatureMarks[GPOSMark]) == 0 {
+		t.Error("LigatureMarks[GPOSMark] should be populated")
+	}
+	if len(g.LigatureBases[GPOSMark]) == 0 {
+		t.Error("LigatureBases[GPOSMark] should be populated")
+	}
+}
+
+// TestParseGPOSMarkType4AndType5Coexist builds a multi-lookup GPOS
+// blob where one Type 4 lookup and one Type 5 lookup both belong to
+// the "mark" feature. Both MarkOffset and MarkLigatureOffset must
+// resolve simultaneously.
+func TestParseGPOSMarkType4AndType5Coexist(t *testing.T) {
+	const (
+		baseGID  uint16 = 100
+		mark4GID uint16 = 50
+		ligGID   uint16 = 300
+		mark5GID uint16 = 200
+	)
+	type4Body := markBasePosBody(mark4GID, baseGID, 5, 10, 105, 110, 1)
+	marks := []markLigMarkSpec{
+		{gid: mark5GID, class: 0, anchor: Anchor{X: 10, Y: 20}},
+	}
+	ligAnchors := [][]ligAnchorSpec{
+		{{present: true, x: 110, y: 220}},
+		{{present: true, x: 310, y: 420}},
+	}
+	type5Body := markLigPosBody(marks, ligGID, 1, ligAnchors)
+
+	// buildGPOSHeaderDualFeature pairs two lookups via two features;
+	// reuse it with both features set to "mark" so they share a
+	// feature tag. The parser keys subtables by lookup type, so the
+	// shared tag does not collide with Type 4 storage.
+	gpos := buildGPOSHeaderDualFeature("mark", 4, type4Body, "mark", 5, type5Body)
+	g := ParseGPOS(wrapTTF(gpos))
+	if g == nil {
+		t.Fatal("ParseGPOS returned nil")
+	}
+	dx, dy, ok := g.MarkOffset(baseGID, mark4GID, GPOSMark)
+	if !ok || dx != 100 || dy != 100 {
+		t.Errorf("Type 4 MarkOffset = (%d, %d, %v), want (100, 100, true)", dx, dy, ok)
+	}
+	dx, dy, ok = g.MarkLigatureOffset(ligGID, 0, mark5GID, GPOSMark)
+	if !ok || dx != 100 || dy != 200 {
+		t.Errorf("Type 5 MarkLigatureOffset comp 0 = (%d, %d, %v), want (100, 200, true)", dx, dy, ok)
+	}
+	dx, dy, ok = g.MarkLigatureOffset(ligGID, 1, mark5GID, GPOSMark)
+	if !ok || dx != 300 || dy != 400 {
+		t.Errorf("Type 5 MarkLigatureOffset comp 1 = (%d, %d, %v), want (300, 400, true)", dx, dy, ok)
+	}
+}

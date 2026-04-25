@@ -367,13 +367,15 @@ func markPositioningEligible(word Word) bool {
 // cursivePositioningEligible reports whether the word's GID stream is
 // eligible for the cursive (GPOS LookupType 3) draw path. Eligibility
 // requires an embedded font whose Face exposes GPOS curs data, a GID
-// stream of at least two glyphs, and at least one consecutive pair
-// (prev, curr) for which CursiveOffset returns a non-trivial offset.
+// stream of at least two glyphs, and a non-empty Cursives map for the
+// curs feature.
 //
-// The presence check is keyed on the Cursives map only; callers that
-// need to flip the dx sign for RTL runs must do so themselves on the
-// values returned by CursiveOffset, since this package is shaping-
-// direction agnostic.
+// This is a presence check only; the per-pair join data is consumed by
+// drawShapedGIDsCursive on the same walk that emits the Tj operators,
+// so a separate eligibility probe would re-walk the run for no benefit.
+// Callers that ship RTL cursive scripts (Arabic) must additionally
+// consult the Lookup table's RIGHT_TO_LEFT flag, which is not yet
+// plumbed through the parser; see CursiveOffset for the documented gap.
 func cursivePositioningEligible(word Word) bool {
 	if word.Embedded == nil || len(word.GIDs) < 2 || word.LetterSpacing != 0 {
 		return false
@@ -383,35 +385,31 @@ func cursivePositioningEligible(word Word) bool {
 		return false
 	}
 	gpos := provider.GPOS()
-	if gpos == nil || len(gpos.Cursives[font.GPOSCurs]) == 0 {
+	if gpos == nil {
 		return false
 	}
-	for i := 1; i < len(word.GIDs); i++ {
-		if _, _, hit := gpos.CursiveOffset(word.GIDs[i-1], word.GIDs[i], font.GPOSCurs); hit {
-			return true
-		}
-	}
-	return false
+	return len(gpos.Cursives[font.GPOSCurs]) > 0
 }
 
 // drawShapedGIDsCursive emits a shaper-produced GID stream with cursive
-// attachment offsets applied between consecutive glyphs. Each glyph is
-// emitted via its own Tj; a Td-shift moves the text matrix from the
-// natural glyph-end position to the cursive-anchored origin, then
-// another Td-shift advances by the glyph's natural advance plus the
-// cursive dx so the next glyph's natural origin sits at the cursive
-// target. Td brackets that surround the same glyph cancel net advance
-// to match the natural advance of the run; cursive only re-positions,
-// it does not add or remove width.
+// attachment offsets applied between consecutive glyphs. In horizontal
+// text the OpenType spec §6.3 LookupType 3 join is a Y-only alignment:
+// the X delta between previous-exit and current-entry is already
+// encoded by the glyph's hmtx advance, so the cursive feature's job is
+// to align baselines / connecting points vertically. Each glyph is
+// emitted via its own Tj; when CursiveOffset reports a non-zero dy,
+// a Td(0, dy) opens before the Tj and a Td(0, -dy) closes after it so
+// the baseline is consistent for subsequent glyphs.
 //
-// RTL handling: this function applies the LTR convention dx as-returned
-// by CursiveOffset. Callers that need RTL semantics must arrange for
-// the GID stream order to already reflect visual order (which the
-// shaper does today) and accept that for RTL the dx should be flipped.
-// This iteration documents the constraint rather than fixing it; the
+// RTL handling: this function applies the LTR-convention join. Real
+// RTL cursive (Arabic, etc.) requires consulting the parent Lookup's
+// RIGHT_TO_LEFT flag (0x0001), which inverts which anchor (entry vs
+// exit) plays the joining role and changes the Y-alignment rule. The
+// flag is not yet parsed (see TODO in font/gpos.go), so RTL cursive
+// will not render correctly until that data is plumbed through. The
 // only shipped shaper today is Indic (LTR) and Indic does not use the
-// curs feature, so the path is exercised by tests and Arabic-style
-// shapers that arrive later will need to participate in the sign flip.
+// curs feature, so the path is exercised by tests rather than real
+// runs.
 func drawShapedGIDsCursive(stream *content.Stream, word Word) {
 	ef := word.Embedded
 	face := ef.Face()
@@ -434,26 +432,24 @@ func drawShapedGIDsCursive(stream *content.Stream, word Word) {
 			stream.ShowTextHex(ef.EncodeGIDs(gids[i:i+1], ""))
 			continue
 		}
-		dxFU, dyFU, ok := gpos.CursiveOffset(gids[i-1], gid, font.GPOSCurs)
+		_, dyFU, ok := gpos.CursiveOffset(gids[i-1], gid, font.GPOSCurs)
 		if !ok {
 			stream.ShowTextHex(ef.EncodeGIDs(gids[i:i+1], ""))
 			continue
 		}
-		dxPts := float64(dxFU) * scale
 		dyPts := float64(dyFU) * scale
-		// Open: shift from the natural cursor to the cursive origin.
-		stream.MoveText(dxPts, dyPts)
-		stream.ShowTextHex(ef.EncodeGIDs(gids[i:i+1], ""))
-		// Close: shift back by -dy so the baseline is consistent for
-		// subsequent glyphs. The horizontal shift introduced by dx is
-		// intentional: after this glyph's Tj the text matrix already
-		// sits at (naturalAdvance + dxPts, dyPts) — the close move
-		// only restores y. This matches the spec's "join previous
-		// exit to current entry" semantics: the cursive offset rides
-		// along between glyphs and is not undone.
-		if dyPts != 0 {
-			stream.MoveText(0, -dyPts)
+		if dyPts == 0 {
+			// No vertical join: the natural hmtx advance already
+			// places this glyph correctly.
+			stream.ShowTextHex(ef.EncodeGIDs(gids[i:i+1], ""))
+			continue
 		}
+		// Open: shift up/down to the cursive baseline join.
+		stream.MoveText(0, dyPts)
+		stream.ShowTextHex(ef.EncodeGIDs(gids[i:i+1], ""))
+		// Close: restore Y so subsequent glyphs sit on the run's
+		// baseline. The cursive Y join is local to this pair.
+		stream.MoveText(0, -dyPts)
 	}
 }
 
@@ -567,24 +563,35 @@ func drawWordEmbeddedWithMarks(stream *content.Stream, word Word) {
 		// when it is, marks resolve against the ligature's per-component
 		// anchor grid instead of the Type 4 mark-to-base grid.
 		//
-		// Component attribution heuristic: the first Extend/ZWJ mark in
-		// the cluster attaches to component 0 (leftmost in glyph order).
-		// Subsequent marks attach to the LAST component
-		// (len(components)-1). This is a documented stop-gap until the
-		// shaper plumbs cluster→component IDs through the layout
-		// pipeline; see TODO(#218).
-		// TODO(#218): replace the first/last component heuristic with
-		// real cluster→component attribution from the shaper. The HTML
-		// path currently has no source for component IDs at draw time.
+		// Component attribution heuristic: the first mark that resolves
+		// through the Type 5 branch attaches to component 0 (leftmost
+		// in glyph order); subsequent Type 5 placements attach to the
+		// LAST component (len(components)-1). The counter tracks Type 5
+		// placements only — marks intercepted by the Type 6 (mark-mark)
+		// branch do not advance it, so the "first vs rest" rule is
+		// stable regardless of how many marks stack on top of a prior
+		// mark before any reach the Type 5 path.
+		//
+		// The heuristic is only meaningful for 2-component ligatures.
+		// 3+ component ligatures (ffl, ffi+modifier, etc.) have at
+		// least one middle component that the heuristic cannot reach;
+		// silently misplacing those marks is worse than falling back
+		// to Type 4 mark-to-base on the ligature glyph itself, so this
+		// path is gated on componentCount <= 2.
+		// TODO: replace the heuristic with real cluster→component
+		// attribution from the shaper. The HTML path currently has no
+		// source for component IDs at draw time, so a wider ligature
+		// would need shaper plumbing to position marks correctly.
 		var ligComponents int
 		isLigatureBase := false
 		if gpos != nil {
 			if rec, ok := gpos.LigatureBases[font.GPOSMark][baseGID]; ok {
 				ligComponents = len(rec.Components)
-				isLigatureBase = ligComponents > 0
+				isLigatureBase = ligComponents > 0 && ligComponents <= 2
 			}
 		}
-		for mi, m := range extendMarks {
+		type5Placements := 0
+		for _, m := range extendMarks {
 			markGID := face.GlyphIndex(m.r)
 			var dxPts, dyPts float64
 			placed := false
@@ -597,13 +604,14 @@ func drawWordEmbeddedWithMarks(stream *content.Stream, word Word) {
 			}
 			if !placed && isLigatureBase {
 				comp := 0
-				if mi > 0 {
+				if type5Placements > 0 {
 					comp = ligComponents - 1
 				}
 				if dx, dy, ok := gpos.MarkLigatureOffset(baseGID, comp, markGID, font.GPOSMark); ok {
 					dxPts = float64(dx) * scale
 					dyPts = float64(dy) * scale
 					placed = true
+					type5Placements++
 				}
 			}
 			if !placed {

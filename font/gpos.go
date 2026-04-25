@@ -65,9 +65,19 @@ type BaseRecord struct {
 // contributes to LookupType 3 cursive attachment. Either anchor may be
 // absent (zero offset in the source EntryExitRecord); HasEntry/HasExit
 // disambiguate "absent" from "present at (0,0)".
+//
+// LookupFlag carries the parent Lookup table's lookupFlag uint16 so
+// downstream consumers can interpret bits the draw path does not yet
+// act on. Currently only the RIGHT_TO_LEFT bit (0x0001) is meaningful
+// for cursive; ISO 14496-22 §5.2 also defines IGNORE_BASE_GLYPHS
+// (0x0002), IGNORE_LIGATURES (0x0004), IGNORE_MARKS (0x0008),
+// USE_MARK_FILTERING_SET (0x0010), and a MarkAttachmentType byte in
+// the upper 8 bits. None of these are consumed yet; they are persisted
+// here so a future fix can read them without re-parsing.
 type CursiveRecord struct {
 	Entry, Exit       Anchor
 	HasEntry, HasExit bool
+	LookupFlag        uint16
 }
 
 // LigatureRecord captures the per-component anchors a ligature base
@@ -292,10 +302,13 @@ func (g *GPOSAdjustments) MarkMarkOffset(mark1GID, mark2GID uint16, feature GPOS
 // previous glyph has no exit anchor declared, or when the current
 // glyph has no entry anchor declared.
 //
-// RTL handling is left to the caller: the package is shaping-direction
-// agnostic, so a layout layer that knows the run direction (Arabic,
-// Hebrew, etc.) is responsible for flipping the dx sign when the visual
-// progression runs right-to-left.
+// Returns the LTR-convention join delta. RTL handling requires reading
+// the parent Lookup's RIGHT_TO_LEFT flag bit (0x0001), which inverts
+// which anchor (entry vs exit) is the "joining" anchor and changes the
+// Y-alignment rule. That flag is not yet parsed by ParseGPOS, so RTL
+// cursive (Arabic and similar) will not render correctly until the
+// lookup flag is consumed. TODO: plumb the lookup flag through the
+// parser and apply it here.
 func (g *GPOSAdjustments) CursiveOffset(prevGID, currGID uint16, feature GPOSFeature) (dx, dy int16, ok bool) {
 	if g == nil {
 		return 0, 0, false
@@ -347,12 +360,16 @@ func (g *GPOSAdjustments) MarkLigatureOffset(ligGID uint16, componentIdx int, ma
 	if componentIdx < 0 || componentIdx >= len(lig.Components) {
 		return 0, 0, false
 	}
+	// parseLigatureArray builds Components and Present row-by-row in
+	// lockstep, so len(Components[c]) == len(Present[c]) == markClassCount
+	// for every component. A single class-bound check on Components is
+	// enough; an explicit re-check against Present[componentIdx] would
+	// be unreachable.
 	comp := lig.Components[componentIdx]
 	if int(mark.Class) >= len(comp) {
 		return 0, 0, false
 	}
-	if componentIdx >= len(lig.Present) || int(mark.Class) >= len(lig.Present[componentIdx]) ||
-		!lig.Present[componentIdx][mark.Class] {
+	if !lig.Present[componentIdx][mark.Class] {
 		return 0, 0, false
 	}
 	a := comp[mark.Class]
@@ -448,11 +465,22 @@ func parseGPOSLookups(gpos []byte, listOff int, indices []int, acc *gposAccumula
 // parseGPOSLookup reads a single Lookup table and calls the subtable
 // parser matching its lookup type. Extension subtables (type 9) are
 // followed to their target subtable in the same GPOS blob.
+//
+// The Lookup table's lookupFlag uint16 is read once and forwarded to
+// subtable parsers that need it. Per ISO 14496-22 §5.2, lookupFlag
+// carries semantically important bits — RIGHT_TO_LEFT (0x0001) for
+// cursive, IGNORE_BASE_GLYPHS (0x0002), IGNORE_LIGATURES (0x0004),
+// IGNORE_MARKS (0x0008), USE_MARK_FILTERING_SET (0x0010), and a
+// MarkAttachmentType byte in the upper 8 bits. Only the flag value is
+// persisted today (on CursiveRecord); none of the bits are acted on by
+// the draw path yet. TODO: consume RIGHT_TO_LEFT in the cursive draw
+// path; consume IGNORE_* in mark and ligature placement.
 func parseGPOSLookup(gpos []byte, lookupOff int, acc *gposAccumulator) {
 	if lookupOff+6 > len(gpos) {
 		return
 	}
 	lookupType := be16(gpos, lookupOff)
+	lookupFlag := be16(gpos, lookupOff+2)
 	subCount := int(be16(gpos, lookupOff+4))
 	if lookupOff+6+subCount*2 > len(gpos) {
 		return
@@ -479,7 +507,7 @@ func parseGPOSLookup(gpos []byte, lookupOff int, acc *gposAccumulator) {
 		case 2:
 			parsePairPos(gpos, off, acc.pairs)
 		case 3:
-			parseCursivePos(gpos, off, acc.cursives)
+			parseCursivePos(gpos, off, lookupFlag, acc.cursives)
 		case 4:
 			parseMarkBasePos(gpos, off, acc.marks, acc.bases)
 		case 5:
@@ -862,7 +890,7 @@ func parseBaseArray(gpos []byte, off int, baseCov []uint16, markClassCount int, 
 // index i selects record i. Per-glyph CursiveRecord entries are written
 // only when at least one anchor is present; HasEntry/HasExit
 // disambiguate "absent" from "(0,0)".
-func parseCursivePos(gpos []byte, off int, out map[uint16]CursiveRecord) {
+func parseCursivePos(gpos []byte, off int, lookupFlag uint16, out map[uint16]CursiveRecord) {
 	if off+6 > len(gpos) {
 		return
 	}
@@ -884,6 +912,7 @@ func parseCursivePos(gpos []byte, off int, out map[uint16]CursiveRecord) {
 		entryOffRaw := int(be16(gpos, rec))
 		exitOffRaw := int(be16(gpos, rec+2))
 		var cr CursiveRecord
+		cr.LookupFlag = lookupFlag
 		if entryOffRaw != 0 {
 			if a, ok := parseAnchor(gpos, off+entryOffRaw); ok {
 				cr.Entry = a
@@ -982,6 +1011,11 @@ func parseLigatureArray(gpos []byte, off int, ligCov []uint16, markClassCount in
 		if attachOff+2+componentCount*rowSize > len(gpos) {
 			continue
 		}
+		// Invariant maintained by this constructor: Components[c] and
+		// Present[c] are allocated with the same length (markClassCount)
+		// for every component c. MarkLigatureOffset relies on this so a
+		// single bounds check against Components[c] also covers
+		// Present[c][mark.Class].
 		components := make([][]Anchor, componentCount)
 		present := make([][]bool, componentCount)
 		for c := 0; c < componentCount; c++ {

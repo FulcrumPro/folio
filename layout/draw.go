@@ -132,6 +132,15 @@ func drawTextLine(ctx DrawContext, words []Word, x, baselineY, maxWidth float64,
 	curColor := Color{R: -1, G: -1, B: -1}
 	curX := x
 	for i, word := range words {
+		// Resolve CSS counter(page)/counter(pages) placeholders carried
+		// in body-flow text. The reserved width was computed at layout
+		// time; substituted digits fit within it for typical document
+		// lengths. Width is intentionally not recomputed: keeping the
+		// reservation preserves stable line breaks across digit-count
+		// transitions (page 9→10, 99→100).
+		if hasCounterPlaceholder(word.Text) {
+			word.Text = substituteCounters(word.Text, ctx.PageIdx, ctx.TotalPages)
+		}
 		// Inline-block words: skip text rendering (rendered as child PlacedBlocks).
 		if word.InlineBlock != nil {
 			if i < len(words)-1 {

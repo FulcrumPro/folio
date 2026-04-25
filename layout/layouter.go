@@ -102,6 +102,16 @@ type DrawContext struct {
 	// its actualText field; tests that build a DrawContext directly may
 	// leave it false to suppress emission.
 	ActualText bool
+	// PageIdx is the 0-based index of the page this draw call targets.
+	// Used to substitute CSS counter(page) placeholders in body-flow
+	// text. Tests building a DrawContext for non-paged rendering may
+	// leave this zero.
+	PageIdx int
+	// TotalPages is the final page count of the document, set during the
+	// emission pass after pagination completes. Used to substitute
+	// counter(pages) placeholders. Zero indicates the count is not yet
+	// known; placeholders remain in the emitted text in that case.
+	TotalPages int
 }
 
 // measureConsumed returns the height an element consumes at the given width.

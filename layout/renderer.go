@@ -204,8 +204,11 @@ func (r *Renderer) drawMarginBoxes(ctx *DrawContext, pageIdx int, margins Margin
 			continue
 		}
 		// Resolve {counter(page)} and {counter(pages)} placeholders.
-		text = strings.ReplaceAll(text, "{counter(page)}", fmt.Sprintf("%d", pageIdx+1))
-		text = strings.ReplaceAll(text, "{counter(pages)}", "##TOTAL_PAGES##")
+		// pageIdx is 0-based; counter(page) is 1-based per CSS GCPM.
+		// counter(pages) uses ctx.TotalPages, set during the emission
+		// pass once pagination is final.
+		text = strings.ReplaceAll(text, CounterPagePlaceholder, fmt.Sprintf("%d", pageIdx+1))
+		text = strings.ReplaceAll(text, CounterPagesPlaceholder, fmt.Sprintf("%d", ctx.TotalPages))
 
 		// Resolve {string(name)} placeholders from CSS string-set.
 		text = r.resolveStringRefs(text, pageIdx)

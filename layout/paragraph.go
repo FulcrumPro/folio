@@ -511,30 +511,34 @@ func runMeasurer(run TextRun) font.TextMeasurer {
 //
 // Arabic words are routed through ShapeArabic, which substitutes
 // Presentation Forms-B codepoints in place and leaves Width to be
-// measured via MeasureString. Devanagari words with an embedded font
-// and parsed GSUB tables are routed through ShapeDevanagari, which
-// returns a glyph ID stream; the stream is stored on w.GIDs and
-// measured via the EmbeddedFont.MeasureGIDs fast path. All other
-// scripts pass through unchanged.
+// measured via MeasureString. Indic words (Devanagari, Bengali,
+// Gujarati, Gurmukhi, Kannada, Malayalam, Oriya, Tamil, Telugu) are
+// routed through ShapeIndicWithEmbedded, which returns a glyph ID
+// stream; the stream is stored on w.GIDs and measured via the
+// EmbeddedFont.MeasureGIDs fast path. All other scripts pass
+// through unchanged.
 func shapeAndMeasureWord(w *Word, run TextRun, measurer font.TextMeasurer) {
 	origText := w.Text
 
-	// Devanagari path: try the Indic shaper first. It only fires for
-	// EmbeddedFont runs that expose GSUB; otherwise we fall through to
-	// the rune-based path so fonts without Devanagari tables still
+	// Indic path: try the shaper first. It only fires for
+	// EmbeddedFont runs that expose GSUB; otherwise we fall through
+	// to the rune-based path so fonts without Indic tables still
 	// render (if imperfectly) via the ordinary MeasureString.
-	if w.Embedded != nil && isDevanagariWord(origText) {
-		if gids, ok := ShapeDevanagariWithEmbedded(origText, w.Embedded); ok {
-			w.GIDs = gids
-			w.Width = w.Embedded.MeasureGIDs(gids, run.FontSize)
-			if run.LetterSpacing != 0 && len(gids) > 1 {
-				w.Width += run.LetterSpacing * float64(len(gids)-1)
+	if w.Embedded != nil {
+		if sc := indicScriptOfWord(origText); sc != ScriptCommon {
+			if gids, ok := ShapeIndicWithEmbedded(origText, w.Embedded, sc); ok {
+				w.GIDs = gids
+				w.Width = w.Embedded.MeasureGIDs(gids, run.FontSize)
+				if run.LetterSpacing != 0 && len(gids) > 1 {
+					w.Width += run.LetterSpacing * float64(len(gids)-1)
+				}
+				// Preserve the original codepoints for ActualText
+				// recovery and for copy/paste; Text stays equal to
+				// OriginalText so the bidi and wrapping passes still
+				// see real characters.
+				w.OriginalText = origText
+				return
 			}
-			// Preserve the original codepoints for ActualText recovery
-			// and for copy/paste; Text stays equal to OriginalText so
-			// the bidi and wrapping passes still see real characters.
-			w.OriginalText = origText
-			return
 		}
 	}
 
@@ -547,22 +551,6 @@ func shapeAndMeasureWord(w *Word, run TextRun, measurer font.TextMeasurer) {
 	if w.Text != origText {
 		w.OriginalText = origText
 	}
-}
-
-// isDevanagariWord reports whether s contains any Devanagari
-// codepoints. Since splitMixedBidiWord has already segmented at
-// script transitions, any Devanagari rune in s means the whole word
-// is Devanagari (modulo inherited Common runes such as ZWJ/ZWNJ).
-// The check covers the main Devanagari block (U+0900..U+097F); the
-// Devanagari Extended block (U+A8E0..U+A8FF) is out of scope for
-// this PR and will not route through the Indic shaper.
-func isDevanagariWord(s string) bool {
-	for _, r := range s {
-		if r >= devaBlockStart && r <= devaBlockEnd {
-			return true
-		}
-	}
-	return false
 }
 
 // computeBaseline returns the distance from the top of the line box to the

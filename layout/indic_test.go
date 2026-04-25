@@ -101,7 +101,7 @@ func TestDevaCategoryOf(t *testing.T) {
 		{0x0041, devaCatOther, "Latin A"}, // outside block
 	}
 	for _, tc := range cases {
-		if got := devaCategoryOf(tc.r); got != tc.want {
+		if got := devanagariConfig.categoryOf(tc.r); got != tc.want {
 			t.Errorf("%s (U+%04X): got %d, want %d", tc.name, tc.r, got, tc.want)
 		}
 	}
@@ -151,7 +151,7 @@ func TestScanDevanagariSyllables(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		got := scanDevanagariSyllables([]rune(tc.input))
+		got := scanIndicSyllables([]rune(tc.input), devanagariConfig)
 		if !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%s: got %+v, want %+v", tc.name, got, tc.want)
 		}

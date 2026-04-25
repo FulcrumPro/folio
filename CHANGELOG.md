@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed (breaking)
+
+- **`html.Options.BasePath` removed; `BaseFS` is the single way to resolve local assets** — the v0.7.x compromise that kept both fields is gone. Callers pass any `fs.FS` (`embed.FS`, `os.DirFS(dir)`, `(*os.Root).FS()`, `fstest.MapFS`) and every local reference — `<img src>`, `<link href>`, `@font-face url()`, `background-image: url()`, and `Options.FallbackFontPath` — flows through it. Paths are normalised to `fs.FS` conventions before the read: forward slashes, no leading `/`, no `..` traversal. A leading `/` in document `src`/`href` is treated as web-style root-of-`BaseFS` (matching how `<base href="/">` works in browsers) instead of an absolute filesystem path. With `BaseFS` nil, every local-asset reference fails — the document is expected to inline its assets via `data:` URIs. The C ABI signature is unchanged: `folio_document_add_html_with_options` still takes a `basePath` C string and wraps it as `os.DirFS(basePath)` internally (#85)
+- **`@font-face` URLs resolve relative to their containing stylesheet** — a linked `<link rel="stylesheet" href="css/site.css">` containing `@font-face { src: url(../fonts/Inter.ttf); }` now resolves to `fonts/Inter.ttf` from the `BaseFS` root, not from the document root. HTTP-origin stylesheets resolve relative URLs as HTTP, FS-origin stylesheets resolve them through `BaseFS`. Inline `<style>` blocks continue to resolve relative URLs from `BaseFS` root. Documents that previously relied on the root-anchored behavior need to use root-relative `/fonts/Inter.ttf` or move the `@font-face` rule into an inline `<style>`
+
+### Added
+
+- **`html.Options.Logger` (`*slog.Logger`)** — receives warn-level events when a local or remote asset fails to load: missing fonts in `@font-face`, unreadable linked stylesheets, image fetch errors that fall back to alt text. Defaults to nil (silent). Pair with `slog.NewTextHandler(os.Stderr, nil)` during development to surface what would otherwise be swallowed (#85)
+- **`html.Options.Client` (`*http.Client`)** — HTTP client used for remote fetches (`<img>`, linked stylesheets, `@font-face url(http://...)`). Lets callers configure timeouts, transport, and proxies; mock the network in tests via `httptest.NewServer`; or share connection pools with surrounding code. Defaults to `http.DefaultClient` (#85)
+- **`tmpl.RenderFile` / `tmpl.RenderFileTo` auto-populate `BaseFS`** — when the caller's `Options.BaseFS` is nil, the helpers default it to `os.DirFS(filepath.Dir(templatePath))` so that a template referencing `<img src="logo.png">` next to itself resolves without extra wiring
+
 ### Fixed
 
 - **SVG `preserveAspectRatio` slice viewport clip** — when an SVG is drawn with `slice` meet-or-slice, the renderer now emits a PDF clip path on the target rectangle before the viewport transform. Previously the uniform scale was applied correctly but content outside the target rectangle leaked onto the page. Callers that already clipped externally will continue to work (#196)

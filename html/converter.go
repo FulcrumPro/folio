@@ -4,11 +4,12 @@
 package html
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"math"
 	"net/http"
-	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -24,27 +25,25 @@ import (
 type Options struct {
 	// DefaultFontSize is the root font size in points (default 12).
 	DefaultFontSize float64
-	// BasePath is the base directory for resolving relative image/font/CSS paths.
-	// Used when BaseFS is nil. Paths are forwarded with filepath.Join, so
-	// OS-native separators and absolute references both work.
-	BasePath string
-	// BaseFS is the filesystem used to resolve relative paths for images,
-	// fonts, and linked stylesheets. When non-nil, it takes precedence over
-	// BasePath for relative paths. Absolute paths still fall through to the
-	// OS filesystem so existing absolute path references keep working.
-	// System-font fallback lookup in FallbackFontPath / hardcoded candidates
-	// is unaffected and always reads from the OS filesystem.
-	// Typical uses: embed.FS for embedded assets, fstest.MapFS in tests,
-	// os.DirFS(dir) or (*os.Root).FS() for sandboxed directory access.
-	// BaseFS paths must be forward-slash separated (fs.FS convention).
+	// BaseFS resolves all local paths referenced by the document: images,
+	// fonts, linked stylesheets, background-image url(), and FallbackFontPath.
+	// Pass embed.FS for embedded assets, os.DirFS(dir) or (*os.Root).FS() for
+	// sandboxed directory access, fstest.MapFS in tests.
+	// Paths are normalised to fs.FS conventions: forward slashes only, no
+	// leading slash, no ".." traversal — invalid paths are rejected before
+	// the read. A leading "/" in src/href is treated as web-style root and
+	// stripped (resolved from the BaseFS root). When BaseFS is nil, every
+	// local-asset reference fails — the document is expected to inline its
+	// assets via data: URIs.
 	BaseFS fs.FS
 	// PageWidth is the page width in points (default 612 = US Letter).
 	PageWidth float64
 	// PageHeight is the page height in points (default 792 = US Letter).
 	PageHeight float64
-	// FallbackFontPath is the path to a Unicode-capable TTF/OTF font used
-	// when text contains characters outside WinAnsiEncoding (e.g. CJK, emoji).
-	// If empty, the converter searches common system font locations.
+	// FallbackFontPath is a Unicode-capable TTF/OTF font used when text
+	// contains characters outside WinAnsiEncoding (e.g. CJK, emoji). When
+	// BaseFS is set, the path is resolved through it first; otherwise the
+	// converter searches common system font locations.
 	FallbackFontPath string
 	// URLPolicy is called before the converter fetches a remote URL
 	// (for <img src="http://...">, background-image: url(), etc.).
@@ -54,6 +53,10 @@ type Options struct {
 	// Client is the HTTP client used to fetch remote images and stylesheets.
 	// If nil, http.DefaultClient is used.
 	Client *http.Client
+	// Logger receives warn-level events when an asset fails to load: missing
+	// fonts in @font-face, unreadable linked stylesheets, image fetch errors
+	// that fall back to alt text. If nil, these events are dropped.
+	Logger *slog.Logger
 }
 
 // URLPolicy controls whether the HTML converter may fetch a remote URL.
@@ -64,59 +67,71 @@ type URLPolicy func(url string) error
 // defaults returns a copy of Options with zero-value fields replaced by sensible defaults.
 func (o *Options) defaults() Options {
 	out := Options{DefaultFontSize: 12, PageWidth: 612, PageHeight: 792}
-	if o != nil {
-		if o.DefaultFontSize > 0 {
-			out.DefaultFontSize = o.DefaultFontSize
-		}
-		out.BasePath = o.BasePath
-		out.BaseFS = o.BaseFS
-		if o.PageWidth > 0 {
-			out.PageWidth = o.PageWidth
-		}
-		if o.PageHeight > 0 {
-			out.PageHeight = o.PageHeight
-		}
-		if o.FallbackFontPath != "" {
-			out.FallbackFontPath = o.FallbackFontPath
-		}
-		if o.URLPolicy != nil {
-			out.URLPolicy = o.URLPolicy
-		}
-		if o.Client != nil {
-			out.Client = o.Client
-		}
+	if o == nil {
+		return out
 	}
+	if o.DefaultFontSize > 0 {
+		out.DefaultFontSize = o.DefaultFontSize
+	}
+	if o.PageWidth > 0 {
+		out.PageWidth = o.PageWidth
+	}
+	if o.PageHeight > 0 {
+		out.PageHeight = o.PageHeight
+	}
+	out.BaseFS = o.BaseFS
+	out.FallbackFontPath = o.FallbackFontPath
+	out.URLPolicy = o.URLPolicy
+	out.Client = o.Client
+	out.Logger = o.Logger
 	return out
 }
 
-// readAsset reads a relative or absolute path using BaseFS / BasePath rules.
-// Resolution order:
-//  1. Absolute paths → os.ReadFile (bypasses BaseFS so existing absolute-path
-//     references in CSS/HTML keep working even when BaseFS is set).
-//  2. BaseFS != nil → fs.ReadFile(BaseFS, normalized-p). The path is normalized
-//     to fs.FS form: backslashes → slashes, a leading "/" is stripped, and the
-//     result must satisfy fs.ValidPath (so ".." escapes are rejected up front
-//     rather than relying on each fs.FS implementation to enforce it).
-//  3. BasePath != "" → os.ReadFile(filepath.Join(BasePath, p)).
-//  4. Fallback → os.ReadFile(p) (cwd-relative).
-func readAsset(baseFS fs.FS, basePath, p string) ([]byte, error) {
-	if filepath.IsAbs(p) {
-		return os.ReadFile(p)
+// errNoBaseFS is returned by readAsset when a relative or root-anchored path is
+// requested but the caller did not configure Options.BaseFS.
+var errNoBaseFS = errors.New("no BaseFS configured for local asset resolution")
+
+// readAsset resolves p through baseFS. Path normalisation:
+//   - Backslashes are converted to forward slashes (fs.FS convention).
+//   - A leading "/" is stripped (web-style root → BaseFS root).
+//   - "./" prefix is dropped; the result is path.Clean'ed.
+//   - The cleaned path must satisfy fs.ValidPath, so ".." traversal is
+//     rejected before fs.ReadFile is consulted.
+//
+// Returns errNoBaseFS when baseFS is nil. Callers that need OS access should
+// pass os.DirFS("/") (or a more specific root) explicitly.
+func readAsset(baseFS fs.FS, p string) ([]byte, error) {
+	if baseFS == nil {
+		return nil, errNoBaseFS
 	}
-	if baseFS != nil {
-		fsPath := filepath.ToSlash(p)
-		fsPath = strings.TrimPrefix(fsPath, "./")
-		fsPath = strings.TrimPrefix(fsPath, "/")
-		fsPath = path.Clean(fsPath)
-		if !fs.ValidPath(fsPath) {
-			return nil, fmt.Errorf("invalid path for BaseFS: %q", p)
-		}
-		return fs.ReadFile(baseFS, fsPath)
+	fsPath, err := normaliseFSPath(p)
+	if err != nil {
+		return nil, err
 	}
-	if basePath != "" {
-		return os.ReadFile(filepath.Join(basePath, p))
+	return fs.ReadFile(baseFS, fsPath)
+}
+
+// normaliseFSPath converts a user-supplied src/href into an fs.FS-valid path.
+// Errors when the path is empty, contains a backslash that produces an invalid
+// path after conversion, or escapes the root via "..". Backslashes are
+// converted unconditionally (filepath.ToSlash is a no-op on non-Windows
+// hosts, so we fold "\" → "/" explicitly so Windows-authored paths behave
+// the same on macOS / Linux).
+func normaliseFSPath(p string) (string, error) {
+	if p == "" {
+		return "", fmt.Errorf("empty path")
 	}
-	return os.ReadFile(p)
+	fsPath := strings.ReplaceAll(p, `\`, "/")
+	fsPath = strings.TrimPrefix(fsPath, "./")
+	fsPath = strings.TrimPrefix(fsPath, "/")
+	if fsPath == "" {
+		return "", fmt.Errorf("empty path after normalisation: %q", p)
+	}
+	fsPath = path.Clean(fsPath)
+	if !fs.ValidPath(fsPath) {
+		return "", fmt.Errorf("invalid path for BaseFS: %q", p)
+	}
+	return fsPath, nil
 }
 
 // httpClientOrDefault returns the configured HTTP client or http.DefaultClient.
@@ -125,6 +140,14 @@ func httpClientOrDefault(c *http.Client) *http.Client {
 		return c
 	}
 	return http.DefaultClient
+}
+
+// loggerOrDiscard returns the configured logger or a no-op logger.
+func loggerOrDiscard(l *slog.Logger) *slog.Logger {
+	if l != nil {
+		return l
+	}
+	return slog.New(slog.DiscardHandler)
 }
 
 // ConvertResult holds the full result of an HTML → layout conversion,
@@ -232,9 +255,13 @@ func ConvertFull(htmlStr string, opts *Options) (*ConvertResult, error) {
 	style := defaultStyle()
 	style.FontSize = o.DefaultFontSize
 
-	ss := parseStyleBlocks(doc, o.BaseFS, o.BasePath, makeCSSFetcher(o.URLPolicy, o.Client))
+	logger := loggerOrDiscard(o.Logger)
+	logStylesheetErr := func(href string, err error) {
+		logger.Warn("folio/html: stylesheet load failed", "href", href, "error", err)
+	}
+	ss := parseStyleBlocks(doc, o.BaseFS, makeCSSFetcher(o.URLPolicy, o.Client), logStylesheetErr)
 
-	c := &converter{opts: o, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth, counters: make(map[string][]int), urlPolicy: o.URLPolicy}
+	c := &converter{opts: o, logger: logger, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth, counters: make(map[string][]int), urlPolicy: o.URLPolicy}
 
 	// Parse @page config early so containerWidth reflects the actual page size
 	// (e.g. landscape pages have a wider containerWidth).
@@ -280,9 +307,13 @@ func Convert(htmlStr string, opts *Options) ([]layout.Element, error) {
 	style := defaultStyle()
 	style.FontSize = o.DefaultFontSize
 
-	ss := parseStyleBlocks(doc, o.BaseFS, o.BasePath, makeCSSFetcher(o.URLPolicy, o.Client))
+	logger := loggerOrDiscard(o.Logger)
+	logStylesheetErr := func(href string, err error) {
+		logger.Warn("folio/html: stylesheet load failed", "href", href, "error", err)
+	}
+	ss := parseStyleBlocks(doc, o.BaseFS, makeCSSFetcher(o.URLPolicy, o.Client), logStylesheetErr)
 
-	c := &converter{opts: o, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth, counters: make(map[string][]int), urlPolicy: o.URLPolicy}
+	c := &converter{opts: o, logger: logger, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth, counters: make(map[string][]int), urlPolicy: o.URLPolicy}
 
 	// Update containerWidth if @page specifies a different page size.
 	if len(ss.pageRules) > 0 {
@@ -301,6 +332,7 @@ func Convert(htmlStr string, opts *Options) ([]layout.Element, error) {
 
 type converter struct {
 	opts           Options
+	logger         *slog.Logger
 	rootFontSize   float64
 	sheet          *styleSheet
 	embeddedFonts  map[string]*font.EmbeddedFont // family+"|"+weight+"|"+style → embedded font
@@ -341,37 +373,118 @@ type pendingOverlay struct {
 }
 
 // loadFontFaces loads @font-face fonts into the converter's embeddedFonts map.
-// Supports both file paths and base64-encoded data URIs (data:font/truetype;base64,...).
-// Data URI support enables fully self-contained HTML templates without external
-// font file dependencies. File paths are resolved through BaseFS/BasePath.
+// Supports base64-encoded data URIs, http(s) URLs (fetched via Options.Client),
+// and BaseFS-relative paths. Paths are resolved relative to the stylesheet
+// they were declared in (its origin), so url("../fonts/x.ttf") inside
+// styles/site.css resolves to fonts/x.ttf at the BaseFS root. Inline <style>
+// blocks resolve from the BaseFS root.
+//
+// Failures (missing data, invalid font bytes, fetch errors) are reported
+// through Options.Logger at warn level and skipped — they never abort the
+// conversion.
 func (c *converter) loadFontFaces(faces []fontFaceRule) {
 	for _, ff := range faces {
 		src := ff.src
-		if src == "" {
-			continue
-		}
 
 		var face font.Face
+		var data []byte
 		var err error
 
-		if strings.HasPrefix(src, "data:") {
-			// Data URI: decode base64 font data inline.
+		switch {
+		case strings.HasPrefix(src, "data:"):
 			face, err = decodeFontDataURI(src)
-		} else {
-			var data []byte
-			data, err = readAsset(c.opts.BaseFS, c.opts.BasePath, src)
+		case isURL(src):
+			data, err = c.fetchFontBytes(src)
+			if err == nil {
+				face, err = font.ParseFont(data)
+			}
+		case isURL(ff.origin):
+			resolved := joinURL(ff.origin, src)
+			data, err = c.fetchFontBytes(resolved)
+			if err == nil {
+				face, err = font.ParseFont(data)
+			}
+		default:
+			resolved := joinFSPath(ff.origin, src)
+			data, err = readAsset(c.opts.BaseFS, resolved)
 			if err == nil {
 				face, err = font.ParseFont(data)
 			}
 		}
 
 		if err != nil {
-			continue // silently skip unloadable fonts
+			c.logger.Warn("folio/html: @font-face load failed",
+				"family", ff.family, "src", src, "origin", ff.origin, "error", err)
+			continue
 		}
 		ef := font.NewEmbeddedFont(face)
 		key := ff.family + "|" + ff.weight + "|" + ff.style
 		c.embeddedFonts[key] = ef
 	}
+}
+
+// joinFSPath resolves a relative src against the directory of an origin
+// stylesheet path. An absolute src (leading "/" or "\") or empty origin
+// resolves from the BaseFS root. A "../" in src is left for normaliseFSPath /
+// fs.ValidPath to reject upstream. Backslashes in either argument are
+// converted to forward slashes so Windows-authored paths behave the same on
+// every host (filepath.ToSlash is a no-op on non-Windows builds).
+func joinFSPath(origin, src string) string {
+	src = strings.ReplaceAll(src, `\`, "/")
+	if strings.HasPrefix(src, "/") {
+		return src
+	}
+	if origin == "" {
+		return src
+	}
+	dir := path.Dir(strings.ReplaceAll(origin, `\`, "/"))
+	if dir == "." || dir == "/" {
+		return src
+	}
+	return dir + "/" + src
+}
+
+// joinURL resolves a relative src against an HTTP origin URL. Absolute URLs
+// in src bypass the origin. Anchor-style "/" paths resolve against the
+// origin's host.
+func joinURL(originURL, src string) string {
+	if isURL(src) {
+		return src
+	}
+	slash := strings.Index(originURL, "://")
+	if slash < 0 {
+		return src
+	}
+	hostStart := slash + 3
+	hostEnd := strings.IndexByte(originURL[hostStart:], '/')
+	if hostEnd < 0 {
+		// origin has no path component; treat root as the host itself.
+		if strings.HasPrefix(src, "/") {
+			return originURL + src
+		}
+		return originURL + "/" + src
+	}
+	pathStart := hostStart + hostEnd
+	if strings.HasPrefix(src, "/") {
+		return originURL[:pathStart] + src
+	}
+	dir := path.Dir(originURL[pathStart:])
+	if dir == "." || dir == "/" {
+		return originURL[:pathStart] + "/" + src
+	}
+	resolved := path.Join(dir, src)
+	return originURL[:pathStart] + "/" + strings.TrimPrefix(resolved, "/")
+}
+
+// fetchFontBytes downloads a font file via Options.Client, honouring
+// URLPolicy. The 50MB limit matches fetchImage.
+func (c *converter) fetchFontBytes(url string) ([]byte, error) {
+	if c.urlPolicy != nil {
+		if err := c.urlPolicy(url); err != nil {
+			return nil, err
+		}
+	}
+	return httpGetBytes(httpClientOrDefault(c.opts.Client), url, 50<<20)
 }
 
 // decodeFontDataURI decodes a base64-encoded font from a data: URI.
@@ -401,17 +514,22 @@ func decodeFontDataURI(uri string) (font.Face, error) {
 // getFallbackFont returns a Unicode-capable embedded font for text that
 // can't be encoded in WinAnsiEncoding. The font is loaded lazily on first
 // use. Returns nil if no suitable font is found.
+//
+// Lookup order: Options.FallbackFontPath via BaseFS, then via OS, then a
+// hardcoded list of common system font locations.
 func (c *converter) getFallbackFont() *font.EmbeddedFont {
 	if c.fallbackFontLoaded {
 		return c.fallbackFont
 	}
 	c.fallbackFontLoaded = true
 
-	// Try user-specified path first.
 	if c.opts.FallbackFontPath != "" {
-		if face, err := font.LoadFont(c.opts.FallbackFontPath); err == nil {
+		if face, err := c.loadFallbackFont(c.opts.FallbackFontPath); err == nil {
 			c.fallbackFont = font.NewEmbeddedFont(face)
 			return c.fallbackFont
+		} else {
+			c.logger.Warn("folio/html: FallbackFontPath load failed",
+				"path", c.opts.FallbackFontPath, "error", err)
 		}
 	}
 
@@ -455,6 +573,27 @@ func (c *converter) getFallbackFont() *font.EmbeddedFont {
 	}
 
 	return nil
+}
+
+// loadFallbackFont resolves p first through BaseFS, then through the OS
+// filesystem when BaseFS is nil or the path is missing. Paths that match
+// filepath.IsAbs for the host OS skip BaseFS entirely — users almost always
+// configure BaseFS for their assets directory, and an absolute fallback path
+// is most often a system font. A BaseFS miss followed by a successful OS
+// load is logged at debug level so the BaseFS attempt remains observable.
+func (c *converter) loadFallbackFont(p string) (font.Face, error) {
+	if filepath.IsAbs(p) {
+		return font.LoadFont(p)
+	}
+	if c.opts.BaseFS != nil {
+		data, baseErr := readAsset(c.opts.BaseFS, p)
+		if baseErr == nil {
+			return font.ParseFont(data)
+		}
+		c.logger.Debug("folio/html: FallbackFontPath not in BaseFS, trying OS",
+			"path", p, "error", baseErr)
+	}
+	return font.LoadFont(p)
 }
 
 // resolveFontForText returns the best font for the given text. If the text

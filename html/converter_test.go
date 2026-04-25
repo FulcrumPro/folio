@@ -1594,7 +1594,7 @@ func TestConvertFontFamily(t *testing.T) {
 
 func TestCSSParseBasic(t *testing.T) {
 	ss := &styleSheet{}
-	ss.parseCSS("p { color: red; font-size: 14px }")
+	ss.parseCSS("p { color: red; font-size: 14px }", "")
 	if len(ss.rules) != 1 {
 		t.Fatalf("expected 1 rule, got %d", len(ss.rules))
 	}
@@ -1605,7 +1605,7 @@ func TestCSSParseBasic(t *testing.T) {
 
 func TestCSSParseMultipleRules(t *testing.T) {
 	ss := &styleSheet{}
-	ss.parseCSS("h1 { color: blue } p { margin: 10px }")
+	ss.parseCSS("h1 { color: blue } p { margin: 10px }", "")
 	if len(ss.rules) != 2 {
 		t.Fatalf("expected 2 rules, got %d", len(ss.rules))
 	}
@@ -1613,7 +1613,7 @@ func TestCSSParseMultipleRules(t *testing.T) {
 
 func TestCSSParseComments(t *testing.T) {
 	ss := &styleSheet{}
-	ss.parseCSS("/* comment */ p { color: red } /* another */")
+	ss.parseCSS("/* comment */ p { color: red } /* another */", "")
 	if len(ss.rules) != 1 {
 		t.Fatalf("expected 1 rule, got %d", len(ss.rules))
 	}
@@ -4176,7 +4176,7 @@ func TestConvertExternalCSS(t *testing.T) {
 	_ = os.WriteFile(cssPath, []byte("p { color: red; font-size: 24px; }"), 0644)
 
 	htmlStr := `<html><head><link rel="stylesheet" href="style.css"></head><body><p>Styled</p></body></html>`
-	elems, err := Convert(htmlStr, &Options{BasePath: dir})
+	elems, err := Convert(htmlStr, &Options{BaseFS: os.DirFS(dir)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4191,7 +4191,7 @@ func TestConvertExternalCSS(t *testing.T) {
 
 func TestConvertExternalCSSMissingFile(t *testing.T) {
 	htmlStr := `<html><head><link rel="stylesheet" href="missing.css"></head><body><p>OK</p></body></html>`
-	elems, err := Convert(htmlStr, &Options{BasePath: "/nonexistent"})
+	elems, err := Convert(htmlStr, &Options{BaseFS: os.DirFS(t.TempDir())})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4209,7 +4209,7 @@ func TestConvertExternalCSSOverriddenByStyle(t *testing.T) {
 		<link rel="stylesheet" href="base.css">
 		<style>p { font-size: 20px; }</style>
 	</head><body><p>Text</p></body></html>`
-	elems, err := Convert(htmlStr, &Options{BasePath: dir})
+	elems, err := Convert(htmlStr, &Options{BaseFS: os.DirFS(dir)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5911,7 +5911,7 @@ func TestBackgroundImageURL(t *testing.T) {
 	imgPath := createTestJPEG(t)
 	dir := filepath.Dir(imgPath)
 	htmlStr := `<div style="background-image: url('test.jpg'); width: 100px; height: 100px;"><p>Hello</p></div>`
-	elems, err := Convert(htmlStr, &Options{BasePath: dir})
+	elems, err := Convert(htmlStr, &Options{BaseFS: os.DirFS(dir)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6009,7 +6009,7 @@ func TestBackgroundShorthandWithImage(t *testing.T) {
 	imgPath := createTestJPEG(t)
 	dir := filepath.Dir(imgPath)
 	htmlStr := `<div style="background: url('test.jpg') no-repeat center; padding: 10px;"><p>Shorthand</p></div>`
-	elems, err := Convert(htmlStr, &Options{BasePath: dir})
+	elems, err := Convert(htmlStr, &Options{BaseFS: os.DirFS(dir)})
 	if err != nil {
 		t.Fatal(err)
 	}

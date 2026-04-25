@@ -23,3 +23,8 @@ func makeCSSFetcher(_ URLPolicy, _ *http.Client) func(string) ([]byte, error) {
 func (c *converter) fetchImage(url string) (*folioimage.Image, error) {
 	return nil, fmt.Errorf("HTTP image URLs not supported in WASM (use data: URIs instead): %s", url)
 }
+
+// httpGetBytes is a stub for WASM builds — net/http is not usable in browser.
+func httpGetBytes(_ *http.Client, url string, _ int64) ([]byte, error) {
+	return nil, fmt.Errorf("HTTP fetch not supported in WASM: %s", url)
+}

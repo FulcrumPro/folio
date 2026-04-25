@@ -164,12 +164,12 @@ type TextRun struct {
 
 // NewRun creates a TextRun with a standard font.
 func NewRun(text string, f *font.Standard, fontSize float64) TextRun {
-	return TextRun{Text: text, Font: f, FontSize: fontSize}
+	return TextRun{Text: normalizeText(text), Font: f, FontSize: fontSize}
 }
 
 // NewRunEmbedded creates a TextRun with an embedded font.
 func NewRunEmbedded(text string, ef *font.EmbeddedFont, fontSize float64) TextRun {
-	return TextRun{Text: text, Embedded: ef, FontSize: fontSize}
+	return TextRun{Text: normalizeText(text), Embedded: ef, FontSize: fontSize}
 }
 
 // RunInline creates a TextRun that represents an inline element.

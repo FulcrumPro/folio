@@ -66,7 +66,11 @@ func NewTabbedLineEmbedded(ef *font.EmbeddedFont, fontSize float64, stops ...Tab
 // SetSegments sets the text segments. The first segment is placed at x=0,
 // subsequent segments are placed at the corresponding tab stop.
 func (tl *TabbedLine) SetSegments(segments ...string) *TabbedLine {
-	tl.segments = segments
+	normalized := make([]string, len(segments))
+	for i, s := range segments {
+		normalized[i] = normalizeText(s)
+	}
+	tl.segments = normalized
 	return tl
 }
 

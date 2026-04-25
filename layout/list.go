@@ -113,19 +113,27 @@ func (l *List) SetMarkerFontSize(size float64) *List {
 
 // AddItem adds a text item to the list.
 func (l *List) AddItem(text string) *List {
-	l.items = append(l.items, listItem{text: text})
+	l.items = append(l.items, listItem{text: normalizeText(text)})
 	return l
 }
 
 // AddItemRuns adds an item with styled text runs, supporting links,
 // mixed fonts, and other inline formatting within the list item.
+//
+// The Text field of every run is NFC-normalized into a freshly
+// allocated slice so List measurement (MinWidth, MaxWidth) sees the
+// same canonical form as Layout, and the caller's slice is not
+// mutated.
 func (l *List) AddItemRuns(runs []TextRun) *List {
-	l.items = append(l.items, listItem{runs: runs})
+	l.items = append(l.items, listItem{runs: normalizeRuns(runs)})
 	return l
 }
 
 // AddItemRunsWithSubList adds a styled-runs item and returns a nested
 // sub-list under it.
+//
+// The run slice is copied and NFC-normalized so the caller's slice is
+// not mutated and List measurement sees canonical text.
 func (l *List) AddItemRunsWithSubList(runs []TextRun) *List {
 	sub := &List{
 		style:    ListUnordered,
@@ -135,7 +143,7 @@ func (l *List) AddItemRunsWithSubList(runs []TextRun) *List {
 		indent:   l.indent,
 		leading:  l.leading,
 	}
-	l.items = append(l.items, listItem{runs: runs, subList: sub})
+	l.items = append(l.items, listItem{runs: normalizeRuns(runs), subList: sub})
 	return sub
 }
 
@@ -150,7 +158,7 @@ func (l *List) AddItemWithSubList(text string) *List {
 		indent:   l.indent,
 		leading:  l.leading,
 	}
-	l.items = append(l.items, listItem{text: text, subList: sub})
+	l.items = append(l.items, listItem{text: normalizeText(text), subList: sub})
 	return sub
 }
 

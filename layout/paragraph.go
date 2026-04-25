@@ -544,9 +544,18 @@ func shapeAndMeasureWord(w *Word, run TextRun, measurer font.TextMeasurer) {
 
 	// Arabic / general rune path.
 	w.Text = ShapeArabic(w.Text)
-	w.Width = measurer.MeasureString(w.Text, run.FontSize)
-	if run.LetterSpacing != 0 && len([]rune(w.Text)) > 1 {
-		w.Width += run.LetterSpacing * float64(len([]rune(w.Text))-1)
+	// CSS counter(page) / counter(pages) placeholders are resolved at
+	// content-stream emission once pagination is final. Measure them
+	// here using a fixed-digit reservation so line breaks stay valid
+	// after substitution. Width of the actual digits is bounded by the
+	// reserved width for typical document lengths.
+	measureText := w.Text
+	if hasCounterPlaceholder(measureText) {
+		measureText = expandCountersForMeasure(measureText)
+	}
+	w.Width = measurer.MeasureString(measureText, run.FontSize)
+	if run.LetterSpacing != 0 && len([]rune(measureText)) > 1 {
+		w.Width += run.LetterSpacing * float64(len([]rune(measureText))-1)
 	}
 	if w.Text != origText {
 		w.OriginalText = origText
@@ -1244,9 +1253,13 @@ func (p *Paragraph) measureWords(maxWidth float64) ([]Word, float64) {
 				if punct != "" {
 					prev.Text += punct
 					prevMeasurer := wordMeasurer(*prev)
-					prev.Width = prevMeasurer.MeasureString(prev.Text, prev.FontSize)
+					prevMeasureText := prev.Text
+					if hasCounterPlaceholder(prevMeasureText) {
+						prevMeasureText = expandCountersForMeasure(prevMeasureText)
+					}
+					prev.Width = prevMeasurer.MeasureString(prevMeasureText, prev.FontSize)
 					if prev.LetterSpacing != 0 {
-						prev.Width += prev.LetterSpacing * float64(len([]rune(prev.Text))-1)
+						prev.Width += prev.LetterSpacing * float64(len([]rune(prevMeasureText))-1)
 					}
 					text = rest
 				}

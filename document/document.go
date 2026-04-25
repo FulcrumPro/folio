@@ -581,14 +581,6 @@ func (d *Document) WriteTo(w io.Writer) (int64, error) {
 func (d *Document) WriteToWithOptions(w io.Writer, opts WriteOptions) (int64, error) {
 	allPages, structTags := d.buildAllPages()
 
-	// Second pass: replace ##TOTAL_PAGES## placeholder with actual count.
-	totalStr := strconv.Itoa(len(allPages))
-	for _, p := range allPages {
-		if p.stream != nil {
-			p.stream.ReplaceInBytes("##TOTAL_PAGES##", totalStr)
-		}
-	}
-
 	version := "1.7"
 	if d.pdfA != nil {
 		version = pdfVersionForPdfA(d.pdfA.Level)

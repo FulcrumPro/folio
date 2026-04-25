@@ -39,11 +39,19 @@ func (r *Renderer) renderWithPlans() []PageResult {
 	queue := make([]Element, len(r.elements))
 	copy(queue, r.elements)
 
+	// Per-page record captured during pagination. Drawing is deferred to
+	// a second pass so DrawContext.TotalPages can carry the final page
+	// count when CSS counter(pages) placeholders are substituted in body
+	// flow text. This also lets margin boxes resolve counter(pages)
+	// directly without relying on a post-stream byte replacement.
+	type pageRecord struct {
+		blocks  []PlacedBlock
+		margins Margins
+		idx     int
+	}
+	var records []pageRecord
+
 	var curBlocks []PlacedBlock
-	curPageStream := content.NewStream()
-	curFonts := []FontEntry{}
-	curImages := []ImageEntry{}
-	curLinks := []LinkArea{}
 	remainingHeight := usableHeight
 	curY := 0.0
 	pageIdx := 0
@@ -55,45 +63,18 @@ func (r *Renderer) renderWithPlans() []PageResult {
 		r.captureStringSets(curBlocks)
 		r.snapshotStrings()
 
-		// Draw all placed blocks into the content stream.
-		ctx := DrawContext{
-			Stream: curPageStream,
-			Page: &PageResult{
-				Stream: curPageStream,
-				Fonts:  curFonts,
-				Images: curImages,
-				Links:  curLinks,
-			},
-			ActualText: r.actualText,
-		}
-		for _, block := range curBlocks {
-			drawBlock(block, curMargins.Left, r.pageHeight-curMargins.Top, &ctx, r.tagged, &r.structTags, pageIdx)
-		}
-
-		// Draw margin boxes (headers/footers from @page CSS).
-		totalPages := len(queue) // approximate; will be corrected in second pass
-		_ = totalPages
-		r.drawMarginBoxes(&ctx, pageIdx, curMargins)
-
-		pages = append(pages, PageResult{
-			Stream:     curPageStream,
-			Fonts:      ctx.Page.Fonts,
-			Images:     ctx.Page.Images,
-			Links:      ctx.Page.Links,
-			ExtGStates: ctx.Page.ExtGStates,
-			Headings:   ctx.Page.Headings,
+		records = append(records, pageRecord{
+			blocks:  curBlocks,
+			margins: curMargins,
+			idx:     pageIdx,
 		})
 	}
 
 	startNewPage := func() {
-		if len(curBlocks) > 0 || curPageStream.Bytes() != nil {
+		if len(curBlocks) > 0 {
 			flushPage()
 		}
 		curBlocks = nil
-		curPageStream = content.NewStream()
-		curFonts = nil
-		curImages = nil
-		curLinks = nil
 		pageIdx++
 		// Recalculate margins for the new page.
 		maxWidth, usableHeight, curMargins = pageMarginsFor(pageIdx)
@@ -149,10 +130,6 @@ func (r *Renderer) renderWithPlans() []PageResult {
 		if _, ok := elem.(*AreaBreak); ok {
 			flushPage()
 			curBlocks = nil
-			curPageStream = content.NewStream()
-			curFonts = nil
-			curImages = nil
-			curLinks = nil
 			remainingHeight = usableHeight
 			curY = 0
 			floats = nil
@@ -279,12 +256,40 @@ func (r *Renderer) renderWithPlans() []PageResult {
 	// Flush the last page.
 	if len(curBlocks) > 0 {
 		flushPage()
-	} else if len(pages) == 0 {
+	} else if len(records) == 0 {
 		// Ensure at least one page.
 		if autoHeight {
 			r.pageHeight = r.margins.Top + r.margins.Bottom
 		}
-		pages = append(pages, PageResult{Stream: content.NewStream()})
+		records = append(records, pageRecord{idx: 0, margins: r.marginsForPage(0)})
+	}
+
+	// Emission pass: now that pagination is final, draw each page with
+	// the resolved total page count available for counter(pages)
+	// substitution.
+	totalPages := len(records)
+	for _, rec := range records {
+		stream := content.NewStream()
+		page := &PageResult{Stream: stream}
+		ctx := DrawContext{
+			Stream:     stream,
+			Page:       page,
+			ActualText: r.actualText,
+			PageIdx:    rec.idx,
+			TotalPages: totalPages,
+		}
+		for _, block := range rec.blocks {
+			drawBlock(block, rec.margins.Left, r.pageHeight-rec.margins.Top, &ctx, r.tagged, &r.structTags, rec.idx)
+		}
+		r.drawMarginBoxes(&ctx, rec.idx, rec.margins)
+		pages = append(pages, PageResult{
+			Stream:     stream,
+			Fonts:      page.Fonts,
+			Images:     page.Images,
+			Links:      page.Links,
+			ExtGStates: page.ExtGStates,
+			Headings:   page.Headings,
+		})
 	}
 
 	// Tag auto-height pages with their computed height.
@@ -295,7 +300,7 @@ func (r *Renderer) renderWithPlans() []PageResult {
 	}
 
 	// Render absolutely positioned elements.
-	r.renderAbsolutes(pages, maxWidth)
+	r.renderAbsolutes(pages, maxWidth, totalPages)
 
 	return pages
 }
@@ -410,7 +415,10 @@ func headingLevel(tag string) int {
 // renderAbsolutes lays out and draws absolutely positioned elements
 // onto the appropriate pages. Elements with negative z-index are
 // prepended (rendered behind normal flow); others are appended (on top).
-func (r *Renderer) renderAbsolutes(pages []PageResult, defaultWidth float64) {
+// totalPages carries the document's final page count so that any CSS
+// counter(pages) placeholders inside absolute-positioned text resolve
+// to the same value used by body and margin-box content.
+func (r *Renderer) renderAbsolutes(pages []PageResult, defaultWidth float64, totalPages int) {
 	lastPage := len(pages) - 1
 
 	for _, item := range r.absolutes {
@@ -445,13 +453,25 @@ func (r *Renderer) renderAbsolutes(pages []PageResult, defaultWidth float64) {
 		if item.zIndex < 0 {
 			// Render into a temporary stream and prepend to draw behind flow content.
 			bgStream := content.NewStream()
-			bgCtx := DrawContext{Stream: bgStream, Page: page, ActualText: r.actualText}
+			bgCtx := DrawContext{
+				Stream:     bgStream,
+				Page:       page,
+				ActualText: r.actualText,
+				PageIdx:    pageIdx,
+				TotalPages: totalPages,
+			}
 			for _, block := range plan.Blocks {
 				drawBlock(block, x, item.y, &bgCtx, r.tagged, &r.structTags, pageIdx)
 			}
 			page.Stream.PrependBytes(bgStream.Bytes())
 		} else {
-			ctx := DrawContext{Stream: page.Stream, Page: page, ActualText: r.actualText}
+			ctx := DrawContext{
+				Stream:     page.Stream,
+				Page:       page,
+				ActualText: r.actualText,
+				PageIdx:    pageIdx,
+				TotalPages: totalPages,
+			}
 			for _, block := range plan.Blocks {
 				drawBlock(block, x, item.y, &ctx, r.tagged, &r.structTags, pageIdx)
 			}

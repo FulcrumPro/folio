@@ -1092,7 +1092,18 @@ func (c *converter) resolveContentValue(val string) string {
 			closeIdx := strings.IndexByte(remaining, ')')
 			if closeIdx >= 0 {
 				name := strings.TrimSpace(remaining[len("counter("):closeIdx])
-				result.WriteString(strconv.Itoa(c.getCounter(name)))
+				// `page` and `pages` are reserved counters whose value is
+				// only known once pagination runs. Emit the same deferred
+				// placeholder used by @page margin boxes; `layout` resolves
+				// it during content-stream emission.
+				switch name {
+				case "page":
+					result.WriteString(layout.CounterPagePlaceholder)
+				case "pages":
+					result.WriteString(layout.CounterPagesPlaceholder)
+				default:
+					result.WriteString(strconv.Itoa(c.getCounter(name)))
+				}
 				remaining = remaining[closeIdx+1:]
 				continue
 			}

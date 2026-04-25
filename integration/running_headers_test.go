@@ -5,6 +5,7 @@ package integration
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -55,6 +56,8 @@ h1 { string-set: chapter content(); }
 		t.Skipf("expected at least 3 pages, got %d", r.PageCount())
 	}
 
+	total := r.PageCount()
+
 	// Page 1 should have "Chapter 1" in its text (from the margin box).
 	p1, _ := r.Page(0)
 	t1, _ := p1.ExtractText()
@@ -63,10 +66,22 @@ h1 { string-set: chapter content(); }
 	}
 
 	// A later page should have a different chapter title.
-	lastPage, _ := r.Page(r.PageCount() - 1)
+	lastPage, _ := r.Page(total - 1)
 	lastText, _ := lastPage.ExtractText()
 	if !strings.Contains(lastText, "Chapter") {
 		t.Logf("last page text (may or may not have chapter header): %s", truncate(lastText, 200))
+	}
+
+	// Margin box footer must resolve counter(page) / counter(pages) on
+	// every page — these are emitted at the same time as body counters
+	// and share the two-pass machinery.
+	for i := 0; i < total; i++ {
+		p, _ := r.Page(i)
+		text, _ := p.ExtractText()
+		want := fmt.Sprintf("Page %d of %d", i+1, total)
+		if !strings.Contains(text, want) {
+			t.Errorf("page %d footer should contain %q, got: %s", i+1, want, truncate(text, 300))
+		}
 	}
 
 	// Basic validity.

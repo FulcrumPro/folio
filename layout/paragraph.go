@@ -302,6 +302,7 @@ func (p *Paragraph) Layout(maxWidth float64) []Line {
 				WordSpacing:     run.WordSpacing,
 				BaselineShift:   run.BaselineShift,
 				LinkURI:         run.LinkURI,
+				LinkDestName:    run.LinkDestName,
 				TextShadow:      run.TextShadow,
 				BackgroundColor: run.BackgroundColor,
 			}
@@ -1299,6 +1300,7 @@ func (p *Paragraph) measureWords(maxWidth float64) ([]Word, float64) {
 				WordSpacing:     run.WordSpacing,
 				BaselineShift:   run.BaselineShift,
 				LinkURI:         run.LinkURI,
+				LinkDestName:    run.LinkDestName,
 				TextShadow:      run.TextShadow,
 				BackgroundColor: run.BackgroundColor,
 				LineBreak:       nextLineBreak,
@@ -1409,16 +1411,19 @@ func (p *Paragraph) wrapWords(words []Word, maxWidth float64) [][]Word {
 }
 
 // linkSpans computes a LinkArea for every contiguous run of words that
-// share the same non-empty LinkURI. Each span's X and W are relative to
-// the line's starting x position. This supports multiple distinct links
-// on the same line (e.g. "Visit GitHub or GitLab").
+// share the same non-empty link target (URI or named destination). Each
+// span's X and W are relative to the line's starting x position. This
+// supports multiple distinct links on the same line (e.g. "Visit GitHub
+// or GitLab"). External and internal targets are kept distinct: a span
+// breaks at any change of either field.
 func linkSpans(words []Word) []LinkArea {
 	var spans []LinkArea
 	cx := 0.0
 	i := 0
 	for i < len(words) {
 		uri := words[i].LinkURI
-		if uri == "" {
+		dest := words[i].LinkDestName
+		if uri == "" && dest == "" {
 			if i < len(words)-1 {
 				cx += words[i].Width + words[i].SpaceAfter
 			}
@@ -1429,7 +1434,7 @@ func linkSpans(words []Word) []LinkArea {
 		startX := cx
 		endX := cx + words[i].Width
 		j := i + 1
-		for j < len(words) && words[j].LinkURI == uri {
+		for j < len(words) && words[j].LinkURI == uri && words[j].LinkDestName == dest {
 			// Extend through the space before this word.
 			endX = cx
 			for k := i; k < j; k++ {
@@ -1439,9 +1444,10 @@ func linkSpans(words []Word) []LinkArea {
 			j++
 		}
 		spans = append(spans, LinkArea{
-			URI: uri,
-			X:   startX,
-			W:   endX - startX,
+			URI:      uri,
+			DestName: dest,
+			X:        startX,
+			W:        endX - startX,
 		})
 		// Advance cx past all words in this span.
 		for i < j {
@@ -1540,6 +1546,7 @@ func wordToRun(w Word) TextRun {
 		LetterSpacing:   w.LetterSpacing,
 		WordSpacing:     w.WordSpacing,
 		LinkURI:         w.LinkURI,
+		LinkDestName:    w.LinkDestName,
 		TextShadow:      w.TextShadow,
 		BackgroundColor: w.BackgroundColor,
 	}
@@ -1572,7 +1579,8 @@ func (p *Paragraph) cloneWithWords(words []Word) *Paragraph {
 				w.FontSize == cur.FontSize && w.Color == cur.Color &&
 				w.Decoration == cur.Decoration && w.BaselineShift == cur.BaselineShift &&
 				w.LetterSpacing == cur.LetterSpacing && w.WordSpacing == cur.WordSpacing &&
-				w.LinkURI == cur.LinkURI && w.BackgroundColor == cur.BackgroundColor
+				w.LinkURI == cur.LinkURI && w.LinkDestName == cur.LinkDestName &&
+				w.BackgroundColor == cur.BackgroundColor
 			// A word with LineBreak=true had a forced \n before it.
 			if w.LineBreak {
 				if sameRun {

@@ -75,9 +75,10 @@ type Document struct {
 	firstMarginBoxes map[string]layout.MarginBox // first-page margin boxes
 	elements         []layout.Element
 	absolutes        []absoluteElement
-	Info             Info        // document metadata (Title, Author, etc.)
-	outlines         []Outline   // bookmarks / outline tree
-	namedDests       []NamedDest // named destinations
+	Info             Info                // document metadata (Title, Author, etc.)
+	outlines         []Outline           // bookmarks / outline tree
+	namedDests       []NamedDest         // named destinations
+	namedDestSet     map[string]struct{} // membership for O(1) hasNamedDest
 	header           PageDecorator
 	footer           PageDecorator
 	headerElem       ElementDecorator
@@ -249,6 +250,15 @@ func (d *Document) AddNamedDest(dest NamedDest) {
 		dest.FitType = "Fit"
 	}
 	d.namedDests = append(d.namedDests, dest)
+	if d.namedDestSet == nil {
+		d.namedDestSet = make(map[string]struct{})
+	}
+	d.namedDestSet[dest.Name] = struct{}{}
+}
+
+func (d *Document) hasNamedDest(name string) bool {
+	_, ok := d.namedDestSet[name]
+	return ok
 }
 
 // Add appends a layout element (e.g. Paragraph) to the document.
@@ -418,6 +428,23 @@ func (d *Document) buildAllPages() (all []*Page, structTags []layout.StructTagIn
 					destPage: -1,
 				}
 				p.annotations = append(p.annotations, ann)
+			}
+			// Register named destinations from anchor markers (id="..."). The
+			// final page index is len(all) — manual pages are already in `all`,
+			// so they're accounted for implicitly. First-wins on duplicate
+			// names keeps the annotation path (iterates namedDests, breaks on
+			// first match) consistent with the catalog /Dests dictionary
+			// (where Set is last-wins).
+			finalPageIdx := len(all)
+			for _, anchor := range res.Anchors {
+				if d.hasNamedDest(anchor.Name) {
+					continue
+				}
+				d.AddNamedDest(NamedDest{
+					Name:      anchor.Name,
+					PageIndex: finalPageIdx,
+					FitType:   "Fit",
+				})
 			}
 			all = append(all, p)
 		}

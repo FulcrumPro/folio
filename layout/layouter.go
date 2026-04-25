@@ -71,6 +71,12 @@ type PlacedBlock struct {
 	// HeadingText is the plain text of a heading (for auto-bookmark generation).
 	HeadingText string
 
+	// Anchor is a named-destination identifier captured for this block.
+	// When non-empty, the renderer records (Name, PageIndex) in the
+	// per-page PageResult.Anchors slice so the document layer can register
+	// it as a PDF named destination. Used by HTML id="..." attributes.
+	Anchor string
+
 	// Children are nested content blocks (e.g. lines within a paragraph,
 	// cells within a table row). The renderer draws them in order.
 	Children []PlacedBlock

@@ -42,9 +42,9 @@ import "github.com/carlos7ags/folio/font"
 //	         blwf, half, pstf, vatu, cjct. rphf is applied only to
 //	         the reph span so it does not fire mid-syllable; every
 //	         other feature runs over the whole cluster. Scripts
-//	         that do not use a given feature (e.g. Tamil, which has
-//	         no conjuncts) simply see empty feature tables and the
-//	         pass is a no-op.
+//	         with cfg.HasConjuncts == false (Tamil) skip phase-3
+//	         entirely — the spec does not define halant-merge
+//	         conjunct formation for Tamil.
 //
 //	Phase 4: reorderIndicVisual performs post-substitution
 //	         reordering: the pre-base matra glyph moves to
@@ -140,6 +140,16 @@ const (
 type indicScriptConfig struct {
 	// BlockStart / BlockEnd delimit the main Unicode block for this
 	// script. Runes outside the range are treated as devaCatOther.
+	//
+	// Several pieces of the categoriser (digits, consonants) treat
+	// (BlockStart & 0xFF80) as the 128-rune block base and assume
+	// the same intra-block layout that Devanagari uses: digits at
+	// offset 0x66..0x6F, consonants at 0x15..0x39. Every supported
+	// Brahmic block in Unicode follows this layout, but new scripts
+	// added here MUST be checked against the relevant block chart
+	// before relying on those default ranges. Scripts that deviate
+	// must override the affected runes via CategoryOverrides or
+	// extend ConsonantExtraRanges / IndependentVowelRanges.
 	BlockStart rune
 	BlockEnd   rune
 
@@ -157,24 +167,32 @@ type indicScriptConfig struct {
 	RaLetter    rune
 	RaAlternate rune
 
-	// PreBaseMatra is the codepoint of the single pre-base matra
-	// in this script, or 0 if the script has no pre-base matra
-	// (Malayalam, Tamil trailing matras are all post-base; Gurmukhi
-	// sihari sits before the base too — listed here for it).
-	PreBaseMatra rune
-
-	// PreBaseMatraAlt is a second pre-base matra codepoint for
-	// scripts that split a logical pre-base matra across multiple
-	// signs (Malayalam U+0D46/U+0D47/U+0D48). 0 when unused.
-	PreBaseMatraAlt rune
+	// PreBaseMatras lists every codepoint that the script renders
+	// visually before the base consonant (i.e. logically follows
+	// the base in memory but visually precedes it). Most Brahmic
+	// scripts have one such matra (Devanagari sign I U+093F); a
+	// few have several (Malayalam U+0D46/U+0D47, Tamil
+	// U+0BC6/U+0BC7/U+0BC8, Bengali U+09BF/U+09C7/U+09C8, Oriya
+	// U+0B47/U+0B48). Empty / nil for scripts without pre-base
+	// matras.
+	//
+	// TODO(#216): split matras (Bengali U+09CB/U+09CC, Malayalam
+	// U+0D4A/U+0D4B/U+0D4C, Oriya U+0B4B/U+0B4C) contain a logical
+	// pre-base part. They are deferred from this PR; current
+	// behaviour treats them as composed inputs that pass through
+	// without decomposition. See TestShape{Bengali,Malayalam}
+	// SplitMatraNotDecomposed for the regression locks.
+	PreBaseMatras []rune
 
 	// RephPos is where a detected reph moves in phase 4.
 	RephPos rephPosition
 
 	// HasConjuncts reports whether the script forms conjunct
 	// consonant clusters at all. Tamil is the notable exception:
-	// its phase-3 features (rphf, blwf, half, cjct, etc.) are
-	// always empty and the spec's "Tamil simplification" applies.
+	// it has no halant-merge conjuncts, so phase-3 features that
+	// build conjunct shapes (vatu, akhn, half, blwf, pstf, cjct,
+	// rphf, rkrf, pres) are skipped entirely. The phase-3 stack
+	// short-circuits when this flag is false.
 	HasConjuncts bool
 
 	// CategoryOverrides maps specific codepoints to a category
@@ -203,31 +221,20 @@ type indicScriptConfig struct {
 	// IndependentVowelRanges lists [start, end] inclusive ranges
 	// of independent vowels.
 	IndependentVowelRanges [][2]rune
-
-	// ModifierCodepoints lists the anusvara / candrabindu / tippi
-	// / bindi / addak codepoints. Each resolves to devaCatModifier.
-	ModifierCodepoints []rune
-
-	// VisargaCodepoint is the codepoint for visarga, or 0.
-	VisargaCodepoint rune
-
-	// PunctuationCodepoints lists danda / double danda style
-	// codepoints that break syllables.
-	PunctuationCodepoints []rune
 }
 
 // devanagariConfig is the reference configuration used by
 // ShapeDevanagari (Indic spec Devanagari section).
 var devanagariConfig = &indicScriptConfig{
-	BlockStart:   0x0900,
-	BlockEnd:     0x097F,
-	Virama:       0x094D,
-	Nukta:        0x093C,
-	RaLetter:     0x0930,
-	RaAlternate:  0x0931, // eyelash ra
-	PreBaseMatra: 0x093F,
-	RephPos:      rephPosAfterBase,
-	HasConjuncts: true,
+	BlockStart:    0x0900,
+	BlockEnd:      0x097F,
+	Virama:        0x094D,
+	Nukta:         0x093C,
+	RaLetter:      0x0930,
+	RaAlternate:   0x0931, // eyelash ra
+	PreBaseMatras: []rune{0x093F},
+	RephPos:       rephPosAfterBase,
+	HasConjuncts:  true,
 	CategoryOverrides: map[rune]devaCategory{
 		0x0900: devaCatModifier, // inverted candrabindu
 		0x0901: devaCatModifier, // candrabindu
@@ -264,18 +271,30 @@ var devanagariConfig = &indicScriptConfig{
 
 // bengaliConfig describes Bengali shaping. Bengali has its own Ra
 // (U+09B0) and an alternate Ra with middle diagonal (U+09F0). It
-// also uses ya-phalaa and rakar; these are handled through the
-// standard rphf/rkrf features with category overrides as needed.
+// also uses ya-phalaa (handled by the font's GSUB; we do not
+// synthesize it — see TestShapeBengaliYaPhalaa) and rakar through
+// the standard rkrf feature.
+//
+// Bengali reph placement: the Microsoft Bengali spec places reph
+// after the main consonant cluster and before any post-base
+// matras / signs. We model that with rephPosAfterMain, which
+// inserts the reph after the last non-SMVD slot in the syllable.
+//
+// TODO(#216): split matras U+09CB (O) and U+09CC (AU) decompose
+// to a logical pre-base U+09C7 plus a post-base part. We currently
+// pass them through unchanged; see TestShapeBengaliSplitMatraNotDecomposed.
 var bengaliConfig = &indicScriptConfig{
-	BlockStart:   0x0980,
-	BlockEnd:     0x09FF,
-	Virama:       0x09CD,
-	Nukta:        0x09BC,
-	RaLetter:     0x09B0,
-	RaAlternate:  0x09F0,
-	PreBaseMatra: 0x09BF, // sign I
-	RephPos:      rephPosAfterBase,
-	HasConjuncts: true,
+	BlockStart:  0x0980,
+	BlockEnd:    0x09FF,
+	Virama:      0x09CD,
+	Nukta:       0x09BC,
+	RaLetter:    0x09B0,
+	RaAlternate: 0x09F0,
+	// Pre-base matras: sign I (U+09BF), sign E (U+09C7) and sign
+	// AI (U+09C8) are all rendered visually before the base.
+	PreBaseMatras: []rune{0x09BF, 0x09C7, 0x09C8},
+	RephPos:       rephPosAfterMain,
+	HasConjuncts:  true,
 	CategoryOverrides: map[rune]devaCategory{
 		0x0981: devaCatModifier, // candrabindu
 		0x0982: devaCatModifier, // anusvara
@@ -305,14 +324,14 @@ var bengaliConfig = &indicScriptConfig{
 // modelled on Devanagari: its block layout is the same offset
 // structure and its matra positions match.
 var gujaratiConfig = &indicScriptConfig{
-	BlockStart:   0x0A80,
-	BlockEnd:     0x0AFF,
-	Virama:       0x0ACD,
-	Nukta:        0x0ABC,
-	RaLetter:     0x0AB0,
-	PreBaseMatra: 0x0ABF,
-	RephPos:      rephPosAfterBase,
-	HasConjuncts: true,
+	BlockStart:    0x0A80,
+	BlockEnd:      0x0AFF,
+	Virama:        0x0ACD,
+	Nukta:         0x0ABC,
+	RaLetter:      0x0AB0,
+	PreBaseMatras: []rune{0x0ABF},
+	RephPos:       rephPosAfterBase,
+	HasConjuncts:  true,
 	CategoryOverrides: map[rune]devaCategory{
 		0x0A81: devaCatModifier,
 		0x0A82: devaCatModifier,
@@ -339,14 +358,14 @@ var gujaratiConfig = &indicScriptConfig{
 // are modifier marks and addak (U+0A71) is a gemination mark
 // treated here as a modifier for category purposes.
 var gurmukhiConfig = &indicScriptConfig{
-	BlockStart:   0x0A00,
-	BlockEnd:     0x0A7F,
-	Virama:       0x0A4D,
-	Nukta:        0x0A3C,
-	RaLetter:     0x0A30, // present but reph is disabled via RephPos
-	PreBaseMatra: 0x0A3F, // sihari
-	RephPos:      rephPosNone,
-	HasConjuncts: true,
+	BlockStart:    0x0A00,
+	BlockEnd:      0x0A7F,
+	Virama:        0x0A4D,
+	Nukta:         0x0A3C,
+	RaLetter:      0x0A30,         // present but reph is disabled via RephPos
+	PreBaseMatras: []rune{0x0A3F}, // sihari
+	RephPos:       rephPosNone,
+	HasConjuncts:  true,
 	CategoryOverrides: map[rune]devaCategory{
 		0x0A01: devaCatModifier, // adak bindi
 		0x0A02: devaCatModifier, // bindi
@@ -374,13 +393,13 @@ var gurmukhiConfig = &indicScriptConfig{
 // post-base consonants and places reph after any post-base matra
 // per Indic spec's Kannada section.
 var kannadaConfig = &indicScriptConfig{
-	BlockStart:   0x0C80,
-	BlockEnd:     0x0CFF,
-	Virama:       0x0CCD,
-	RaLetter:     0x0CB0,
-	PreBaseMatra: 0x0CBF, // sign I
-	RephPos:      rephPosAfterPostBase,
-	HasConjuncts: true,
+	BlockStart:    0x0C80,
+	BlockEnd:      0x0CFF,
+	Virama:        0x0CCD,
+	RaLetter:      0x0CB0,
+	PreBaseMatras: []rune{0x0CBF}, // sign I
+	RephPos:       rephPosAfterPostBase,
+	HasConjuncts:  true,
 	CategoryOverrides: map[rune]devaCategory{
 		0x0C80: devaCatOther,    // spacing candrabindu
 		0x0C81: devaCatModifier, // candrabindu
@@ -407,18 +426,27 @@ var kannadaConfig = &indicScriptConfig{
 // places the reph before any post-base matra. Chillus are precomposed
 // in Unicode (U+0D7A..U+0D7F) and classified as consonants here so
 // they can act as a syllable base.
+//
+// TODO(#216): split matras U+0D4A (O), U+0D4B (OO), U+0D4C (AU)
+// decompose to a logical pre-base U+0D46/U+0D47 plus a post-base
+// part. Currently passed through unchanged; see
+// TestShapeMalayalamSplitMatraNotDecomposed.
+//
+// TODO(#216): chillu sequence formation (consonant + virama + ZWJ)
+// is not synthesised in the shaper; we rely on the font's GSUB to
+// substitute precomposed chillus. See
+// TestShapeMalayalamChilluZWJSequence.
 var malayalamConfig = &indicScriptConfig{
-	BlockStart:   0x0D00,
-	BlockEnd:     0x0D7F,
-	Virama:       0x0D4D,
-	RaLetter:     0x0D30,
-	PreBaseMatra: 0x0D46, // sign E (logical pre-base, visually before base)
-	// Malayalam U+0D47 (sign EE) and U+0D48 (sign AI) are also
-	// written before the base visually but are stored logically
-	// after it; treat them as pre-base too.
-	PreBaseMatraAlt: 0x0D47,
-	RephPos:         rephPosBeforePostBase,
-	HasConjuncts:    true,
+	BlockStart: 0x0D00,
+	BlockEnd:   0x0D7F,
+	Virama:     0x0D4D,
+	RaLetter:   0x0D30,
+	// Pre-base matras: sign E (U+0D46) and sign EE (U+0D47) are
+	// rendered visually before the base. Sign AI (U+0D48) is also
+	// pre-base in Malayalam orthography.
+	PreBaseMatras: []rune{0x0D46, 0x0D47, 0x0D48},
+	RephPos:       rephPosBeforePostBase,
+	HasConjuncts:  true,
 	CategoryOverrides: map[rune]devaCategory{
 		0x0D01: devaCatModifier,
 		0x0D02: devaCatModifier,
@@ -440,17 +468,23 @@ var malayalamConfig = &indicScriptConfig{
 	},
 }
 
-// oriyaConfig describes Oriya (Odia) shaping. Oriya has a distinct
-// pre-base matra (U+0B47) and reph behaviour similar to Devanagari.
+// oriyaConfig describes Oriya (Odia) shaping. Oriya has distinct
+// pre-base matras and reph behaviour similar to Devanagari.
+//
+// TODO(#216): split matras U+0B4B (O) and U+0B4C (AU) decompose to
+// a logical pre-base U+0B47 plus a post-base part. Currently passed
+// through unchanged; same treatment as Bengali split matras.
 var oriyaConfig = &indicScriptConfig{
-	BlockStart:   0x0B00,
-	BlockEnd:     0x0B7F,
-	Virama:       0x0B4D,
-	Nukta:        0x0B3C,
-	RaLetter:     0x0B30,
-	PreBaseMatra: 0x0B47, // sign E
-	RephPos:      rephPosAfterBase,
-	HasConjuncts: true,
+	BlockStart: 0x0B00,
+	BlockEnd:   0x0B7F,
+	Virama:     0x0B4D,
+	Nukta:      0x0B3C,
+	RaLetter:   0x0B30,
+	// Pre-base matras: sign E (U+0B47) and sign AI (U+0B48) both
+	// render visually before the base.
+	PreBaseMatras: []rune{0x0B47, 0x0B48},
+	RephPos:       rephPosAfterBase,
+	HasConjuncts:  true,
 	CategoryOverrides: map[rune]devaCategory{
 		0x0B01: devaCatModifier,
 		0x0B02: devaCatModifier,
@@ -477,22 +511,26 @@ var oriyaConfig = &indicScriptConfig{
 }
 
 // tamilConfig describes Tamil shaping. Tamil does not form reph or
-// conjuncts in the same way other Brahmic scripts do: phase-3
-// features rphf / rkrf / blwf / half / pstf / vatu / cjct are
-// typically absent from Tamil fonts. The shaper still runs the
-// full pipeline — GSUB tables will simply be empty for those
-// features — so no special branching is required beyond the
-// HasConjuncts flag, which is kept true because Tamil DOES use
-// akhn for SRI and the broad phase-5 features.
+// halant-merge conjuncts: phase-3 features rphf / rkrf / blwf /
+// half / pstf / vatu / cjct / pres do not apply. HasConjuncts is
+// false and the phase-3 dispatcher short-circuits accordingly.
+// Phase-5 presentational features still run because Tamil fonts
+// rely on liga / clig / haln for cluster shaping.
+//
+// TODO(#216): even with HasConjuncts=false, the akhn feature could
+// be allowed for SRI ligatures. Deferred until a Tamil font with
+// that feature is exercised; see TestTamilPhase3FeaturesAreNoOps.
 var tamilConfig = &indicScriptConfig{
-	BlockStart:      0x0B80,
-	BlockEnd:        0x0BFF,
-	Virama:          0x0BCD,
-	RaLetter:        0x0BB0,
-	PreBaseMatra:    0x0BC6, // sign E (visually before base)
-	PreBaseMatraAlt: 0x0BC7, // sign EE
-	RephPos:         rephPosNone,
-	HasConjuncts:    false,
+	BlockStart: 0x0B80,
+	BlockEnd:   0x0BFF,
+	Virama:     0x0BCD,
+	RaLetter:   0x0BB0,
+	// Pre-base matras: sign E (U+0BC6), sign EE (U+0BC7) and sign
+	// AI (U+0BC8) all render visually before the base in Tamil
+	// orthography.
+	PreBaseMatras: []rune{0x0BC6, 0x0BC7, 0x0BC8},
+	RephPos:       rephPosNone,
+	HasConjuncts:  false,
 	CategoryOverrides: map[rune]devaCategory{
 		0x0B82: devaCatModifier, // anusvara (Tamil uses "SIGN ANUSVARA" placement here)
 		0x0B83: devaCatOther,    // visarga-like but treated as punctuation
@@ -510,13 +548,13 @@ var tamilConfig = &indicScriptConfig{
 // teluguConfig describes Telugu shaping. Telugu uses vattu post-base
 // consonants and places reph after post-base matras.
 var teluguConfig = &indicScriptConfig{
-	BlockStart:   0x0C00,
-	BlockEnd:     0x0C7F,
-	Virama:       0x0C4D,
-	RaLetter:     0x0C30,
-	PreBaseMatra: 0x0C3F, // sign I
-	RephPos:      rephPosAfterPostBase,
-	HasConjuncts: true,
+	BlockStart:    0x0C00,
+	BlockEnd:      0x0C7F,
+	Virama:        0x0C4D,
+	RaLetter:      0x0C30,
+	PreBaseMatras: []rune{0x0C3F}, // sign I
+	RephPos:       rephPosAfterPostBase,
+	HasConjuncts:  true,
 	CategoryOverrides: map[rune]devaCategory{
 		0x0C00: devaCatModifier, // combining candrabindu above
 		0x0C01: devaCatModifier,
@@ -608,26 +646,20 @@ func (cfg *indicScriptConfig) categoryOf(r rune) devaCategory {
 			// A pre-base matra is a dependent vowel sign with special
 			// reordering semantics; flag it as such here so phase-2
 			// can pick it up.
-			if r == cfg.PreBaseMatra || (cfg.PreBaseMatraAlt != 0 && r == cfg.PreBaseMatraAlt) {
-				return devaCatPreBaseMatra
+			for _, pre := range cfg.PreBaseMatras {
+				if r == pre {
+					return devaCatPreBaseMatra
+				}
 			}
 			return devaCatVowelSign
 		}
 	}
-	// Nukta / virama / modifiers flagged via single codepoints.
+	// Nukta and virama flagged via single codepoints.
 	if cfg.Nukta != 0 && r == cfg.Nukta {
 		return devaCatNukta
 	}
 	if r == cfg.Virama {
 		return devaCatVirama
-	}
-	if r == cfg.VisargaCodepoint {
-		return devaCatVisarga
-	}
-	for _, mr := range cfg.ModifierCodepoints {
-		if r == mr {
-			return devaCatModifier
-		}
 	}
 	// Ra (and eyelash / alternate Ra) gets its own category so
 	// reph / rakar logic can find it without a second table lookup.
@@ -648,13 +680,6 @@ func (cfg *indicScriptConfig) categoryOf(r rune) devaCategory {
 	}
 	// Anything else in the block is rare and treated as neutral.
 	return devaCatOther
-}
-
-// devaCategoryOf is the back-compatible Devanagari category
-// function. It is retained for unit tests and existing callers;
-// new code should use indicScriptConfig.categoryOf.
-func devaCategoryOf(r rune) devaCategory {
-	return devanagariConfig.categoryOf(r)
 }
 
 // devaSyllableType tags the grammar type of a syllable cluster per
@@ -750,13 +775,6 @@ func scanIndicSyllables(runes []rune, cfg *indicScriptConfig) []devaSyllable {
 		}
 	}
 	return out
-}
-
-// scanDevanagariSyllables is retained as a Devanagari-flavoured
-// wrapper around scanIndicSyllables for backwards compatibility
-// with the original unit tests.
-func scanDevanagariSyllables(runes []rune) []devaSyllable {
-	return scanIndicSyllables(runes, devanagariConfig)
 }
 
 // consumeIndicConsonantCluster walks the (C N? H)* C N? prefix of
@@ -895,7 +913,7 @@ func shapeIndicSyllable(runes []rune, typ devaSyllableType, face font.Face, gsub
 	assignIndicPositions(runes, glyphs, typ, cfg)
 
 	// Phase 3 GSUB features (Indic spec §5 "Basic shaping features").
-	glyphs = applyIndicPhase3(glyphs, gsub)
+	glyphs = applyIndicPhase3(glyphs, gsub, cfg)
 
 	// Phase 4 visual reordering (Indic spec §6 "Final reordering").
 	glyphs = reorderIndicVisual(glyphs, cfg)
@@ -1007,13 +1025,6 @@ func assignIndicPositions(runes []rune, glyphs []devaGlyph, typ devaSyllableType
 	}
 }
 
-// assignDevaPositions is the back-compatible Devanagari position
-// assignment. Retained for unit tests; new code should call
-// assignIndicPositions.
-func assignDevaPositions(runes []rune, glyphs []devaGlyph, typ devaSyllableType) {
-	assignIndicPositions(runes, glyphs, typ, devanagariConfig)
-}
-
 // indicPhase3Features is the ordered list of GSUB features applied
 // during phase 3 of Indic shaping (Indic spec §5). Order is
 // load-bearing: each feature sees the output of all earlier ones.
@@ -1049,11 +1060,6 @@ var indicPhase5Features = [...]font.GSUBFeature{
 	font.GSUBRlig,
 }
 
-// devaPhase3Features / devaPhase5Features retained as back-compat
-// aliases for tests and external callers.
-var devaPhase3Features = indicPhase3Features
-var devaPhase5Features = indicPhase5Features
-
 // applyIndicPhase3 runs the phase-3 feature stack over the glyph
 // list. Each feature is applied only if the GSUB table has entries
 // for it, and the three lookup types (Single, Ligature,
@@ -1062,8 +1068,17 @@ var devaPhase5Features = indicPhase5Features
 // ChainContext pass that changes the stream length we rebuild
 // metadata from the surviving slot positions using a best-effort
 // "base slot wins" policy.
-func applyIndicPhase3(glyphs []devaGlyph, gsub *font.GSUBSubstitutions) []devaGlyph {
+//
+// Scripts with cfg.HasConjuncts == false (Tamil) skip the entire
+// phase-3 pass: the spec states that Tamil does not form
+// halant-merge conjuncts, so the conjunct-building features
+// (rphf, rkrf, blwf, half, pstf, vatu, akhn, cjct, nukt) do not
+// apply. Phase-5 presentational features still run.
+func applyIndicPhase3(glyphs []devaGlyph, gsub *font.GSUBSubstitutions, cfg *indicScriptConfig) []devaGlyph {
 	if gsub == nil || len(glyphs) == 0 {
+		return glyphs
+	}
+	if cfg != nil && !cfg.HasConjuncts {
 		return glyphs
 	}
 	for _, feat := range indicPhase3Features {
@@ -1087,14 +1102,6 @@ func applyIndicPhase3(glyphs []devaGlyph, gsub *font.GSUBSubstitutions) []devaGl
 		}
 	}
 	return glyphs
-}
-
-// applyDevaPhase3 / applyDevaPhase5 back-compat aliases.
-func applyDevaPhase3(glyphs []devaGlyph, gsub *font.GSUBSubstitutions) []devaGlyph {
-	return applyIndicPhase3(glyphs, gsub)
-}
-func applyDevaPhase5(glyphs []devaGlyph, gsub *font.GSUBSubstitutions) []devaGlyph {
-	return applyIndicPhase5(glyphs, gsub)
 }
 
 // applyIndicPhase5 mirrors applyIndicPhase3 but runs the phase-5
@@ -1201,7 +1208,10 @@ func applyIndicChainContextFeature(glyphs []devaGlyph, gsub *font.GSUBSubstituti
 //     according to the per-script reph-position policy. Devanagari
 //     puts reph immediately after the base; Kannada / Telugu put
 //     it after the last post-base form; Malayalam puts it before
-//     the first post-base matra; Bengali places it at the end.
+//     the first post-base matra; Bengali (rephPosAfterMain) places
+//     it after the last non-modifier slot in the syllable, which
+//     keeps reph after any post-base matras while staying before
+//     trailing visarga / candrabindu.
 //  3. Everything else stays in logical order.
 func reorderIndicVisual(glyphs []devaGlyph, cfg *indicScriptConfig) []devaGlyph {
 	baseIdx := -1
@@ -1316,13 +1326,6 @@ func reorderIndicVisual(glyphs []devaGlyph, cfg *indicScriptConfig) []devaGlyph 
 		}
 	}
 	return result
-}
-
-// reorderDevaVisual is the back-compatible Devanagari visual
-// reorder. Retained for unit tests; new code should call
-// reorderIndicVisual.
-func reorderDevaVisual(glyphs []devaGlyph) []devaGlyph {
-	return reorderIndicVisual(glyphs, devanagariConfig)
 }
 
 // ShapeIndicWithEmbedded is the script-dispatching convenience

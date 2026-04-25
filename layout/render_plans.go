@@ -289,6 +289,7 @@ func (r *Renderer) renderWithPlans() []PageResult {
 			Links:      page.Links,
 			ExtGStates: page.ExtGStates,
 			Headings:   page.Headings,
+			Anchors:    page.Anchors,
 		})
 	}
 
@@ -365,6 +366,13 @@ func drawBlockNested(block PlacedBlock, baseX, topY float64, ctx *DrawContext, t
 			Text:  block.HeadingText,
 			Level: level,
 			Y:     pdfY,
+		})
+	}
+
+	// Record named-destination anchor for this page.
+	if block.Anchor != "" {
+		ctx.Page.Anchors = append(ctx.Page.Anchors, AnchorInfo{
+			Name: block.Anchor,
 		})
 	}
 

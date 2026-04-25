@@ -24,6 +24,18 @@ func (c *converter) convertLink(n *html.Node, style computedStyle) []layout.Elem
 
 	if strings.HasPrefix(href, "#") {
 		destName := href[1:]
+		// Empty fragment ("#") has no destination — render as plain styled
+		// text rather than a click-dead /Subtype /Link annotation with no
+		// /A or /Dest entry.
+		if destName == "" {
+			p := layout.NewStyledParagraph(layout.TextRun{
+				Text:     text,
+				Font:     f,
+				FontSize: style.FontSize,
+				Color:    style.Color,
+			})
+			return []layout.Element{p}
+		}
 		link := layout.NewInternalLink(text, destName, f, style.FontSize)
 		link.SetColor(style.Color)
 		link.SetUnderline()

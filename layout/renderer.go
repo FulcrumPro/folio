@@ -28,7 +28,14 @@ type PageResult struct {
 	Links      []LinkArea       // clickable link annotations produced by Link elements
 	ExtGStates []ExtGStateEntry // graphics state dictionaries (opacity, etc.)
 	Headings   []HeadingInfo    // headings found on this page (for auto-bookmarks)
+	Anchors    []AnchorInfo     // named-destination markers found on this page
 	PageHeight float64          // actual page height (non-zero only for auto-sized pages)
+}
+
+// AnchorInfo records a named destination produced by an Anchor element
+// (typically from an HTML id="..." attribute) on a rendered page.
+type AnchorInfo struct {
+	Name string // destination name
 }
 
 // HeadingInfo records a heading found during rendering.

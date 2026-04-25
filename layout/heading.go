@@ -70,15 +70,11 @@ func NewHeadingEmbedded(text string, level HeadingLevel, ef *font.EmbeddedFont) 
 	}
 }
 
-// SetRuns replaces the heading's paragraph runs with the given styled runs.
+// SetRuns replaces the heading's paragraph runs with the given styled
+// runs. The runs argument is not mutated: NFC normalization is performed
+// on a fresh copy so callers retain ownership of their input slice.
 func (h *Heading) SetRuns(runs []TextRun) *Heading {
-	for i := range runs {
-		if runs[i].InlineElement != nil || runs[i].IsLineBreak {
-			continue
-		}
-		runs[i].Text = normalizeText(runs[i].Text)
-	}
-	h.para.runs = runs
+	h.para.runs = normalizeRuns(runs)
 	return h
 }
 
@@ -98,8 +94,12 @@ func (h *Heading) SetBookmarkLevel(level int) *Heading {
 
 // SetBookmarkLabel overrides the heading text used in the bookmark tree.
 // Empty string means use the heading's text content.
+//
+// The label is NFC-normalized for consistency with other layout-boundary
+// inputs. Bookmark labels are PDF metadata, not flowed text, but
+// normalizing here keeps the API uniform.
 func (h *Heading) SetBookmarkLabel(label string) *Heading {
-	h.bookmarkLabel = label
+	h.bookmarkLabel = normalizeText(label)
 	return h
 }
 

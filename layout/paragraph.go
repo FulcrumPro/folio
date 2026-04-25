@@ -73,6 +73,9 @@ func NewParagraphEmbedded(text string, ef *font.EmbeddedFont, fontSize float64) 
 // Panics if any text run has both Font and Embedded nil.
 // Runs with InlineElement or IsLineBreak set are exempt from the font
 // requirement.
+//
+// The runs argument is not mutated. NFC normalization is performed on
+// a fresh copy so callers retain ownership of their input slice.
 func NewStyledParagraph(runs ...TextRun) *Paragraph {
 	for i, r := range runs {
 		if r.InlineElement != nil || r.IsLineBreak {
@@ -81,10 +84,9 @@ func NewStyledParagraph(runs ...TextRun) *Paragraph {
 		if r.Font == nil && r.Embedded == nil {
 			panic(fmt.Sprintf("layout.NewStyledParagraph: run %d has nil Font and nil Embedded", i))
 		}
-		runs[i].Text = normalizeText(runs[i].Text)
 	}
 	return &Paragraph{
-		runs:    runs,
+		runs:    normalizeRuns(runs),
 		leading: 1.2,
 		align:   AlignLeft,
 	}

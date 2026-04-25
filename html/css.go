@@ -17,6 +17,12 @@ type fontFaceRule struct {
 	src    string
 	weight string
 	style  string
+	// origin is the href of the stylesheet this rule was parsed from. "" for
+	// inline <style> blocks (or any rule with no enclosing stylesheet origin),
+	// in which case src is resolved from the BaseFS root. For linked
+	// stylesheets, src is resolved relative to path.Dir(origin) — either
+	// inside BaseFS or via Client when origin is an http(s) URL.
+	origin string
 }
 
 // pageRule holds parsed @page declarations.
@@ -76,9 +82,10 @@ type cssDecl struct {
 // document and parses their CSS. Linked stylesheets are processed before <style>
 // blocks so that inline styles override external ones by source order.
 // fetchURL, if non-nil, is called for HTTP/HTTPS hrefs; it should return the
-// CSS bytes or an error. Local file paths are resolved against baseFS (if
-// non-nil), else against basePath.
-func parseStyleBlocks(doc *html.Node, baseFS fs.FS, basePath string, fetchURL func(string) ([]byte, error)) *styleSheet {
+// CSS bytes or an error. Local file paths are resolved against baseFS.
+// onLoadError, if non-nil, is invoked for stylesheet loads that fail (used to
+// surface the failure to Options.Logger without aborting the conversion).
+func parseStyleBlocks(doc *html.Node, baseFS fs.FS, fetchURL func(string) ([]byte, error), onLoadError func(href string, err error)) *styleSheet {
 	ss := &styleSheet{}
 
 	// First pass: collect <link rel="stylesheet"> elements and load them.
@@ -101,12 +108,13 @@ func parseStyleBlocks(doc *html.Node, baseFS fs.FS, basePath string, fetchURL fu
 				if isURL(href) && fetchURL != nil {
 					data, err = fetchURL(href)
 				} else {
-					data, err = readAsset(baseFS, basePath, href)
+					data, err = readAsset(baseFS, href)
 				}
 				if err == nil {
-					ss.parseCSS(string(data))
+					ss.parseCSS(string(data), href)
+				} else if onLoadError != nil {
+					onLoadError(href, err)
 				}
-				// Silently skip if stylesheet can't be loaded.
 			}
 		}
 		for child := n.FirstChild; child != nil; child = child.NextSibling {
@@ -126,7 +134,7 @@ func parseStyleBlocks(doc *html.Node, baseFS fs.FS, basePath string, fetchURL fu
 					sb.WriteString(child.Data)
 				}
 			}
-			ss.parseCSS(sb.String())
+			ss.parseCSS(sb.String(), "")
 			return
 		}
 		for child := n.FirstChild; child != nil; child = child.NextSibling {
@@ -138,8 +146,11 @@ func parseStyleBlocks(doc *html.Node, baseFS fs.FS, basePath string, fetchURL fu
 	return ss
 }
 
-// parseCSS parses a CSS string into rules.
-func (ss *styleSheet) parseCSS(css string) {
+// parseCSS parses a CSS string into rules. origin is the href the CSS was
+// loaded from ("" for inline <style>); it is recorded on @font-face rules so
+// their src url() can be resolved relative to the stylesheet rather than the
+// document root.
+func (ss *styleSheet) parseCSS(css string, origin string) {
 	// Strip CSS comments.
 	css = stripComments(css)
 
@@ -170,7 +181,7 @@ func (ss *styleSheet) parseCSS(css string) {
 		// Parse @font-face rules.
 		if selectorStr == "@font-face" {
 			decls := parseDeclarations(declStr)
-			ff := fontFaceRule{weight: "normal", style: "normal"}
+			ff := fontFaceRule{weight: "normal", style: "normal", origin: origin}
 			for _, d := range decls {
 				switch d.property {
 				case "font-family":
@@ -215,7 +226,7 @@ func (ss *styleSheet) parseCSS(css string) {
 		if strings.HasPrefix(selectorStr, "@supports") {
 			condition := strings.TrimSpace(strings.TrimPrefix(selectorStr, "@supports"))
 			if evaluateSupports(condition) {
-				ss.parseCSS(declStr)
+				ss.parseCSS(declStr, origin)
 			}
 			continue
 		}

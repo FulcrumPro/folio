@@ -30,7 +30,7 @@ func (c *converter) convertImage(n *html.Node, style computedStyle) []layout.Ele
 
 	// Check if src references an SVG file — route to SVG converter.
 	if isSVGSource(src) {
-		return c.convertImgSVG(src, style)
+		return c.convertImgSVG(src, alt, style)
 	}
 
 	// Load image: data URI, HTTP URL, or local path.
@@ -46,6 +46,7 @@ func (c *converter) convertImage(n *html.Node, style computedStyle) []layout.Ele
 		img, err = c.loadLocalImage(src)
 	}
 	if err != nil {
+		c.logger.Warn("folio/html: image load failed", "src", src, "error", err)
 		if alt != "" {
 			return c.altTextFallback(alt, style)
 		}
@@ -231,54 +232,57 @@ func isSVGSource(src string) bool {
 	return ext == ".svg"
 }
 
-// convertImgSVG loads an SVG file referenced by <img src> and returns it as a layout element.
-func (c *converter) convertImgSVG(src string, style computedStyle) []layout.Element {
+// convertImgSVG loads an SVG file referenced by <img src> and returns it as a
+// layout element. On any failure it logs a warning and falls back to the alt
+// text (or a "[image: src]" placeholder when alt is empty), matching the
+// raster <img> failure path.
+func (c *converter) convertImgSVG(src, alt string, style computedStyle) []layout.Element {
 	var svgData []byte
 	var err error
 
 	if strings.HasPrefix(src, "data:") {
-		// Data URI SVG.
 		rest := strings.TrimPrefix(src, "data:")
 		commaIdx := strings.IndexByte(rest, ',')
 		if commaIdx < 0 {
-			return nil
-		}
-		meta := rest[:commaIdx]
-		encoded := rest[commaIdx+1:]
-		if strings.Contains(meta, ";base64") {
-			svgData, err = base64Decode(encoded)
+			err = fmt.Errorf("invalid data URI: no comma")
 		} else {
-			svgData = []byte(encoded)
-		}
-		if err != nil {
-			return nil
+			meta := rest[:commaIdx]
+			encoded := rest[commaIdx+1:]
+			if strings.Contains(meta, ";base64") {
+				svgData, err = base64Decode(encoded)
+			} else {
+				svgData = []byte(encoded)
+			}
 		}
 	} else {
-		// Local file path resolved through BaseFS / BasePath.
-		svgData, err = readAsset(c.opts.BaseFS, c.opts.BasePath, src)
-		if err != nil {
-			return nil
+		svgData, err = readAsset(c.opts.BaseFS, src)
+	}
+
+	if err == nil {
+		var s *svg.SVG
+		s, err = svg.Parse(string(svgData))
+		if err == nil {
+			el := layout.NewSVGElement(s)
+			w := s.Width()
+			h := s.Height()
+			if style.Width != nil {
+				w = style.Width.toPoints(0, style.FontSize)
+			}
+			if style.Height != nil {
+				h = style.Height.toPoints(0, style.FontSize)
+			}
+			if w > 0 || h > 0 {
+				el.SetSize(w, h)
+			}
+			return []layout.Element{el}
 		}
 	}
 
-	s, err := svg.Parse(string(svgData))
-	if err != nil {
-		return nil
+	c.logger.Warn("folio/html: SVG image load failed", "src", src, "error", err)
+	if alt != "" {
+		return c.altTextFallback(alt, style)
 	}
-
-	el := layout.NewSVGElement(s)
-	w := s.Width()
-	h := s.Height()
-	if style.Width != nil {
-		w = style.Width.toPoints(0, style.FontSize)
-	}
-	if style.Height != nil {
-		h = style.Height.toPoints(0, style.FontSize)
-	}
-	if w > 0 || h > 0 {
-		el.SetSize(w, h)
-	}
-	return []layout.Element{el}
+	return c.altTextFallback("[image: "+src+"]", style)
 }
 
 // isURL checks if a string is an HTTP(S) URL.
@@ -289,11 +293,11 @@ func isURL(s string) bool {
 // fetchImage is implemented in fetch_image.go (with net/http)
 // and fetch_image_wasm.go (stub for WASM builds).
 
-// loadLocalImage loads an image referenced by a relative or absolute path,
-// resolving through BaseFS / BasePath. The image format is detected from
-// the file extension first, then by magic bytes.
+// loadLocalImage loads an image referenced by a relative path, resolving
+// through BaseFS. The image format is detected from the file extension
+// first, then by magic bytes.
 func (c *converter) loadLocalImage(p string) (*folioimage.Image, error) {
-	data, err := readAsset(c.opts.BaseFS, c.opts.BasePath, p)
+	data, err := readAsset(c.opts.BaseFS, p)
 	if err != nil {
 		return nil, err
 	}

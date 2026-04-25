@@ -4,6 +4,100 @@ For the full list of new features and fixes, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Upgrading from v0.7.x to v0.8.0
+
+### `html.Options.BasePath` is removed
+
+`BaseFS` is now the single way to resolve every local asset referenced
+by an HTML document — `<img src>`, `<link href>`, `@font-face url()`,
+`background-image: url()`, and `Options.FallbackFontPath`.
+
+Migration:
+
+```go
+// before
+opts := &html.Options{BasePath: "./assets"}
+
+// after
+opts := &html.Options{BaseFS: os.DirFS("./assets")}
+```
+
+Any `fs.FS` works:
+
+| Source                | Example                                  |
+|-----------------------|------------------------------------------|
+| Embedded assets       | `BaseFS: assetsFS // //go:embed assets`  |
+| On-disk directory     | `BaseFS: os.DirFS("./assets")`           |
+| Sandboxed directory   | `r, _ := os.OpenRoot("./assets"); BaseFS: r.FS()` |
+| In-memory (tests)     | `BaseFS: fstest.MapFS{...}`              |
+
+### Path semantics changed
+
+Paths in the document are normalised to `fs.FS` conventions before the
+read: forward slashes only, no leading `/`, no `..` traversal — invalid
+paths are rejected before the open.
+
+A leading `/` in `src`/`href` is now treated as web-style root of the
+`BaseFS` (matching how `<base href="/">` works in browsers) instead of
+an absolute filesystem path. If you previously relied on absolute
+filesystem paths, mount the directory containing them as `BaseFS` and
+use root-relative `/`-prefixed paths in the document.
+
+When `BaseFS` is nil, every local-asset reference fails — the document
+must inline its assets via `data:` URIs.
+
+### `@font-face` resolves relative to its containing stylesheet
+
+A linked stylesheet at `css/site.css` containing
+`@font-face { src: url(../fonts/Inter.ttf); }` now resolves to
+`fonts/Inter.ttf` from the `BaseFS` root — matching browser behavior.
+Previously the URL resolved from the document root regardless of where
+the stylesheet lived.
+
+If your `@font-face` rules currently rely on the old root-anchored
+behavior, either:
+
+- use a root-relative path (`url(/fonts/Inter.ttf)`), or
+- move the rule into an inline `<style>` block in the document.
+
+HTTP-origin stylesheets resolve relative URLs as HTTP, FS-origin
+stylesheets resolve them through `BaseFS`. Inline `<style>` blocks
+continue to resolve relative URLs from the `BaseFS` root.
+
+### Surfacing asset-load errors
+
+A new optional `Options.Logger` (`*slog.Logger`) receives warn-level
+events when an asset fails to load: missing `@font-face` files,
+unreadable linked stylesheets, image fetches that fall back to alt
+text. Previously these were silently swallowed. To surface them during
+development:
+
+```go
+opts := &html.Options{
+    BaseFS: os.DirFS("./assets"),
+    Logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+}
+```
+
+The default remains silent, so existing callers see no behavior change
+unless they opt in.
+
+### `tmpl.RenderFile` and `tmpl.RenderFileTo`
+
+These helpers now auto-populate `BaseFS` to `os.DirFS(filepath.Dir(templatePath))`
+when the caller leaves it nil, so a template referencing `<img src="logo.png">`
+next to itself resolves without extra wiring. Callers that already pass a
+`BaseFS` keep their value.
+
+### C ABI
+
+The signature of `folio_document_add_html_with_options` is unchanged —
+it still takes a `basePath` C string and wraps it as
+`os.DirFS(basePath)` internally at the boundary. C consumers see no
+breaking change.
+
+---
+
 ## Upgrading from v0.6.x to v0.7.0
 
 No code changes are required. Every new API is additive and the

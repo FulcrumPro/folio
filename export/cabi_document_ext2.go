@@ -10,6 +10,7 @@ package main
 */
 import "C"
 import (
+	"os"
 	"unsafe"
 
 	"github.com/carlos7ags/folio/document"
@@ -67,8 +68,14 @@ func folio_document_add_html_with_options(docH C.uint64_t, htmlStr *C.char,
 		DefaultFontSize:  float64(defaultFontSize),
 		PageWidth:        float64(pageWidth),
 		PageHeight:       float64(pageHeight),
-		BasePath:         C.GoString(basePath),
 		FallbackFontPath: C.GoString(fallbackFontPath),
+	}
+	// fs.FS cannot cross the C boundary, so wrap basePath as os.DirFS at
+	// the boundary. An empty basePath leaves BaseFS nil; relative asset
+	// references in the HTML will then fail to resolve (callers must
+	// either pass a basePath or inline assets via data: URIs).
+	if bp := C.GoString(basePath); bp != "" {
+		opts.BaseFS = os.DirFS(bp)
 	}
 	if err := doc.AddHTML(C.GoString(htmlStr), opts); err != nil {
 		return setErr(errPDF, err)

@@ -67,10 +67,10 @@ type Options struct {
 	// original BaseTemplate is never modified.
 	BaseTemplate *htmltpl.Template
 
-	// ConvertOpts is passed through to html.ConvertFull. Use it to
-	// set page dimensions, default font size, base path for assets,
-	// etc. RenderFile clones this before setting BasePath, so the
-	// caller's original value is never mutated.
+	// ConvertOpts is passed through to html.ConvertFull. Use it to set
+	// page dimensions, default font size, BaseFS for assets, etc.
+	// RenderFile clones this before defaulting BaseFS to the template's
+	// directory, so the caller's original value is never mutated.
 	ConvertOpts *foliohtml.Options
 
 	// PageSize sets the page size for RenderFile / RenderDocument.
@@ -124,7 +124,7 @@ func (o *Options) baseTemplate() *htmltpl.Template {
 
 // cloneConvertOpts returns a shallow copy of the Options' ConvertOpts
 // (or a fresh instance if nil). This prevents RenderFile from mutating
-// the caller's original Options when setting BasePath.
+// the caller's original Options when defaulting BaseFS.
 func (o *Options) cloneConvertOpts() *foliohtml.Options {
 	if o == nil || o.ConvertOpts == nil {
 		return &foliohtml.Options{}
@@ -169,12 +169,11 @@ func RenderDocument(templateStr string, data any, opts *Options) (*document.Docu
 
 // RenderFile reads a template from disk, executes it with data, and
 // writes the resulting PDF to outPath. The template's directory is used
-// as the base path for resolving relative asset references (images,
-// fonts, stylesheets) in the HTML unless ConvertOpts.BasePath is
-// already set.
+// as the BaseFS for resolving relative asset references (images, fonts,
+// stylesheets) in the HTML unless ConvertOpts.BaseFS is already set.
 //
 // RenderFile never mutates the caller's Options — it clones
-// ConvertOpts internally before setting BasePath.
+// ConvertOpts internally before defaulting BaseFS.
 func RenderFile(templatePath string, data any, opts *Options, outPath string) error {
 	tmplBytes, err := os.ReadFile(templatePath)
 	if err != nil {
@@ -183,8 +182,8 @@ func RenderFile(templatePath string, data any, opts *Options, outPath string) er
 
 	// Clone ConvertOpts so we don't mutate the caller's struct.
 	convOpts := opts.cloneConvertOpts()
-	if convOpts.BasePath == "" {
-		convOpts.BasePath = filepath.Dir(templatePath)
+	if convOpts.BaseFS == nil {
+		convOpts.BaseFS = os.DirFS(filepath.Dir(templatePath))
 	}
 
 	htmlStr, err := execute(string(tmplBytes), filepath.Base(templatePath), data, opts)
@@ -221,8 +220,8 @@ func RenderTo(w io.Writer, templateStr string, data any, opts *Options) error {
 // writes the resulting PDF to w. This is the natural entry point for
 // HTTP handlers that serve PDFs directly to the response writer.
 //
-// Like RenderFile, the template's directory is used as BasePath for
-// asset resolution unless ConvertOpts.BasePath is already set.
+// Like RenderFile, the template's directory is used as BaseFS for
+// asset resolution unless ConvertOpts.BaseFS is already set.
 // The caller's Options are never mutated.
 func RenderFileTo(w io.Writer, templatePath string, data any, opts *Options) error {
 	tmplBytes, err := os.ReadFile(templatePath)
@@ -231,8 +230,8 @@ func RenderFileTo(w io.Writer, templatePath string, data any, opts *Options) err
 	}
 
 	convOpts := opts.cloneConvertOpts()
-	if convOpts.BasePath == "" {
-		convOpts.BasePath = filepath.Dir(templatePath)
+	if convOpts.BaseFS == nil {
+		convOpts.BaseFS = os.DirFS(filepath.Dir(templatePath))
 	}
 
 	htmlStr, err := execute(string(tmplBytes), filepath.Base(templatePath), data, opts)

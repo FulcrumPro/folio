@@ -20,26 +20,30 @@ import (
 // no URL fetching should be attempted. A nil client falls back to
 // http.DefaultClient.
 func makeCSSFetcher(policy URLPolicy, client *http.Client) func(string) ([]byte, error) {
-	if client == nil {
-		client = http.DefaultClient
-	}
+	c := httpClientOrDefault(client)
 	return func(url string) ([]byte, error) {
 		if policy != nil {
 			if err := policy(url); err != nil {
 				return nil, err
 			}
 		}
-		resp, err := client.Get(url)
-		if err != nil {
-			return nil, fmt.Errorf("fetch stylesheet %s: %w", url, err)
-		}
-		defer func() { _ = resp.Body.Close() }()
-		if resp.StatusCode != 200 {
-			return nil, fmt.Errorf("fetch stylesheet %s: HTTP %d", url, resp.StatusCode)
-		}
 		// Limit to 10MB for stylesheets.
-		return io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+		return httpGetBytes(c, url, 10<<20)
 	}
+}
+
+// httpGetBytes performs a GET with the supplied client and returns at most
+// maxBytes of body. Non-200 responses surface as an error.
+func httpGetBytes(client *http.Client, url string, maxBytes int64) ([]byte, error) {
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: %w", url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("fetch %s: HTTP %d", url, resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, maxBytes))
 }
 
 // fetchImage downloads an image from a URL and returns a folio Image.

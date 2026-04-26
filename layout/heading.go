@@ -35,12 +35,13 @@ var headingSizes = [7]float64{
 // Heading is a block-level text element with a preset size based on its level.
 // It renders as a bold paragraph with spacing proportional to its level.
 type Heading struct {
-	para          *Paragraph
-	level         HeadingLevel
-	bookmarkLevel int               // CSS bookmark-level override (0 = use level)
-	bookmarkLabel string            // CSS bookmark-label override (empty = use text)
-	stringSets    map[string]string // CSS string-set values to capture
-	continuation  bool              // true for the overflow half of a split heading
+	para           *Paragraph
+	level          HeadingLevel
+	bookmarkLevel  int               // CSS bookmark-level override (0 = use level, -1 = none/skip)
+	bookmarkLabel  string            // CSS bookmark-label override (empty = use text)
+	bookmarkClosed bool              // CSS bookmark-state: closed (collapsed in viewer)
+	stringSets     map[string]string // CSS string-set values to capture
+	continuation   bool              // true for the overflow half of a split heading
 }
 
 // NewHeading creates a heading using a standard font.
@@ -100,6 +101,14 @@ func (h *Heading) SetBookmarkLevel(level int) *Heading {
 // normalizing here keeps the API uniform.
 func (h *Heading) SetBookmarkLabel(label string) *Heading {
 	h.bookmarkLabel = normalizeText(label)
+	return h
+}
+
+// SetBookmarkClosed marks the heading's outline subtree as collapsed by
+// default in PDF viewers. Corresponds to the CSS bookmark-state: closed
+// property.
+func (h *Heading) SetBookmarkClosed(closed bool) *Heading {
+	h.bookmarkClosed = closed
 	return h
 }
 
@@ -218,6 +227,11 @@ func (h *Heading) PlanLayout(area LayoutArea) LayoutPlan {
 	// drive auto-bookmarks and the CSS string() capture, both of which
 	// must fire exactly once per heading regardless of how many page
 	// breaks the heading spans.
+	//
+	// bookmark-level retags the heading (h3 with bookmark-level: 1
+	// becomes H1 in tagged-PDF output) but bookmark-level: none leaves
+	// the natural tag in place — the element is still semantically a
+	// heading; it's only excluded from the outline.
 	effectiveLevel := h.level
 	if h.bookmarkLevel > 0 && h.bookmarkLevel <= 6 {
 		effectiveLevel = HeadingLevel(h.bookmarkLevel)
@@ -232,6 +246,8 @@ func (h *Heading) PlanLayout(area LayoutArea) LayoutPlan {
 			headingText = h.bookmarkLabel
 		}
 		plan.Blocks[0].HeadingText = headingText
+		plan.Blocks[0].BookmarkLevel = h.bookmarkLevel
+		plan.Blocks[0].BookmarkClosed = h.bookmarkClosed
 		if len(h.stringSets) > 0 {
 			plan.Blocks[0].StringSets = h.stringSets
 		}
@@ -262,11 +278,12 @@ func (h *Heading) PlanLayout(area LayoutArea) LayoutPlan {
 	if plan.Status == LayoutPartial {
 		if overflowPara, ok := plan.Overflow.(*Paragraph); ok {
 			plan.Overflow = &Heading{
-				para:          overflowPara,
-				level:         h.level,
-				bookmarkLevel: h.bookmarkLevel,
-				bookmarkLabel: h.bookmarkLabel,
-				continuation:  true,
+				para:           overflowPara,
+				level:          h.level,
+				bookmarkLevel:  h.bookmarkLevel,
+				bookmarkLabel:  h.bookmarkLabel,
+				bookmarkClosed: h.bookmarkClosed,
+				continuation:   true,
 			}
 		}
 	}

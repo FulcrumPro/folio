@@ -986,12 +986,30 @@ func (c *converter) applyProperty(prop, val string, style *computedStyle) {
 
 	// CSS bookmark properties
 	case "bookmark-level":
-		if v, err := strconv.Atoi(strings.TrimSpace(val)); err == nil && v >= 0 && v <= 6 {
+		s := strings.TrimSpace(strings.ToLower(val))
+		if s == "none" {
+			// Per CSS GCPM, "none" removes the element from the outline.
+			// Encoded as -1 so render_plans can short-circuit before
+			// emitting a HeadingInfo.
+			style.BookmarkLevel = -1
+			style.BookmarkLevelSet = true
+		} else if v, err := strconv.Atoi(s); err == nil && v >= 1 && v <= 6 {
+			// Spec: bookmark-level accepts a positive integer or "none".
+			// 0 and negatives are invalid; values above 6 are clamped at
+			// the parser since Folio's heading tag set ends at H6.
 			style.BookmarkLevel = v
 			style.BookmarkLevelSet = true
 		}
 	case "bookmark-label":
-		style.BookmarkLabel = strings.Trim(strings.TrimSpace(val), `"'`)
+		// Preserve the raw value here; content() and attr(...) are
+		// resolved at element-conversion time where the html.Node is
+		// available (see resolveBookmarkLabel).
+		style.BookmarkLabel = strings.TrimSpace(val)
+	case "bookmark-state":
+		s := strings.TrimSpace(strings.ToLower(val))
+		if s == "open" || s == "closed" {
+			style.BookmarkState = s
+		}
 
 	// CSS string-set for running headers.
 	// Format: string-set: name content() | string-set: name "literal"

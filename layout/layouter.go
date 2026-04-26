@@ -69,13 +69,19 @@ type PlacedBlock struct {
 	AltText string
 
 	// HeadingText is the plain text of a heading (for auto-bookmark generation).
+	// Also used as the bookmark label for non-heading bookmark targets.
 	HeadingText string
 
-	// Anchor is a named-destination identifier captured for this block.
-	// When non-empty, the renderer records (Name, PageIndex) in the
-	// per-page PageResult.Anchors slice so the document layer can register
-	// it as a PDF named destination. Used by HTML id="..." attributes.
-	Anchor string
+	// BookmarkLevel encodes the CSS bookmark-level override for this
+	// block. 0 = use the level derived from Tag (H1-H6); -1 = explicit
+	// "none" (skip from outline); 1-6 = explicit level. Non-heading
+	// blocks set 1-6 to participate in the outline tree.
+	BookmarkLevel int
+
+	// BookmarkClosed corresponds to bookmark-state: closed. When true,
+	// the outline subtree below this entry is collapsed by default in
+	// PDF viewers (ISO 32000 §12.3.3 — emitted as a negative /Count).
+	BookmarkClosed bool
 
 	// Children are nested content blocks (e.g. lines within a paragraph,
 	// cells within a table row). The renderer draws them in order.

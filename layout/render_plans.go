@@ -289,7 +289,6 @@ func (r *Renderer) renderWithPlans() []PageResult {
 			Links:      page.Links,
 			ExtGStates: page.ExtGStates,
 			Headings:   page.Headings,
-			Anchors:    page.Anchors,
 		})
 	}
 
@@ -360,20 +359,25 @@ func drawBlockNested(block PlacedBlock, baseX, topY float64, ctx *DrawContext, t
 		block.Draw(*ctx, pdfX, pdfY)
 	}
 
-	// Record heading for auto-bookmarks.
-	if level := headingLevel(block.Tag); level > 0 && block.HeadingText != "" {
-		ctx.Page.Headings = append(ctx.Page.Headings, HeadingInfo{
-			Text:  block.HeadingText,
-			Level: level,
-			Y:     pdfY,
-		})
-	}
-
-	// Record named-destination anchor for this page.
-	if block.Anchor != "" {
-		ctx.Page.Anchors = append(ctx.Page.Anchors, AnchorInfo{
-			Name: block.Anchor,
-		})
+	// Record heading for auto-bookmarks. The block's BookmarkLevel takes
+	// precedence over the level derived from its structure tag:
+	//
+	//   BookmarkLevel == -1 → CSS "bookmark-level: none" — skip.
+	//   BookmarkLevel  >  0 → explicit override (or non-heading target).
+	//   BookmarkLevel == 0  → fall back to the H1-H6 tag.
+	if block.BookmarkLevel != -1 && block.HeadingText != "" {
+		level := block.BookmarkLevel
+		if level == 0 {
+			level = headingLevel(block.Tag)
+		}
+		if level > 0 {
+			ctx.Page.Headings = append(ctx.Page.Headings, HeadingInfo{
+				Text:   block.HeadingText,
+				Level:  level,
+				Y:      pdfY,
+				Closed: block.BookmarkClosed,
+			})
+		}
 	}
 
 	// Record link annotations.

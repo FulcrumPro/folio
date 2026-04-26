@@ -318,22 +318,12 @@ func (c *converter) collectRunsFromNode(child *html.Node, parentStyle computedSt
 		}
 
 		childRuns := c.collectRuns(child, childStyle)
-		// Propagate href from <a> elements to all child runs. Internal
-		// fragment hrefs (href="#anchor") become LinkDestName so the
-		// renderer emits a /Dest annotation; external URLs become
-		// LinkURI for a /URI action.
+		// Propagate href from <a> elements to all child runs.
 		if child.DataAtom == atom.A {
 			href := getAttr(child, "href")
 			if href != "" {
-				if strings.HasPrefix(href, "#") {
-					destName := href[1:]
-					for i := range childRuns {
-						childRuns[i].LinkDestName = destName
-					}
-				} else {
-					for i := range childRuns {
-						childRuns[i].LinkURI = href
-					}
+				for i := range childRuns {
+					childRuns[i].LinkURI = href
 				}
 			}
 		}
@@ -397,15 +387,8 @@ func (c *converter) collectListItemRuns(li *html.Node, style computedStyle) []la
 			if child.DataAtom == atom.A {
 				href := getAttr(child, "href")
 				if href != "" {
-					if strings.HasPrefix(href, "#") {
-						destName := href[1:]
-						for i := range childRuns {
-							childRuns[i].LinkDestName = destName
-						}
-					} else {
-						for i := range childRuns {
-							childRuns[i].LinkURI = href
-						}
+					for i := range childRuns {
+						childRuns[i].LinkURI = href
 					}
 				}
 			}

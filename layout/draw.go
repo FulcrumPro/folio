@@ -218,7 +218,7 @@ func drawTextLine(ctx DrawContext, words []Word, x, baselineY, maxWidth float64,
 			if i < len(words)-1 {
 				next := words[i+1]
 				sameDecoration := next.Decoration&word.Decoration != 0
-				sameLink := word.LinkURI == next.LinkURI && word.LinkDestName == next.LinkDestName
+				sameLink := word.LinkURI == next.LinkURI
 				sameColor := word.Color == next.Color
 				if word.DecorationColor != nil && next.DecorationColor != nil {
 					sameColor = *word.DecorationColor == *next.DecorationColor

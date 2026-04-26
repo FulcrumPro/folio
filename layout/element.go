@@ -146,7 +146,6 @@ type TextRun struct {
 	WordSpacing     float64     // extra space between words (points, from CSS word-spacing)
 	BaselineShift   float64     // vertical offset in points (positive = up for super, negative = down for sub)
 	LinkURI         string      // if non-empty, this run is part of a hyperlink
-	LinkDestName    string      // if non-empty, this run links to an internal named destination (mutually exclusive with LinkURI)
 	TextShadow      *TextShadow // if non-nil, draws a shadow behind the text
 	BackgroundColor *Color      // if non-nil, a highlight rectangle is drawn behind the text
 	// InlineElement holds a layout element (e.g. ImageElement, SVGElement,
@@ -324,11 +323,6 @@ type Word struct {
 	// LinkURI is the hyperlink target for this word. If non-empty, the
 	// renderer creates a link annotation covering this word's area.
 	LinkURI string
-
-	// LinkDestName is the internal named destination for this word. When
-	// non-empty (and LinkURI is empty), the renderer emits a /Dest link
-	// annotation rather than a /URI action. Used by inline <a href="#x">.
-	LinkDestName string
 
 	// BackgroundColor, if non-nil, draws a filled highlight rectangle
 	// behind this word before rendering the text.

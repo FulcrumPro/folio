@@ -75,10 +75,9 @@ type Document struct {
 	firstMarginBoxes map[string]layout.MarginBox // first-page margin boxes
 	elements         []layout.Element
 	absolutes        []absoluteElement
-	Info             Info                // document metadata (Title, Author, etc.)
-	outlines         []Outline           // bookmarks / outline tree
-	namedDests       []NamedDest         // named destinations
-	namedDestSet     map[string]struct{} // membership for O(1) hasNamedDest
+	Info             Info        // document metadata (Title, Author, etc.)
+	outlines         []Outline   // bookmarks / outline tree
+	namedDests       []NamedDest // named destinations
 	header           PageDecorator
 	footer           PageDecorator
 	headerElem       ElementDecorator
@@ -250,15 +249,6 @@ func (d *Document) AddNamedDest(dest NamedDest) {
 		dest.FitType = "Fit"
 	}
 	d.namedDests = append(d.namedDests, dest)
-	if d.namedDestSet == nil {
-		d.namedDestSet = make(map[string]struct{})
-	}
-	d.namedDestSet[dest.Name] = struct{}{}
-}
-
-func (d *Document) hasNamedDest(name string) bool {
-	_, ok := d.namedDestSet[name]
-	return ok
 }
 
 // Add appends a layout element (e.g. Paragraph) to the document.
@@ -429,23 +419,6 @@ func (d *Document) buildAllPages() (all []*Page, structTags []layout.StructTagIn
 				}
 				p.annotations = append(p.annotations, ann)
 			}
-			// Register named destinations from anchor markers (id="..."). The
-			// final page index is len(all) — manual pages are already in `all`,
-			// so they're accounted for implicitly. First-wins on duplicate
-			// names keeps the annotation path (iterates namedDests, breaks on
-			// first match) consistent with the catalog /Dests dictionary
-			// (where Set is last-wins).
-			finalPageIdx := len(all)
-			for _, anchor := range res.Anchors {
-				if d.hasNamedDest(anchor.Name) {
-					continue
-				}
-				d.AddNamedDest(NamedDest{
-					Name:      anchor.Name,
-					PageIndex: finalPageIdx,
-					FitType:   "Fit",
-				})
-			}
 			all = append(all, p)
 		}
 
@@ -503,11 +476,22 @@ func (d *Document) buildAllPages() (all []*Page, structTags []layout.StructTagIn
 	return all, structTags
 }
 
-// buildAutoBookmarks generates an outline tree from heading info in rendered pages.
-// Headings are nested by level: H2 under the preceding H1, H3 under H2, etc.
+// buildAutoBookmarks generates an outline tree from heading info in
+// rendered pages. Entries are nested by level: a level-2 entry becomes a
+// child of the nearest preceding entry whose level is strictly lower.
+//
+// CSS GCPM does not specify the behavior when a level is skipped (e.g.
+// h1 → h3 with no h2 between). Folio's choice: the deeper entry nests
+// under the nearest preceding lower-level entry — matching common
+// engine behavior (Prince) and aligning with what most templates
+// expect when a heading hierarchy is non-strict. Documented here so
+// downstream consumers can rely on it.
+//
+// HeadingInfo records produced with bookmark-level: none are filtered
+// out at the render pass (render_plans.go), so this routine never sees
+// them.
 func buildAutoBookmarks(results []layout.PageResult, pageOffset int) []Outline {
 	var outlines []Outline
-	// Stack tracks the current nesting: stack[0] = H1 parent, stack[1] = H2, etc.
 	type stackEntry struct {
 		level   int
 		outline *Outline
@@ -518,22 +502,22 @@ func buildAutoBookmarks(results []layout.PageResult, pageOffset int) []Outline {
 		actualPage := pageOffset + pageIdx
 		for _, h := range res.Headings {
 			dest := XYZDest(actualPage, 0, h.Y, 0)
-			entry := Outline{Title: h.Text, Dest: dest}
+			entry := Outline{Title: h.Text, Dest: dest, Closed: h.Closed}
 
 			// Pop stack entries that are at the same or deeper level.
+			// Skipped levels (h1 → h3) leave the h1 frame on the stack,
+			// so the h3 nests under it — the documented behavior.
 			for len(stack) > 0 && stack[len(stack)-1].level >= h.Level {
 				stack = stack[:len(stack)-1]
 			}
 
 			if len(stack) == 0 {
-				// Top-level heading.
 				outlines = append(outlines, entry)
 				stack = append(stack, stackEntry{
 					level:   h.Level,
 					outline: &outlines[len(outlines)-1],
 				})
 			} else {
-				// Nested under the current parent.
 				parent := stack[len(stack)-1].outline
 				parent.Children = append(parent.Children, entry)
 				stack = append(stack, stackEntry{

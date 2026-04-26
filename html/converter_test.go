@@ -714,58 +714,6 @@ func TestConvertLinkInParagraphProducesAnnotation(t *testing.T) {
 	}
 }
 
-// TestConvertInlineAnchorLinkUsesDestName verifies that <a href="#x">
-// inside a <p> produces a PlacedBlock whose Link carries DestName (not
-// URI) so the document layer emits a /Dest annotation rather than a
-// /URI action. Without this routing, internal anchor links would be
-// written as external links to the literal string "#x".
-func TestConvertInlineAnchorLinkUsesDestName(t *testing.T) {
-	htmlStr := `<p>See <a href="#totals">totals</a>.</p>`
-	elems, err := Convert(htmlStr, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(elems) == 0 {
-		t.Fatal("expected at least 1 element")
-	}
-	plan := elems[0].PlanLayout(layout.LayoutArea{Width: 400, Height: 1000})
-	var found *layout.LinkArea
-	for _, b := range plan.Blocks {
-		for i := range b.Links {
-			if b.Links[i].DestName == "totals" {
-				found = &b.Links[i]
-			}
-		}
-	}
-	if found == nil {
-		t.Fatal("expected a Link with DestName=\"totals\" for <a href=\"#totals\">")
-	}
-	if found.URI != "" {
-		t.Errorf("URI = %q, want empty for internal anchor link", found.URI)
-	}
-}
-
-// TestConvertElementWithIdEmitsAnchor verifies that an element bearing
-// an id="..." attribute produces a layout.Anchor before its content,
-// so href="#id" elsewhere in the document can resolve to the right page.
-func TestConvertElementWithIdEmitsAnchor(t *testing.T) {
-	htmlStr := `<h2 id="totals">Totals</h2>`
-	elems, err := Convert(htmlStr, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(elems) < 2 {
-		t.Fatalf("expected at least 2 elements (anchor + heading), got %d", len(elems))
-	}
-	anchor, ok := elems[0].(*layout.Anchor)
-	if !ok {
-		t.Fatalf("expected first element to be *layout.Anchor, got %T", elems[0])
-	}
-	if anchor.Name() != "totals" {
-		t.Errorf("Anchor.Name = %q, want totals", anchor.Name())
-	}
-}
-
 // TestConvertMixedTextAndLinkInParagraph verifies that a paragraph with
 // both plain text and a link produces link annotations only for the linked part.
 func TestConvertMixedTextAndLinkInParagraph(t *testing.T) {
@@ -921,12 +869,8 @@ func TestConvertStyleBlockID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// One Anchor marker (from id="title") + one Paragraph for the body content.
-	if len(elems) != 2 {
-		t.Fatalf("expected 2 elements (anchor + paragraph), got %d", len(elems))
-	}
-	if _, ok := elems[0].(*layout.Anchor); !ok {
-		t.Errorf("expected first element to be a layout.Anchor for id=\"title\", got %T", elems[0])
+	if len(elems) != 1 {
+		t.Fatalf("expected 1 element, got %d", len(elems))
 	}
 }
 

@@ -52,6 +52,11 @@ type Outline struct {
 	Title    string
 	Dest     Destination
 	Children []Outline
+	// Closed marks the entry's subtree as collapsed by default in PDF
+	// viewers. Encoded by buildOutlineTree as a negative /Count per
+	// ISO 32000 §12.3.3 — the absolute value still reflects the number
+	// of descendants, but the sign tells the viewer to start collapsed.
+	Closed bool
 }
 
 // AddOutline adds a top-level bookmark to the document.
@@ -144,12 +149,19 @@ func buildOutlineItems(
 			d.Set("Next", refs[i+1])
 		}
 
-		// Children
+		// Children — /Count carries the descendant count; per ISO 32000
+		// §12.3.3 the sign signals the initial open/closed state. A
+		// negative count tells the viewer to render the subtree
+		// collapsed (bookmark-state: closed); positive means open.
 		if len(item.Children) > 0 {
 			childRefs := buildOutlineItems(item.Children, refs[i], pageRefs, addObject)
 			d.Set("First", childRefs[0])
 			d.Set("Last", childRefs[len(childRefs)-1])
-			d.Set("Count", core.NewPdfInteger(countOutlines(item.Children)))
+			count := countOutlines(item.Children)
+			if item.Closed {
+				count = -count
+			}
+			d.Set("Count", core.NewPdfInteger(count))
 		}
 	}
 

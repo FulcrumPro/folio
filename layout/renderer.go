@@ -28,21 +28,20 @@ type PageResult struct {
 	Links      []LinkArea       // clickable link annotations produced by Link elements
 	ExtGStates []ExtGStateEntry // graphics state dictionaries (opacity, etc.)
 	Headings   []HeadingInfo    // headings found on this page (for auto-bookmarks)
-	Anchors    []AnchorInfo     // named-destination markers found on this page
 	PageHeight float64          // actual page height (non-zero only for auto-sized pages)
 }
 
-// AnchorInfo records a named destination produced by an Anchor element
-// (typically from an HTML id="..." attribute) on a rendered page.
-type AnchorInfo struct {
-	Name string // destination name
-}
-
 // HeadingInfo records a heading found during rendering.
+//
+// Despite the name, this collects every block participating in the
+// outline tree — both <h1>-<h6> and any non-heading element with an
+// explicit CSS bookmark-level. Closed reflects bookmark-state: closed
+// and is forwarded to the PDF Outline entry's /Count sign.
 type HeadingInfo struct {
-	Text  string  // heading text
-	Level int     // 1-6 (H1-H6)
-	Y     float64 // y position in PDF coordinates (top of heading)
+	Text   string  // heading text / bookmark label
+	Level  int     // 1-6 (H1-H6 or explicit bookmark-level)
+	Y      float64 // y position in PDF coordinates (top of heading)
+	Closed bool    // bookmark-state: closed
 }
 
 // ExtGStateEntry is a named graphics state dictionary registered on a page.

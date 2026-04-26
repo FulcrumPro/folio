@@ -39,8 +39,11 @@ func (c *converter) convertHeading(n *html.Node, style computedStyle, level layo
 	if style.BookmarkLevelSet {
 		h.SetBookmarkLevel(style.BookmarkLevel)
 	}
-	if style.BookmarkLabel != "" {
-		h.SetBookmarkLabel(style.BookmarkLabel)
+	if label := resolveBookmarkLabel(style.BookmarkLabel, n, text); label != "" {
+		h.SetBookmarkLabel(label)
+	}
+	if style.BookmarkState == "closed" {
+		h.SetBookmarkClosed(true)
 	}
 	if style.StringSetName != "" {
 		// Resolve content() to the heading's text content.

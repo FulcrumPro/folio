@@ -989,6 +989,22 @@ func (c *converter) convertElement(n *html.Node, parentStyle computedStyle) []la
 
 	elems := c.convertElementInner(n, style)
 
+	// Apply CSS bookmark-level on non-heading elements. Headings carry
+	// their own bookmark metadata via convertHeading → layout.Heading;
+	// for other elements we wrap the produced Element so its first
+	// PlacedBlock records the outline target. Skip the wrap when no
+	// elements were produced or when the level is non-positive (0 is a
+	// no-op, -1 / "none" is meaningful only on a heading where it
+	// suppresses the default outline entry).
+	if style.BookmarkLevelSet && style.BookmarkLevel >= 1 && !isHeadingNode(n) && len(elems) > 0 {
+		text := collectText(n)
+		label := resolveBookmarkLabel(style.BookmarkLabel, n, text)
+		if label != "" {
+			closed := style.BookmarkState == "closed"
+			elems[0] = layout.NewBookmarkAnchor(elems[0], style.BookmarkLevel, label, closed)
+		}
+	}
+
 	// ::before pseudo-element.
 	if c.sheet != nil {
 		beforeDecls := c.sheet.matchingPseudoElementDeclarations(n, "before")
@@ -1102,21 +1118,6 @@ func (c *converter) convertElement(n *html.Node, parentStyle computedStyle) []la
 		for _, cr := range style.CounterReset {
 			c.popCounter(cr.Name)
 		}
-		// If the absolute element carries an id, leave a zero-height Anchor
-		// in the normal flow so href="#id" still resolves. The anchor binds
-		// to whichever page the surrounding flow places it on, not the
-		// (potentially distant) page where the absolute element renders —
-		// an approximation, but better than dropping the dest entirely.
-		if id := strings.TrimSpace(getAttr(n, "id")); id != "" {
-			out := []layout.Element{layout.NewAnchor(id)}
-			if len(before) > 0 {
-				out = append(before, out...)
-			}
-			return out
-		}
-		if len(before) > 0 {
-			return before
-		}
 		return nil // don't add to normal flow
 	}
 
@@ -1177,84 +1178,10 @@ func (c *converter) convertElement(n *html.Node, parentStyle computedStyle) []la
 		c.popCounter(cr.Name)
 	}
 
-	// Anchor for ids on descendants the dispatcher swallows whole — table
-	// cells/rows, list items, and inline elements inside paragraph-like
-	// text flow — so href="#cell" or href="#span" still resolves. These
-	// bind to whichever page the parent block starts on (not the actual
-	// child page when the parent spans pages); accepting that approximation
-	// keeps destinations resolvable rather than dropping them entirely.
-	for _, descID := range collectSwallowedIDs(n) {
-		elems = append([]layout.Element{layout.NewAnchor(descID)}, elems...)
-	}
-
-	// Anchor for the element's own id. Must sit AFTER page-break-before,
-	// otherwise the marker lands on the previous page and the destination
-	// resolves one page early. Inline anchors (e.g. <span id="x"> inside a
-	// paragraph) flow through collectRunsFromNode and are not registered
-	// here; block-level anchors cover the common case.
-	if id := strings.TrimSpace(getAttr(n, "id")); id != "" {
-		elems = append([]layout.Element{layout.NewAnchor(id)}, elems...)
-	}
-
 	if len(before) > 0 {
 		elems = append(before, elems...)
 	}
 	return elems
-}
-
-// collectSwallowedIDs walks the subtree and returns ids on elements that
-// convertElement won't visit on its own — table cells/rows/captions, list
-// items, and (when the root is a paragraph-like text-flow container)
-// inline elements that flow through collectRunsFromNode. Without this,
-// id attributes on those elements would be silently dropped.
-func collectSwallowedIDs(root *html.Node) []string {
-	scanInline := isParagraphLike(root)
-	var ids []string
-	var walk func(*html.Node)
-	walk = func(n *html.Node) {
-		if n == nil {
-			return
-		}
-		if n != root && n.Type == html.ElementNode {
-			swallowed := false
-			switch n.DataAtom {
-			case atom.Td, atom.Th, atom.Tr, atom.Caption,
-				atom.Thead, atom.Tbody, atom.Tfoot,
-				atom.Li, atom.Dt, atom.Dd:
-				swallowed = true
-			case atom.Span, atom.Em, atom.Strong, atom.B, atom.I, atom.U,
-				atom.S, atom.Del, atom.Mark, atom.Small, atom.Sub, atom.Sup,
-				atom.Code, atom.A:
-				swallowed = scanInline
-			}
-			if swallowed {
-				if id := strings.TrimSpace(getAttr(n, "id")); id != "" {
-					ids = append(ids, id)
-				}
-			}
-		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c)
-		}
-	}
-	walk(root)
-	return ids
-}
-
-// isParagraphLike reports whether the element's converter consumes its
-// inline subtree wholesale (via collectRunsFromNode), so inline-id
-// descendants would not otherwise be visited by convertElement.
-func isParagraphLike(n *html.Node) bool {
-	if n == nil || n.Type != html.ElementNode {
-		return false
-	}
-	switch n.DataAtom {
-	case atom.P, atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6,
-		atom.Blockquote, atom.Pre, atom.Caption, atom.Figcaption,
-		atom.Td, atom.Th, atom.Li, atom.Dt, atom.Dd, atom.Label:
-		return true
-	}
-	return false
 }
 
 // convertElementInner handles the actual element dispatch after page break handling.

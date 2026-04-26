@@ -138,9 +138,10 @@ type computedStyle struct {
 	Widows  int // minimum lines at top of page (0 = not set)
 
 	// CSS bookmark properties
-	BookmarkLevel    int    // bookmark-level override (0 = use heading level)
+	BookmarkLevel    int    // bookmark-level override (0 = use heading level, -1 = "none" / skip)
 	BookmarkLevelSet bool   // true if bookmark-level was explicitly set
 	BookmarkLabel    string // bookmark-label override (empty = use heading text)
+	BookmarkState    string // bookmark-state: "open" (default) or "closed"
 
 	// Table
 	BorderCollapse     string  // "separate", "collapse"

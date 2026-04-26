@@ -260,6 +260,42 @@ func main() {
 		doc.Add(left)
 	}
 
+	// --- Section 5: Mixed-script fallback in one paragraph ---
+
+	doc.Add(layout.NewHeading("5. Mixed-Script Fallback (Phase 1)", layout.H2))
+
+	doc.Add(makeParagraph(
+		"font.NewFallback wraps an ordered list of faces. Each script run "+
+			"in the input string is dispatched to the first face that covers "+
+			"its base codepoint, so a paragraph mixing Latin, Hebrew, and "+
+			"Arabic in one string renders without the caller pre-splitting "+
+			"into separate runs. Cross-script fallback only in this phase: "+
+			"intra-script coverage gaps still produce .notdef tofu.",
+		nil, font.Helvetica, 11,
+	))
+
+	if hebrewEF != nil && arabicEF != nil {
+		// Build a fallback chain. The Hebrew face is preferred for
+		// Hebrew runs and the Arabic face for Arabic runs. Each script
+		// run in the input is dispatched to the first face that covers
+		// its script-defining rune, so a paragraph with Hebrew and
+		// Arabic in one string renders without the caller pre-splitting
+		// into per-font runs. Latin glyphs land on whichever face the
+		// chain happens to cover them with first; in this string there
+		// is no Latin, so the demonstration stays focused on the
+		// cross-script dispatch the feature is built for.
+		fb := font.NewFallback(hebrewEF, arabicEF)
+		// "שלום بسم" — Hebrew + Arabic in one string, separated by
+		// inter-script whitespace. SegmentByScript collapses the space
+		// into the surrounding scripts; the fallback routes each script
+		// run to its own face.
+		mixed := layout.NewParagraphFallback(
+			"\u05E9\u05DC\u05D5\u05DD \u0628\u0633\u0645",
+			fb, 16,
+		)
+		doc.Add(mixed)
+	}
+
 	// --- Save ---
 
 	if err := doc.Save("rtl.pdf"); err != nil {

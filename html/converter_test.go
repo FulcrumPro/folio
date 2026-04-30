@@ -845,6 +845,153 @@ func TestParseMarginShorthand(t *testing.T) {
 	}
 }
 
+// TestParseMarginShorthandWithCalc is a regression test for the same
+// strings.Fields tokenization bug fixed in #236 for `flex:` — applied
+// here to `margin:` and `padding:` (both share parseMarginShorthand).
+// Pre-fix: `margin: calc(10px + 20px) 0` was split into 4 tokens
+// ["calc(10px", "+", "20px)", "0"] and case 4 ran parseLength on
+// "calc(10px" (unbalanced), yielding 0 for every side.
+//
+// Margins/paddings store as float64, so percent-only values like
+// `margin: 50%` still resolve eagerly against relativeTo=0 (= 0pt).
+// That is a separate, pre-existing limitation of the data model and
+// is not addressed here. This PR only fixes the tokenization so calc/
+// min/max/clamp values that resolve to a stable point value work.
+func TestParseMarginShorthandWithCalc(t *testing.T) {
+	tests := []struct {
+		name                       string
+		input                      string
+		fontSize                   float64
+		wantT, wantR, wantB, wantL float64
+	}{
+		{
+			name:  "1-side: calc(10px + 20px)",
+			input: "calc(10px + 20px)", fontSize: 12,
+			// 30px = 22.5pt, applied to all four sides.
+			wantT: 22.5, wantR: 22.5, wantB: 22.5, wantL: 22.5,
+		},
+		{
+			name:  "2-side: calc(...) 0",
+			input: "calc(10px + 20px) 0", fontSize: 12,
+			// top/bottom = 22.5pt, left/right = 0.
+			wantT: 22.5, wantR: 0, wantB: 22.5, wantL: 0,
+		},
+		{
+			name:  "3-side: 8px calc(...) 4px",
+			input: "8px calc(2px + 6px) 4px", fontSize: 12,
+			// top=6, lr=6, bottom=3.
+			wantT: 6, wantR: 6, wantB: 3, wantL: 6,
+		},
+		{
+			name:  "4-side: distinct calcs",
+			input: "calc(10px + 0px) 8px calc(20px - 4px) 12px", fontSize: 12,
+			// 10px=7.5, 8px=6, 16px=12, 12px=9.
+			wantT: 7.5, wantR: 6, wantB: 12, wantL: 9,
+		},
+		{
+			name:  "calc with multiplication",
+			input: "calc(10px * 2)", fontSize: 12,
+			// 20px = 15pt.
+			wantT: 15, wantR: 15, wantB: 15, wantL: 15,
+		},
+		{
+			name:  "calc with division",
+			input: "calc(20px / 2)", fontSize: 12,
+			// 10px = 7.5pt.
+			wantT: 7.5, wantR: 7.5, wantB: 7.5, wantL: 7.5,
+		},
+		{
+			name:  "min() basis",
+			input: "min(10px, 20px)", fontSize: 12,
+			// min picks 10px = 7.5pt, applied uniformly.
+			wantT: 7.5, wantR: 7.5, wantB: 7.5, wantL: 7.5,
+		},
+		{
+			name:  "max() basis",
+			input: "max(8px, 12px)", fontSize: 12,
+			// max picks 12px = 9pt, applied uniformly.
+			wantT: 9, wantR: 9, wantB: 9, wantL: 9,
+		},
+		{
+			name:  "clamp() basis",
+			input: "clamp(8px, 12px, 20px)", fontSize: 12,
+			// middle wins: 12px = 9pt, applied uniformly.
+			wantT: 9, wantR: 9, wantB: 9, wantL: 9,
+		},
+		{
+			name:  "tabs and newlines as separators",
+			input: "8px\tcalc(2px + 2px)\n4px 12px", fontSize: 12,
+			wantT: 6, wantR: 3, wantB: 3, wantL: 9,
+		},
+		{
+			name:  "5+ tokens hit the default branch (returns zeros)",
+			input: "1px 2px 3px 4px 5px", fontSize: 12,
+			wantT: 0, wantR: 0, wantB: 0, wantL: 0,
+		},
+		{
+			name: "unbalanced calc paren does not crash",
+			// splitTopLevelFields keeps the unbalanced calc as a single
+			// token, parseLength rejects it as nil, parseBoxSide returns 0.
+			input: "calc(10px + 20px", fontSize: 12,
+			wantT: 0, wantR: 0, wantB: 0, wantL: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotT, gotR, gotB, gotL := parseMarginShorthand(tt.input, tt.fontSize)
+			if math.Abs(gotT-tt.wantT) > 0.01 ||
+				math.Abs(gotR-tt.wantR) > 0.01 ||
+				math.Abs(gotB-tt.wantB) > 0.01 ||
+				math.Abs(gotL-tt.wantL) > 0.01 {
+				t.Errorf("parseMarginShorthand(%q) = (%.2f, %.2f, %.2f, %.2f), want (%.2f, %.2f, %.2f, %.2f)",
+					tt.input,
+					gotT, gotR, gotB, gotL,
+					tt.wantT, tt.wantR, tt.wantB, tt.wantL)
+			}
+		})
+	}
+}
+
+// TestPaddingShorthandWithCalcEndToEnd verifies the fix flows through the
+// HTML converter for `padding:` (not just `margin:`) — both share
+// parseMarginShorthand. Pre-fix, all four padding sides became 0 because
+// the calc value was shredded by strings.Fields.
+func TestPaddingShorthandWithCalcEndToEnd(t *testing.T) {
+	htmlDoc := `<!DOCTYPE html><html><body>
+<div style="padding: calc(10px + 20px) 8px;">content</div>
+</body></html>`
+
+	elems, err := Convert(htmlDoc, &Options{PageWidth: 600, PageHeight: 800})
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	if len(elems) == 0 {
+		t.Fatal("no elements")
+	}
+	plan := elems[0].PlanLayout(layout.LayoutArea{Width: 600, Height: 1e9})
+	// Walk for the styled Div (the converter wraps body in a Div).
+	// The padded Div will have height >= 22.5pt (top) + line height + 22.5pt (bottom).
+	var found bool
+	var walk func(blocks []layout.PlacedBlock)
+	walk = func(blocks []layout.PlacedBlock) {
+		for _, b := range blocks {
+			// 30px top + 30px bottom = 45pt of vertical padding alone.
+			if b.Height >= 45 && b.Width > 0 {
+				found = true
+				return
+			}
+			walk(b.Children)
+			if found {
+				return
+			}
+		}
+	}
+	walk(plan.Blocks)
+	if !found {
+		t.Errorf("expected a block with at least 45pt height (padding: 30px top + 30px bottom resolved); pre-fix this was 0")
+	}
+}
+
 // --- Table tests ---
 
 func TestConvertSimpleTable(t *testing.T) {

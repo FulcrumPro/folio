@@ -389,8 +389,8 @@ func offsetTableTruncatedTTC(t *testing.T) []byte {
 	buf := make([]byte, 16)
 	copy(buf[0:4], "ttcf")
 	binary.BigEndian.PutUint32(buf[4:8], 0x00010000)
-	binary.BigEndian.PutUint32(buf[8:12], 4)          // numFonts says 4
-	binary.BigEndian.PutUint32(buf[12:16], 16)        // only one offset stored
+	binary.BigEndian.PutUint32(buf[8:12], 4)   // numFonts says 4
+	binary.BigEndian.PutUint32(buf[12:16], 16) // only one offset stored
 	return buf
 }
 
@@ -426,7 +426,7 @@ func tableBeyondDataTTC(t *testing.T) []byte {
 	copy(buf[entry:entry+4], "head")
 	binary.BigEndian.PutUint32(buf[entry+4:], 0)
 	binary.BigEndian.PutUint32(buf[entry+8:], uint32(fontOff+12+16)) // table starts here
-	binary.BigEndian.PutUint32(buf[entry+12:], 1024)                  // way past buffer end
+	binary.BigEndian.PutUint32(buf[entry+12:], 1024)                 // way past buffer end
 	return buf
 }
 

@@ -9,31 +9,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
-	"strings"
-
-	folioimage "github.com/carlos7ags/folio/image"
 )
 
-// makeCSSFetcher returns a function that fetches CSS from a URL, protected
-// by the given URLPolicy and using the given HTTP client. Returns nil if
-// no URL fetching should be attempted. A nil client falls back to
-// http.DefaultClient.
-func makeCSSFetcher(policy URLPolicy, client *http.Client) func(string) ([]byte, error) {
-	c := httpClientOrDefault(client)
-	return func(url string) ([]byte, error) {
-		if policy != nil {
-			if err := policy(url); err != nil {
-				return nil, fmt.Errorf("%w: %w", ErrURLPolicyDenied, err)
-			}
-		}
-		// Limit to 10MB for stylesheets.
-		return httpGetBytes(c, url, 10<<20)
-	}
-}
-
 // httpGetBytes performs a GET with the supplied client and returns at most
-// maxBytes of body. Non-200 responses surface as an error.
+// maxBytes of body. Non-200 responses surface as an error. Centralized HTTP
+// fetching for every asset type goes through here via [fetchHTTPBytes];
+// the helper is split out so the WASM build can stub it.
 func httpGetBytes(client *http.Client, url string, maxBytes int64) ([]byte, error) {
 	resp, err := client.Get(url)
 	if err != nil {
@@ -44,69 +25,4 @@ func httpGetBytes(client *http.Client, url string, maxBytes int64) ([]byte, erro
 		return nil, fmt.Errorf("fetch %s: HTTP %d", url, resp.StatusCode)
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, maxBytes))
-}
-
-// fetchImage downloads an image from a URL and returns a folio Image.
-// Supports JPEG, PNG, and TIFF. Detects format from Content-Type header
-// or file extension, falling back to content sniffing.
-func (c *converter) fetchImage(url string) (*folioimage.Image, error) {
-	if c.urlPolicy != nil {
-		if err := c.urlPolicy(url); err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrURLPolicyDenied, err)
-		}
-	}
-
-	resp, err := httpClientOrDefault(c.opts.Client).Get(url)
-	if err != nil {
-		return nil, fmt.Errorf("fetch image %s: %w", url, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("fetch image %s: HTTP %d", url, resp.StatusCode)
-	}
-
-	// Limit download size to 50MB.
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 50<<20))
-	if err != nil {
-		return nil, fmt.Errorf("fetch image %s: %w", url, err)
-	}
-
-	// Detect format from Content-Type or URL extension.
-	ct := resp.Header.Get("Content-Type")
-	switch {
-	case strings.Contains(ct, "jpeg") || strings.Contains(ct, "jpg"):
-		return folioimage.NewJPEG(data)
-	case strings.Contains(ct, "png"):
-		return folioimage.NewPNG(data)
-	case strings.Contains(ct, "tiff"):
-		return folioimage.NewTIFF(data)
-	}
-
-	// Fallback: try by URL extension.
-	ext := strings.ToLower(filepath.Ext(url))
-	if idx := strings.IndexByte(ext, '?'); idx >= 0 {
-		ext = ext[:idx]
-	}
-	switch ext {
-	case ".jpg", ".jpeg":
-		return folioimage.NewJPEG(data)
-	case ".png":
-		return folioimage.NewPNG(data)
-	case ".tif", ".tiff":
-		return folioimage.NewTIFF(data)
-	}
-
-	// Last resort: content sniffing.
-	if len(data) >= 2 && data[0] == 0xFF && data[1] == 0xD8 {
-		return folioimage.NewJPEG(data)
-	}
-	if len(data) >= 8 && string(data[:4]) == "\x89PNG" {
-		return folioimage.NewPNG(data)
-	}
-
-	if img, err := folioimage.NewJPEG(data); err == nil {
-		return img, nil
-	}
-	return folioimage.NewPNG(data)
 }

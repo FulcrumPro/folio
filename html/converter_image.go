@@ -40,10 +40,8 @@ func (c *converter) convertImage(n *html.Node, style computedStyle) []layout.Ele
 	// prevent loading if interceptor returned an image or an error
 	if strings.HasPrefix(src, "data:") {
 		img, err = decodeDataURI(src)
-	} else if isURL(src) {
-		img, err = c.fetchImage(src)
 	} else {
-		img, err = c.loadLocalImage(src)
+		img, err = c.loadImageAsset(src)
 	}
 	if err != nil {
 		c.reportAssetError("image", err, "src", src)
@@ -255,7 +253,7 @@ func (c *converter) convertImgSVG(src, alt string, style computedStyle) []layout
 			}
 		}
 	} else {
-		svgData, err = readAsset(c.opts.BaseFS, src)
+		svgData, err = c.resolveLocalAsset("", src, 50<<20)
 	}
 
 	if err == nil {
@@ -290,18 +288,17 @@ func isURL(s string) bool {
 	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
 }
 
-// fetchImage is implemented in fetch_image.go (with net/http)
-// and fetch_image_wasm.go (stub for WASM builds).
-
-// loadLocalImage loads an image referenced by a relative path, resolving
-// through BaseFS. The image format is detected from the file extension
-// first, then by magic bytes.
-func (c *converter) loadLocalImage(p string) (*folioimage.Image, error) {
-	data, err := readAsset(c.opts.BaseFS, p)
+// loadImageAsset routes a non-data-URI image src through the unified
+// [resolveLocalAsset] contract: http(s) fetch via Options.Client,
+// absolute filesystem path with BaseFS nil, or BaseFS-relative path.
+// The image format is detected from the file extension first, then by
+// magic bytes.
+func (c *converter) loadImageAsset(src string) (*folioimage.Image, error) {
+	data, err := c.resolveLocalAsset("", src, 50<<20)
 	if err != nil {
 		return nil, err
 	}
-	return decodeImageBytes(data, filepath.Ext(p))
+	return decodeImageBytes(data, filepath.Ext(src))
 }
 
 // decodeImageBytes decodes image bytes to a folio Image. ext is a hint like

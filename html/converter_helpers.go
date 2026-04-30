@@ -564,21 +564,12 @@ func (c *converter) resolveBackgroundImage(style computedStyle) *layout.Backgrou
 	switch kind {
 	case "url":
 		imgPath := inner
-		if strings.HasPrefix(imgPath, "http://") || strings.HasPrefix(imgPath, "https://") {
-			loaded, err := c.fetchImage(imgPath)
-			if err != nil {
-				c.reportAssetError("background-image", err, "src", imgPath)
-				return nil
-			}
-			img = loaded
-		} else {
-			loaded, err := c.loadLocalImage(imgPath)
-			if err != nil {
-				c.reportAssetError("background-image", err, "src", imgPath)
-				return nil
-			}
-			img = loaded
+		loaded, err := c.loadImageAsset(imgPath)
+		if err != nil {
+			c.reportAssetError("background-image", err, "src", imgPath)
+			return nil
 		}
+		img = loaded
 
 	case "linear-gradient":
 		angle, stops := parseLinearGradient(inner)

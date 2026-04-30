@@ -190,6 +190,24 @@ from scratch using only the Go standard library.
 
 ---
 
+## Asset resolution (`html` package)
+
+Every local or remote asset reference in the `html` package — `<img
+src>`, inline SVG, `<link rel="stylesheet">`, `@font-face url()`,
+`background-image: url()`, and `Options.FallbackFontPath` — routes
+through one contract: `resolveLocalAsset` in `html/converter.go`. The
+function's doc comment is the canonical spec for the rules (URL
+fetch, BaseFS-relative read, absolute-path-when-BaseFS-nil, and the
+`FallbackFontPath` programmatic carve-out).
+
+When evaluating a proposal that adds a new resolver — a new HTML
+attribute, CSS property, or `Options` field that consumes a path or
+URL — check that it routes through `resolveLocalAsset` rather than
+calling `os.ReadFile` / `http.Get` directly. No future resolver should
+grow its own rules.
+
+---
+
 ## Error handling
 
 Public API functions return `error`. Errors are wrapped with

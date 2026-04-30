@@ -449,7 +449,8 @@ func (d *Div) Layout(maxWidth float64) []Line {
 // MinWidth implements Measurable. Returns padding + max child MinWidth,
 // or the div's own explicit width if set.
 func (d *Div) MinWidth() float64 {
-	// UnitValue width (only absolute values are intrinsic; percentages return 0).
+	// Only absolute values are intrinsic. UnitPercent and UnitCalc both
+	// depend on available width and contribute 0 here.
 	if d.widthUnit != nil && d.widthUnit.Unit == UnitPoint {
 		return d.widthUnit.Value
 	}
@@ -473,6 +474,7 @@ func (d *Div) MinWidth() float64 {
 // MaxWidth implements Measurable. Returns padding + max child MaxWidth,
 // or the div's own explicit width if set.
 func (d *Div) MaxWidth() float64 {
+	// Mirrors MinWidth: UnitPercent and UnitCalc are non-intrinsic.
 	if d.widthUnit != nil && d.widthUnit.Unit == UnitPoint {
 		return d.widthUnit.Value
 	}

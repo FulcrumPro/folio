@@ -9,6 +9,7 @@ import (
 	"image/color"
 	"image/jpeg"
 	"image/png"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -528,6 +529,263 @@ func TestSplitTopLevelCommas(t *testing.T) {
 		parts := splitTopLevelCommas(tt.input)
 		if len(parts) != tt.want {
 			t.Errorf("splitTopLevelCommas(%q): got %d parts, want %d", tt.input, len(parts), tt.want)
+		}
+	}
+}
+
+func TestSplitTopLevelFields(t *testing.T) {
+	tests := []struct {
+		input string
+		want  []string
+	}{
+		{"0 0 auto", []string{"0", "0", "auto"}},
+		{"0 0 calc(50% - 8px)", []string{"0", "0", "calc(50% - 8px)"}},
+		{"1 1 min(100px, 50%)", []string{"1", "1", "min(100px, 50%)"}},
+		{"  spaced   words  ", []string{"spaced", "words"}},
+		{"clamp(10px, 5%, 20px) auto", []string{"clamp(10px, 5%, 20px)", "auto"}},
+		{"calc(1px + calc(2px - 1px))", []string{"calc(1px + calc(2px - 1px))"}},
+		{"a((b c) d) e", []string{"a((b c) d)", "e"}},
+		{"a\tb\nc\rd", []string{"a", "b", "c", "d"}},
+		{"  calc(50% - 8px)  ", []string{"calc(50% - 8px)"}},
+		// Unbalanced parens: '(' opens depth that never closes — the
+		// remainder is consumed as a single token (mirrors splitTopLevelCommas).
+		{"a (b c", []string{"a", "(b c"}},
+		// Stray ')' is treated as a literal character; depth stays at 0.
+		{"a) b", []string{"a)", "b"}},
+		{"   ", nil},
+		{"", nil},
+	}
+	for _, tt := range tests {
+		got := splitTopLevelFields(tt.input)
+		if len(got) != len(tt.want) {
+			t.Errorf("splitTopLevelFields(%q): got %v (%d), want %v (%d)",
+				tt.input, got, len(got), tt.want, len(tt.want))
+			continue
+		}
+		for i := range got {
+			if got[i] != tt.want[i] {
+				t.Errorf("splitTopLevelFields(%q)[%d] = %q, want %q",
+					tt.input, i, got[i], tt.want[i])
+			}
+		}
+	}
+}
+
+func TestParseFlexShorthandWithCalc(t *testing.T) {
+	// Regression: `flex: 0 0 calc(50% - 8px)` was split on whitespace,
+	// yielding 5 tokens; no shorthand case matched and FlexBasis stayed nil.
+	// Cover all shorthand arities (1/2/3) and operator variants.
+	cases := []struct {
+		name        string
+		input       string
+		wantGrow    float64
+		wantShrink  float64 // initial value 1 unless the shorthand sets it
+		wantBasisAt float64 // expected toPoints(relativeTo=200, fontSize=12)
+	}{
+		// Three-token forms set all three.
+		{"three: 0 0 calc(50% - 8px)", "0 0 calc(50% - 8px)", 0, 0, 200*0.5 - 6},
+		{"three: 1 0 calc(100% / 2)", "1 0 calc(100% / 2)", 1, 0, 200 / 2},
+		{"three: 1 1 calc(50% + 10px)", "1 1 calc(50% + 10px)", 1, 1, 200*0.5 + 10*0.75},
+		{"three: 1 1 calc(2 * 25%)", "1 1 calc(2 * 25%)", 1, 1, 2 * 200 * 0.25},
+		// Two-token form: `<flex-grow> <flex-basis>`. The parser sets grow
+		// from parts[0] but does not touch FlexShrink — it stays at 1.
+		{"two: 1 calc(50% - 8px)", "1 calc(50% - 8px)", 1, 1, 200*0.5 - 6},
+		// Single-token form: a non-numeric token is parsed as the basis;
+		// FlexGrow and FlexShrink keep their initial values (0, 1).
+		// Pre-fix this hit case 3 because strings.Fields produced 3 tokens.
+		{"one: calc(50% - 8px)", "calc(50% - 8px)", 0, 1, 200*0.5 - 6},
+	}
+	for _, tc := range cases {
+		s := computedStyle{FlexGrow: 0, FlexShrink: 1}
+		parseFlexShorthand(tc.input, &s)
+		if s.FlexGrow != tc.wantGrow {
+			t.Errorf("%s: FlexGrow = %v, want %v", tc.name, s.FlexGrow, tc.wantGrow)
+		}
+		if s.FlexShrink != tc.wantShrink {
+			t.Errorf("%s: FlexShrink = %v, want %v", tc.name, s.FlexShrink, tc.wantShrink)
+		}
+		if s.FlexBasis == nil {
+			t.Errorf("%s: FlexBasis is nil for %q", tc.name, tc.input)
+			continue
+		}
+		got := s.FlexBasis.toPoints(200, 12)
+		if math.Abs(got-tc.wantBasisAt) > 0.01 {
+			t.Errorf("%s: FlexBasis.toPoints(200, 12) = %.4f, want %.4f",
+				tc.name, got, tc.wantBasisAt)
+		}
+	}
+}
+
+func TestParseFlexShorthandWithMinMaxBasis(t *testing.T) {
+	cases := []struct {
+		input         string
+		wantGrow      float64
+		wantShrink    float64
+		wantBasisAt   float64 // toPoints(relativeTo=200, fontSize=12)
+		wantBasisDesc string
+	}{
+		// min(100px, 50%) → min(75pt, 100pt) at relativeTo=200 → 75pt.
+		{"1 1 min(100px, 50%)", 1, 1, 75, "min picks smaller"},
+		// max(100px, 30%) → max(75pt, 60pt) at relativeTo=200 → 75pt.
+		{"1 0 max(100px, 30%)", 1, 0, 75, "max picks larger"},
+		// clamp(50px, 20%, 200px) → clamp(37.5pt, 40pt, 150pt) at 200 → 40pt.
+		{"0 0 clamp(50px, 20%, 200px)", 0, 0, 40, "clamp middle wins"},
+	}
+	for _, tc := range cases {
+		s := computedStyle{FlexGrow: 0, FlexShrink: 1}
+		parseFlexShorthand(tc.input, &s)
+		if s.FlexGrow != tc.wantGrow {
+			t.Errorf("%q: FlexGrow = %v, want %v", tc.input, s.FlexGrow, tc.wantGrow)
+		}
+		if s.FlexShrink != tc.wantShrink {
+			t.Errorf("%q: FlexShrink = %v, want %v", tc.input, s.FlexShrink, tc.wantShrink)
+		}
+		if s.FlexBasis == nil {
+			t.Errorf("%q: FlexBasis is nil", tc.input)
+			continue
+		}
+		got := s.FlexBasis.toPoints(200, 12)
+		if math.Abs(got-tc.wantBasisAt) > 0.01 {
+			t.Errorf("%q (%s): FlexBasis.toPoints(200, 12) = %.4f, want %.4f",
+				tc.input, tc.wantBasisDesc, got, tc.wantBasisAt)
+		}
+	}
+}
+
+// TestCSSLengthToUnitValueBranches asserts each branch of the
+// length→UnitValue mapping. The lazy CalcUnit branch is the load-bearing
+// fix for percentages-inside-calc resolving against the wrong container.
+func TestCSSLengthToUnitValueBranches(t *testing.T) {
+	const convertContainer = 1000.0 // converter-time width
+	const layoutAvailable = 200.0   // layout-time width (intentionally different)
+
+	t.Run("absolute px → eager Pt", func(t *testing.T) {
+		l := parseLength("12px")
+		uv := cssLengthToUnitValue(l, convertContainer, 12)
+		if uv.Unit != layout.UnitPoint {
+			t.Errorf("Unit = %d, want UnitPoint", uv.Unit)
+		}
+		// Resolved at convert time; layout-time available is ignored.
+		if got := uv.Resolve(layoutAvailable); math.Abs(got-9) > 0.01 {
+			t.Errorf("Resolve(%g) = %g, want 9 (12px = 9pt)", layoutAvailable, got)
+		}
+	})
+
+	t.Run("plain percent → lazy Pct", func(t *testing.T) {
+		l := parseLength("50%")
+		uv := cssLengthToUnitValue(l, convertContainer, 12)
+		if uv.Unit != layout.UnitPercent {
+			t.Errorf("Unit = %d, want UnitPercent", uv.Unit)
+		}
+		// Pct resolves against the layout-time available, not convertContainer.
+		if got := uv.Resolve(layoutAvailable); math.Abs(got-100) > 0.01 {
+			t.Errorf("Resolve(%g) = %g, want 100 (50%% of %g)", layoutAvailable, got, layoutAvailable)
+		}
+	})
+
+	t.Run("calc with percent → lazy CalcUnit", func(t *testing.T) {
+		l := parseLength("calc(50% - 8px)")
+		uv := cssLengthToUnitValue(l, convertContainer, 12)
+		if uv.Unit != layout.UnitCalc {
+			t.Errorf("Unit = %d, want UnitCalc (calc with percent must defer)", uv.Unit)
+		}
+		if uv.Calc == nil {
+			t.Fatal("Calc closure is nil")
+		}
+		// Closure must use layoutAvailable, not convertContainer.
+		// 50% of 200 - 8px(=6pt) = 94pt.
+		got := uv.Resolve(layoutAvailable)
+		if math.Abs(got-94) > 0.01 {
+			t.Errorf("Resolve(%g) = %g, want 94 (= 50%%·200 - 6pt). "+
+				"If you got 494 the closure captured the convert-time container.", layoutAvailable, got)
+		}
+		// And resolving against a different available recomputes correctly.
+		if got := uv.Resolve(400); math.Abs(got-194) > 0.01 {
+			t.Errorf("Resolve(400) = %g, want 194", got)
+		}
+	})
+
+	t.Run("calc without percent → eager Pt", func(t *testing.T) {
+		l := parseLength("calc(10px + 20px)")
+		uv := cssLengthToUnitValue(l, convertContainer, 12)
+		if uv.Unit != layout.UnitPoint {
+			t.Errorf("Unit = %d, want UnitPoint (no percent → no need to defer)", uv.Unit)
+		}
+		// 30px = 22.5pt at convert time.
+		if got := uv.Resolve(layoutAvailable); math.Abs(got-22.5) > 0.01 {
+			t.Errorf("Resolve = %g, want 22.5", got)
+		}
+	})
+
+	t.Run("min(100px, 50%) → lazy CalcUnit", func(t *testing.T) {
+		l := parseLength("min(100px, 50%)")
+		uv := cssLengthToUnitValue(l, convertContainer, 12)
+		if uv.Unit != layout.UnitCalc {
+			t.Errorf("Unit = %d, want UnitCalc", uv.Unit)
+		}
+		// At available=200: min(75pt, 100pt) = 75pt.
+		if got := uv.Resolve(200); math.Abs(got-75) > 0.01 {
+			t.Errorf("Resolve(200) = %g, want 75", got)
+		}
+		// At available=100: min(75pt, 50pt) = 50pt — proves the closure re-resolves.
+		if got := uv.Resolve(100); math.Abs(got-50) > 0.01 {
+			t.Errorf("Resolve(100) = %g, want 50", got)
+		}
+	})
+
+	t.Run("min without percent → eager Pt", func(t *testing.T) {
+		l := parseLength("min(100px, 50px)")
+		uv := cssLengthToUnitValue(l, convertContainer, 12)
+		if uv.Unit != layout.UnitPoint {
+			t.Errorf("Unit = %d, want UnitPoint", uv.Unit)
+		}
+		if got := uv.Resolve(0); math.Abs(got-37.5) > 0.01 {
+			t.Errorf("Resolve = %g, want 37.5 (50px)", got)
+		}
+	})
+
+	t.Run("nil cssLength → Pt(0)", func(t *testing.T) {
+		uv := cssLengthToUnitValue(nil, convertContainer, 12)
+		if uv.Unit != layout.UnitPoint || uv.Value != 0 {
+			t.Errorf("nil cssLength → %+v, want Pt(0)", uv)
+		}
+	})
+}
+
+// TestDependsOnPercent covers the recursive percent detection over
+// calc/min/max/clamp trees, including nested combinations.
+func TestDependsOnPercent(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		// Plain values: dependsOnPercent only applies to compound expressions,
+		// so a plain "%" returns false (the % path is handled separately).
+		{"50%", false},
+		{"12px", false},
+		// calc() variants.
+		{"calc(50% - 8px)", true},
+		{"calc(10px + 20px)", false},
+		{"calc(2 * 25%)", true},
+		{"calc(2 * 25px)", false},
+		// min/max/clamp variants.
+		{"min(100px, 50%)", true},
+		{"min(100px, 50px)", false},
+		{"max(50%, 100px)", true},
+		{"clamp(50px, 20%, 200px)", true},
+		{"clamp(50px, 100px, 200px)", false},
+		// Function inside function: percent buried under min(calc(...)).
+		{"min(100px, calc(2 * 25%))", true},
+		{"min(100px, calc(2 * 25px))", false},
+	}
+	for _, tt := range tests {
+		l := parseLength(tt.input)
+		if l == nil {
+			t.Errorf("%q: parseLength returned nil", tt.input)
+			continue
+		}
+		if got := l.dependsOnPercent(); got != tt.want {
+			t.Errorf("%q.dependsOnPercent() = %v, want %v", tt.input, got, tt.want)
 		}
 	}
 }

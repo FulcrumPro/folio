@@ -265,6 +265,46 @@ type calcExpr struct {
 	right *calcExpr
 }
 
+// dependsOnPercent reports whether the resolved value would change with
+// available width — i.e. a percentage appears somewhere in a calc, min,
+// max, or clamp tree. Plain Unit == "%" lengths take the Pct(...) path
+// in cssLengthToUnitValue and don't need this check.
+func (l *cssLength) dependsOnPercent() bool {
+	if l == nil {
+		return false
+	}
+	if l.calc != nil {
+		return l.calc.dependsOnPercent()
+	}
+	for _, a := range l.minArgs {
+		if a.Unit == "%" || a.dependsOnPercent() {
+			return true
+		}
+	}
+	for _, a := range l.maxArgs {
+		if a.Unit == "%" || a.dependsOnPercent() {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *calcExpr) dependsOnPercent() bool {
+	if e == nil {
+		return false
+	}
+	if e.leaf != nil {
+		if e.leaf.Unit == "%" {
+			return true
+		}
+		return e.leaf.dependsOnPercent()
+	}
+	if e.left == nil || e.right == nil {
+		return false
+	}
+	return e.left.dependsOnPercent() || e.right.dependsOnPercent()
+}
+
 // resolve evaluates a calcExpr to points.
 func (e *calcExpr) resolve(relativeTo, fontSize float64) float64 {
 	if e.leaf != nil {

@@ -888,7 +888,9 @@ func parseFlexShorthand(val string, style *computedStyle) {
 		return
 	}
 
-	parts := strings.Fields(val)
+	// Split on top-level whitespace so functional values like
+	// calc(50% - 8px) or min(10px, 5%) survive as a single token.
+	parts := splitTopLevelFields(val)
 
 	switch len(parts) {
 	case 1:

@@ -92,6 +92,53 @@ func TestExtractTTCFontMultiFaceIndex(t *testing.T) {
 	}
 }
 
+// TestExtractTTCFontHonorsFaceIndex pins that extractTTCFont reads the
+// correct face's offset table — not face 0's. The threat model is a
+// regression where the extractor silently returns face 0 for every
+// requested index; UnitsPerEm and PostScriptName checks would not catch
+// it when both faces wrap the same body. This test constructs a TTC
+// whose face-0 entry points at valid bytes and whose face-1 entry
+// points past the end of the buffer; a correct extractor succeeds for
+// index 0 and rejects index 1 with ErrTruncated, while a buggy
+// extractor that ignores the index would succeed for both because it
+// would silently read face 0's offset on the index-1 call.
+func TestExtractTTCFontHonorsFaceIndex(t *testing.T) {
+	ttfBytes := loadAnySystemTTF(t)
+	ttc := buildSyntheticTTC(t, ttfBytes, 1, 0x00010000)
+
+	// Patch in a second face entry whose offset points past the end of
+	// the buffer. The bounds check in extractTTCFont must fire for the
+	// index-1 read; a buggy extractor that ignores the index would fall
+	// back to face 0's offset and slip past the check.
+	patched := make([]byte, len(ttc)+4)
+	copy(patched[:12], ttc[:12])
+	binary.BigEndian.PutUint32(patched[8:12], 2) // numFonts = 2
+	// Inject face-1 offset between the existing face-0 entry and the
+	// body, then shift the body by 4 bytes so face-0 still resolves.
+	binary.BigEndian.PutUint32(patched[16:20], 0xFFFFFF00) // way past EOF
+	bodyStart := 16
+	newBodyStart := 20
+	copy(patched[newBodyStart:], ttc[bodyStart:])
+	binary.BigEndian.PutUint32(patched[12:16], uint32(newBodyStart))
+	numTables := int(binary.BigEndian.Uint16(patched[newBodyStart+4:]))
+	for i := range numTables {
+		entryBase := newBodyStart + 12 + i*16
+		oldOff := binary.BigEndian.Uint32(patched[entryBase+8:])
+		binary.BigEndian.PutUint32(patched[entryBase+8:], oldOff+4)
+	}
+
+	if _, err := extractTTCFont(patched, 0); err != nil {
+		t.Fatalf("face 0 (valid) extract failed: %v", err)
+	}
+	_, err := extractTTCFont(patched, 1)
+	if err == nil {
+		t.Error("face 1 (offset past EOF) returned no error; extractor likely ignored the index argument and read face 0")
+	}
+	if err != nil && !errors.Is(err, ErrTruncated) {
+		t.Errorf("face 1 returned unexpected error class: %v (want errors.Is ErrTruncated)", err)
+	}
+}
+
 // TestExtractTTCFontHandlesHostileUint32Offsets confirms that hostile uint32
 // values are rejected with a wrapped sentinel error rather than panicking
 // from slice-out-of-bounds. On 32-bit hosts (where Go's `int` is 32 bits),

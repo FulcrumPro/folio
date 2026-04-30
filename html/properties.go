@@ -667,7 +667,9 @@ func parseBoxSide(value string, fontSize float64) float64 {
 // parseMarginShorthand parses the CSS margin/padding shorthand.
 // Returns top, right, bottom, left in points.
 func parseMarginShorthand(value string, fontSize float64) (float64, float64, float64, float64) {
-	parts := strings.Fields(value)
+	// splitTopLevelFields keeps calc()/min()/max()/clamp() values as a
+	// single token even when they contain internal whitespace.
+	parts := splitTopLevelFields(value)
 	switch len(parts) {
 	case 1:
 		v := parseBoxSide(parts[0], fontSize)

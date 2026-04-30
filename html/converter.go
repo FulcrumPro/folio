@@ -61,11 +61,17 @@ type Options struct {
 	// returned errors. When true, Convert and ConvertFull collect every
 	// failed @font-face url(), <img>, background-image, linked stylesheet,
 	// SVG load, and FallbackFontPath, then return them joined via
-	// errors.Join at the end of the conversion. Document elements that
-	// would have rendered as alt-text or with the system fallback are
-	// skipped — the conversion may still produce a partial result alongside
-	// the error so callers can inspect both. URLPolicy denials are not
-	// escalated; they represent the caller's intent, not a load failure.
+	// errors.Join at the end of the conversion. The partial result (the
+	// elements that did render) is returned alongside the error so callers
+	// can inspect both. Errors are returned in document order: linked
+	// stylesheets first, then @font-face rules, then asset references in
+	// tree-walk order — stable across runs given byte-identical input.
+	//
+	// URLPolicy denials are wrapped with ErrURLPolicyDenied and excluded
+	// from the joined error, since they represent the caller's intent
+	// (the policy callback already returned the signal it was wired to
+	// produce) rather than a load failure. The denial is still logged
+	// through Options.Logger.
 	//
 	// When false (default), every asset failure is logged through Logger
 	// (if set) and the conversion continues. This suits production where
@@ -395,38 +401,59 @@ type converter struct {
 
 // reportAssetError records a single asset-load failure. The event is always
 // logged at warn level through Options.Logger (or dropped when Logger is
-// nil); when Options.StrictAssets is true it is additionally appended to
-// c.strictErrs for return at the end of the conversion. category is a short
-// label like "@font-face", "image", "background-image", "stylesheet"; the
-// error wrapped into strictErrs preserves the underlying err with errors.Is.
-// attrs follows slog's variadic key/value convention and is forwarded to
-// the logger plus inlined into the strict error message for grep-ability.
+// nil); when Options.StrictAssets is true and the error is not an
+// ErrURLPolicyDenied (which represents the caller's intent, not a load
+// failure) it is additionally appended to c.strictErrs for return at the
+// end of the conversion. category is a short label like "@font-face",
+// "image", "background-image", "stylesheet". The error wrapped into
+// strictErrs preserves the underlying err with errors.Is. attrs follows
+// slog's variadic key/value convention; it is forwarded to the logger
+// (with "error", err appended last to match the historical attr order
+// callers may grep against) and inlined into the strict error message
+// for grep-ability without needing structured-tree traversal.
 func (c *converter) reportAssetError(category string, err error, attrs ...any) {
-	logArgs := append([]any{"error", err}, attrs...)
+	logArgs := append(attrs, "error", err)
 	c.logger.Warn("folio/html: "+category+" load failed", logArgs...)
-	if c.opts.StrictAssets {
+	if c.opts.StrictAssets && !errors.Is(err, ErrURLPolicyDenied) {
 		c.strictErrs = append(c.strictErrs, formatAssetError(category, err, attrs))
 	}
 }
 
-// formatAssetError builds the wrapped error stored in strictErrs. The
-// message inlines the slog-style attrs as space-separated key=value pairs
-// so the joined error from errors.Join is self-describing without forcing
-// callers to walk a structured tree.
+// formatAssetError builds the wrapped error stored in strictErrs. Attrs
+// are inlined into the message as space-separated key=value pairs so the
+// joined error from errors.Join is self-describing without forcing
+// callers to walk a structured tree. The message is built as a plain
+// string before wrapping with %w so user-controlled attr values
+// containing % characters are not interpreted as format verbs (e.g. a
+// path like C:\Users\foo%bar.ttf must not corrupt the formatted output).
+// An odd-length attrs slice records the unpaired key with !BADKEY=
+// matching slog's convention; this is a programming error in the caller
+// and never happens in code under our control.
 func formatAssetError(category string, err error, attrs []any) error {
-	if len(attrs) == 0 {
-		return fmt.Errorf("folio/html: %s load failed: %w", category, err)
-	}
 	var b strings.Builder
 	b.WriteString("folio/html: ")
 	b.WriteString(category)
-	b.WriteString(" load failed:")
-	for i := 0; i+1 < len(attrs); i += 2 {
-		fmt.Fprintf(&b, " %v=%v", attrs[i], attrs[i+1])
+	b.WriteString(" load failed")
+	for i := 0; i < len(attrs); i += 2 {
+		b.WriteString(" ")
+		fmt.Fprintf(&b, "%v=", attrs[i])
+		if i+1 < len(attrs) {
+			fmt.Fprintf(&b, "%v", attrs[i+1])
+		} else {
+			b.WriteString("!BADKEY")
+		}
 	}
-	b.WriteString(": %w")
-	return fmt.Errorf(b.String(), err)
+	return fmt.Errorf("%s: %w", b.String(), err)
 }
+
+// ErrURLPolicyDenied wraps a URLPolicy rejection so that asset-loading
+// code paths can distinguish a policy decision (the caller's intent)
+// from a network or filesystem failure. When Options.StrictAssets is
+// true, errors matching ErrURLPolicyDenied are still logged via
+// Options.Logger but are not added to the joined return-error — the
+// caller already received the signal they wired URLPolicy to produce.
+// Use with errors.Is to test the cause.
+var ErrURLPolicyDenied = errors.New("folio/html: URL fetch blocked by URLPolicy")
 
 // containingBlock tracks a positioned ancestor for absolute positioning resolution.
 type containingBlock struct {
@@ -550,11 +577,13 @@ func joinURL(originURL, src string) string {
 }
 
 // fetchFontBytes downloads a font file via Options.Client, honouring
-// URLPolicy. The 50MB limit matches fetchImage.
+// URLPolicy. The 50MB limit matches fetchImage. A URLPolicy denial is
+// wrapped with ErrURLPolicyDenied so reportAssetError can distinguish
+// "the caller wired a deny" from "the network broke".
 func (c *converter) fetchFontBytes(url string) ([]byte, error) {
 	if c.urlPolicy != nil {
 		if err := c.urlPolicy(url); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %w", ErrURLPolicyDenied, err)
 		}
 	}
 	return httpGetBytes(httpClientOrDefault(c.opts.Client), url, 50<<20)

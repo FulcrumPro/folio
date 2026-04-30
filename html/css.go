@@ -4,7 +4,6 @@
 package html
 
 import (
-	"io/fs"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -81,11 +80,11 @@ type cssDecl struct {
 // parseStyleBlocks finds all <link rel="stylesheet"> and <style> elements in the
 // document and parses their CSS. Linked stylesheets are processed before <style>
 // blocks so that inline styles override external ones by source order.
-// fetchURL, if non-nil, is called for HTTP/HTTPS hrefs; it should return the
-// CSS bytes or an error. Local file paths are resolved against baseFS.
-// onLoadError, if non-nil, is invoked for stylesheet loads that fail (used to
-// surface the failure to Options.Logger without aborting the conversion).
-func parseStyleBlocks(doc *html.Node, baseFS fs.FS, fetchURL func(string) ([]byte, error), onLoadError func(href string, err error)) *styleSheet {
+// Stylesheet hrefs route through the unified [resolveLocalAsset] contract
+// (10MB HTTP cap matching the historical CSS fetch limit). onLoadError, if
+// non-nil, is invoked for stylesheet loads that fail (used to surface the
+// failure to Options.Logger without aborting the conversion).
+func parseStyleBlocks(doc *html.Node, opts Options, onLoadError func(href string, err error)) *styleSheet {
 	ss := &styleSheet{}
 
 	// First pass: collect <link rel="stylesheet"> elements and load them.
@@ -103,13 +102,7 @@ func parseStyleBlocks(doc *html.Node, baseFS fs.FS, fetchURL func(string) ([]byt
 				}
 			}
 			if rel == "stylesheet" && href != "" {
-				var data []byte
-				var err error
-				if isURL(href) && fetchURL != nil {
-					data, err = fetchURL(href)
-				} else {
-					data, err = readAsset(baseFS, href)
-				}
+				data, err := resolveLocalAsset(opts, opts.URLPolicy, "", href, 10<<20)
 				if err == nil {
 					ss.parseCSS(string(data), href)
 				} else if onLoadError != nil {

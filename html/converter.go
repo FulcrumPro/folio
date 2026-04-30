@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -157,6 +158,90 @@ func normaliseFSPath(p string) (string, error) {
 	return fsPath, nil
 }
 
+// resolveLocalAsset returns raw bytes for a local or remote asset reference,
+// applying the project's uniform resolution contract. Every consumer
+// (`<img>`, SVG inline, `<link rel="stylesheet">`, `@font-face url()`,
+// background-image, FallbackFontPath) routes through here so a behavior
+// change in one resolver becomes a behavior change in all of them.
+//
+// Resolution order:
+//
+//  1. src is an http/https URL — fetched via opts.Client subject to
+//     urlPolicy. A policy denial is wrapped with [ErrURLPolicyDenied].
+//
+//  2. origin is an http/https URL, src is relative — resolved as a URL
+//     against origin's host/path and fetched.
+//
+//  3. src is filepath.IsAbs and opts.BaseFS is nil — read directly from
+//     the OS via os.ReadFile. Typically a system font path like
+//     "/System/Library/Fonts/STHeiti Light.ttc" or
+//     `C:\Windows\Fonts\msyh.ttc` referenced from programmatically-built
+//     HTML where the caller chose not to configure a BaseFS. When
+//     opts.BaseFS is set, an absolute path is treated as web-style root
+//     of BaseFS instead — joinFSPath strips the leading slash and reads
+//     from the BaseFS root, matching how `<base href="/">` resolves in
+//     browsers.
+//
+//  4. Otherwise — resolved via joinFSPath relative to origin's directory
+//     (or BaseFS root for inline contexts) and read through opts.BaseFS.
+//     Returns errNoBaseFS when opts.BaseFS is nil and src is non-absolute.
+//
+// origin is the document or stylesheet path/URL containing src. Pass ""
+// for inline contexts: `<style>` blocks, top-level document references,
+// and programmatic options like FallbackFontPath. Relative src values
+// resolve relative to origin's directory (or BaseFS root when origin is
+// empty).
+//
+// src is expected pre-trimmed of surrounding whitespace; call sites
+// (parseStyleBlocks for href, parseFontFaceSrc for url(), getAttr for
+// img src) already trim before reaching the resolver.
+//
+// maxBytes caps HTTP downloads. 0 (or any non-positive value) means use
+// the default 50MB; pass 10MB for stylesheets to match the historical
+// CSS fetch limit. The cap is ignored for filesystem reads — those are
+// bounded by the source data.
+//
+// data: URIs are NOT handled here; callers parse them inline because
+// each asset type has its own metadata-aware decoder (font.Face from
+// font/x-truetype, *image.Image from image/png, raw bytes for CSS).
+func resolveLocalAsset(opts Options, urlPolicy URLPolicy, origin, src string, maxBytes int64) ([]byte, error) {
+	switch {
+	case isURL(src):
+		return fetchHTTPBytes(httpClientOrDefault(opts.Client), urlPolicy, src, maxBytes)
+	case isURL(origin):
+		return fetchHTTPBytes(httpClientOrDefault(opts.Client), urlPolicy, joinURL(origin, src), maxBytes)
+	case opts.BaseFS == nil && filepath.IsAbs(src):
+		return os.ReadFile(src)
+	default:
+		return readAsset(opts.BaseFS, joinFSPath(origin, src))
+	}
+}
+
+// fetchHTTPBytes consults urlPolicy first (wrapping denials with
+// ErrURLPolicyDenied so reportAssetError can distinguish caller intent
+// from genuine load failure), then performs the GET via httpGetBytes
+// with the supplied byte cap. A maxBytes value of 0 falls back to the
+// 50MB default, matching the historical fetchImage cap.
+func fetchHTTPBytes(client *http.Client, urlPolicy URLPolicy, url string, maxBytes int64) ([]byte, error) {
+	if urlPolicy != nil {
+		if err := urlPolicy(url); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrURLPolicyDenied, err)
+		}
+	}
+	if maxBytes <= 0 {
+		maxBytes = 50 << 20
+	}
+	return httpGetBytes(client, url, maxBytes)
+}
+
+// resolveLocalAsset is the converter-method wrapper around the package
+// free function. Use this from any code that already has a *converter;
+// pre-converter call sites (parseStyleBlocks) call the free function
+// directly with the already-built Options + URLPolicy values.
+func (c *converter) resolveLocalAsset(origin, src string, maxBytes int64) ([]byte, error) {
+	return resolveLocalAsset(c.opts, c.urlPolicy, origin, src, maxBytes)
+}
+
 // httpClientOrDefault returns the configured HTTP client or http.DefaultClient.
 func httpClientOrDefault(c *http.Client) *http.Client {
 	if c != nil {
@@ -286,7 +371,7 @@ func ConvertFull(htmlStr string, opts *Options) (*ConvertResult, error) {
 			stylesheetErrs = append(stylesheetErrs, formatAssetError("stylesheet", err, []any{"href", href}))
 		}
 	}
-	ss := parseStyleBlocks(doc, o.BaseFS, makeCSSFetcher(o.URLPolicy, o.Client), logStylesheetErr)
+	ss := parseStyleBlocks(doc, o, logStylesheetErr)
 
 	c := &converter{opts: o, logger: logger, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth, counters: make(map[string][]int), urlPolicy: o.URLPolicy, strictErrs: stylesheetErrs}
 
@@ -345,7 +430,7 @@ func Convert(htmlStr string, opts *Options) ([]layout.Element, error) {
 			stylesheetErrs = append(stylesheetErrs, formatAssetError("stylesheet", err, []any{"href", href}))
 		}
 	}
-	ss := parseStyleBlocks(doc, o.BaseFS, makeCSSFetcher(o.URLPolicy, o.Client), logStylesheetErr)
+	ss := parseStyleBlocks(doc, o, logStylesheetErr)
 
 	c := &converter{opts: o, logger: logger, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth, counters: make(map[string][]int), urlPolicy: o.URLPolicy, strictErrs: stylesheetErrs}
 
@@ -473,11 +558,12 @@ type pendingOverlay struct {
 }
 
 // loadFontFaces loads @font-face fonts into the converter's embeddedFonts map.
-// Supports base64-encoded data URIs, http(s) URLs (fetched via Options.Client),
-// and BaseFS-relative paths. Paths are resolved relative to the stylesheet
-// they were declared in (its origin), so url("../fonts/x.ttf") inside
-// styles/site.css resolves to fonts/x.ttf at the BaseFS root. Inline <style>
-// blocks resolve from the BaseFS root.
+// data: URIs are decoded inline; every other src — http(s) URL, BaseFS-
+// relative path, and absolute filesystem path — flows through the unified
+// [resolveLocalAsset] contract. The font is resolved relative to the
+// stylesheet it was declared in (its origin), so url("../fonts/x.ttf")
+// inside styles/site.css resolves to fonts/x.ttf at the BaseFS root.
+// Inline <style> blocks resolve from the BaseFS root.
 //
 // Failures (missing data, invalid font bytes, fetch errors) are reported
 // through Options.Logger at warn level and skipped — they never abort the
@@ -490,23 +576,10 @@ func (c *converter) loadFontFaces(faces []fontFaceRule) {
 		var data []byte
 		var err error
 
-		switch {
-		case strings.HasPrefix(src, "data:"):
+		if strings.HasPrefix(src, "data:") {
 			face, err = decodeFontDataURI(src)
-		case isURL(src):
-			data, err = c.fetchFontBytes(src)
-			if err == nil {
-				face, err = font.ParseFont(data)
-			}
-		case isURL(ff.origin):
-			resolved := joinURL(ff.origin, src)
-			data, err = c.fetchFontBytes(resolved)
-			if err == nil {
-				face, err = font.ParseFont(data)
-			}
-		default:
-			resolved := joinFSPath(ff.origin, src)
-			data, err = readAsset(c.opts.BaseFS, resolved)
+		} else {
+			data, err = c.resolveLocalAsset(ff.origin, src, 50<<20)
 			if err == nil {
 				face, err = font.ParseFont(data)
 			}
@@ -574,19 +647,6 @@ func joinURL(originURL, src string) string {
 	}
 	resolved := path.Join(dir, src)
 	return originURL[:pathStart] + "/" + strings.TrimPrefix(resolved, "/")
-}
-
-// fetchFontBytes downloads a font file via Options.Client, honouring
-// URLPolicy. The 50MB limit matches fetchImage. A URLPolicy denial is
-// wrapped with ErrURLPolicyDenied so reportAssetError can distinguish
-// "the caller wired a deny" from "the network broke".
-func (c *converter) fetchFontBytes(url string) ([]byte, error) {
-	if c.urlPolicy != nil {
-		if err := c.urlPolicy(url); err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrURLPolicyDenied, err)
-		}
-	}
-	return httpGetBytes(httpClientOrDefault(c.opts.Client), url, 50<<20)
 }
 
 // decodeFontDataURI decodes a base64-encoded font from a data: URI.
@@ -677,18 +737,29 @@ func (c *converter) getFallbackFont() *font.EmbeddedFont {
 	return nil
 }
 
-// loadFallbackFont resolves p first through BaseFS, then through the OS
-// filesystem when BaseFS is nil or the path is missing. Paths that match
-// filepath.IsAbs for the host OS skip BaseFS entirely — users almost always
-// configure BaseFS for their assets directory, and an absolute fallback path
-// is most often a system font. A BaseFS miss followed by a successful OS
-// load is logged at debug level so the BaseFS attempt remains observable.
+// loadFallbackFont resolves the FallbackFontPath option with two
+// programmatic-only carve-outs from the standard [resolveLocalAsset]
+// contract that document-content resolvers do not get:
+//
+//  1. An absolute path always bypasses BaseFS to the OS, regardless of
+//     whether BaseFS is set. FallbackFontPath is configured by the
+//     embedding application, almost always at a system font location;
+//     callers typically build BaseFS for their asset directory rather
+//     than the system font tree. Document-supplied absolute paths
+//     (`<img src="/abs">`, `@font-face url('/abs')`) follow the
+//     centralized rule because the asset reference comes from
+//     untrusted content.
+//
+//  2. A relative path that misses in BaseFS retries against the OS so
+//     a typo in the option does not silently produce no-fallback text.
+//     The retry is logged at debug level so the BaseFS attempt remains
+//     observable when investigating which path the loader took.
 func (c *converter) loadFallbackFont(p string) (font.Face, error) {
 	if filepath.IsAbs(p) {
 		return font.LoadFont(p)
 	}
 	if c.opts.BaseFS != nil {
-		data, baseErr := readAsset(c.opts.BaseFS, p)
+		data, baseErr := c.resolveLocalAsset("", p, 50<<20)
 		if baseErr == nil {
 			return font.ParseFont(data)
 		}

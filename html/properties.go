@@ -702,7 +702,10 @@ func parseBorderShorthand(value string, fontSize float64) float64 {
 
 // parseBorderFull parses a CSS border shorthand into width, style, and color.
 func parseBorderFull(value string, fontSize float64) (float64, string, layout.Color) {
-	parts := strings.Fields(value)
+	// splitTopLevelFields keeps functional values (calc()/min()/max()/clamp()
+	// for width, rgb()/rgba()/hsl() for color) intact when they contain
+	// internal whitespace.
+	parts := splitTopLevelFields(value)
 	if len(parts) == 0 {
 		return 0, "none", layout.ColorBlack
 	}

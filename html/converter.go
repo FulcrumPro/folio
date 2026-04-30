@@ -57,6 +57,22 @@ type Options struct {
 	// fonts in @font-face, unreadable linked stylesheets, image fetch errors
 	// that fall back to alt text. If nil, these events are dropped.
 	Logger *slog.Logger
+	// StrictAssets promotes asset-load failures from warn-and-continue to
+	// returned errors. When true, Convert and ConvertFull collect every
+	// failed @font-face url(), <img>, background-image, linked stylesheet,
+	// SVG load, and FallbackFontPath, then return them joined via
+	// errors.Join at the end of the conversion. Document elements that
+	// would have rendered as alt-text or with the system fallback are
+	// skipped — the conversion may still produce a partial result alongside
+	// the error so callers can inspect both. URLPolicy denials are not
+	// escalated; they represent the caller's intent, not a load failure.
+	//
+	// When false (default), every asset failure is logged through Logger
+	// (if set) and the conversion continues. This suits production where
+	// missing assets should not abort a render. Use StrictAssets in
+	// development and CI to surface broken paths in the local feedback
+	// loop instead of letting them silently degrade the output.
+	StrictAssets bool
 }
 
 // URLPolicy controls whether the HTML converter may fetch a remote URL.
@@ -84,6 +100,7 @@ func (o *Options) defaults() Options {
 	out.URLPolicy = o.URLPolicy
 	out.Client = o.Client
 	out.Logger = o.Logger
+	out.StrictAssets = o.StrictAssets
 	return out
 }
 
@@ -256,12 +273,16 @@ func ConvertFull(htmlStr string, opts *Options) (*ConvertResult, error) {
 	style.FontSize = o.DefaultFontSize
 
 	logger := loggerOrDiscard(o.Logger)
+	var stylesheetErrs []error
 	logStylesheetErr := func(href string, err error) {
 		logger.Warn("folio/html: stylesheet load failed", "href", href, "error", err)
+		if o.StrictAssets {
+			stylesheetErrs = append(stylesheetErrs, formatAssetError("stylesheet", err, []any{"href", href}))
+		}
 	}
 	ss := parseStyleBlocks(doc, o.BaseFS, makeCSSFetcher(o.URLPolicy, o.Client), logStylesheetErr)
 
-	c := &converter{opts: o, logger: logger, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth, counters: make(map[string][]int), urlPolicy: o.URLPolicy}
+	c := &converter{opts: o, logger: logger, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth, counters: make(map[string][]int), urlPolicy: o.URLPolicy, strictErrs: stylesheetErrs}
 
 	// Parse @page config early so containerWidth reflects the actual page size
 	// (e.g. landscape pages have a wider containerWidth).
@@ -291,6 +312,9 @@ func ConvertFull(htmlStr string, opts *Options) (*ConvertResult, error) {
 		}
 	}
 
+	if len(c.strictErrs) > 0 {
+		return result, errors.Join(c.strictErrs...)
+	}
 	return result, nil
 }
 
@@ -308,12 +332,16 @@ func Convert(htmlStr string, opts *Options) ([]layout.Element, error) {
 	style.FontSize = o.DefaultFontSize
 
 	logger := loggerOrDiscard(o.Logger)
+	var stylesheetErrs []error
 	logStylesheetErr := func(href string, err error) {
 		logger.Warn("folio/html: stylesheet load failed", "href", href, "error", err)
+		if o.StrictAssets {
+			stylesheetErrs = append(stylesheetErrs, formatAssetError("stylesheet", err, []any{"href", href}))
+		}
 	}
 	ss := parseStyleBlocks(doc, o.BaseFS, makeCSSFetcher(o.URLPolicy, o.Client), logStylesheetErr)
 
-	c := &converter{opts: o, logger: logger, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth, counters: make(map[string][]int), urlPolicy: o.URLPolicy}
+	c := &converter{opts: o, logger: logger, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth, counters: make(map[string][]int), urlPolicy: o.URLPolicy, strictErrs: stylesheetErrs}
 
 	// Update containerWidth if @page specifies a different page size.
 	if len(ss.pageRules) > 0 {
@@ -327,7 +355,11 @@ func Convert(htmlStr string, opts *Options) ([]layout.Element, error) {
 	// Load @font-face fonts.
 	c.loadFontFaces(ss.fontFaces)
 
-	return c.walkChildren(doc, style), nil
+	elems := c.walkChildren(doc, style)
+	if len(c.strictErrs) > 0 {
+		return elems, errors.Join(c.strictErrs...)
+	}
+	return elems, nil
 }
 
 type converter struct {
@@ -353,6 +385,47 @@ type converter struct {
 
 	// urlPolicy is called before fetching remote URLs. Nil means allow all.
 	urlPolicy URLPolicy
+
+	// strictErrs accumulates asset-load failures when Options.StrictAssets
+	// is true. Convert / ConvertFull return errors.Join(strictErrs...) at
+	// the end of the run. When StrictAssets is false this slice is never
+	// appended to — reportAssetError still calls Logger.Warn.
+	strictErrs []error
+}
+
+// reportAssetError records a single asset-load failure. The event is always
+// logged at warn level through Options.Logger (or dropped when Logger is
+// nil); when Options.StrictAssets is true it is additionally appended to
+// c.strictErrs for return at the end of the conversion. category is a short
+// label like "@font-face", "image", "background-image", "stylesheet"; the
+// error wrapped into strictErrs preserves the underlying err with errors.Is.
+// attrs follows slog's variadic key/value convention and is forwarded to
+// the logger plus inlined into the strict error message for grep-ability.
+func (c *converter) reportAssetError(category string, err error, attrs ...any) {
+	logArgs := append([]any{"error", err}, attrs...)
+	c.logger.Warn("folio/html: "+category+" load failed", logArgs...)
+	if c.opts.StrictAssets {
+		c.strictErrs = append(c.strictErrs, formatAssetError(category, err, attrs))
+	}
+}
+
+// formatAssetError builds the wrapped error stored in strictErrs. The
+// message inlines the slog-style attrs as space-separated key=value pairs
+// so the joined error from errors.Join is self-describing without forcing
+// callers to walk a structured tree.
+func formatAssetError(category string, err error, attrs []any) error {
+	if len(attrs) == 0 {
+		return fmt.Errorf("folio/html: %s load failed: %w", category, err)
+	}
+	var b strings.Builder
+	b.WriteString("folio/html: ")
+	b.WriteString(category)
+	b.WriteString(" load failed:")
+	for i := 0; i+1 < len(attrs); i += 2 {
+		fmt.Fprintf(&b, " %v=%v", attrs[i], attrs[i+1])
+	}
+	b.WriteString(": %w")
+	return fmt.Errorf(b.String(), err)
 }
 
 // containingBlock tracks a positioned ancestor for absolute positioning resolution.
@@ -413,8 +486,8 @@ func (c *converter) loadFontFaces(faces []fontFaceRule) {
 		}
 
 		if err != nil {
-			c.logger.Warn("folio/html: @font-face load failed",
-				"family", ff.family, "src", src, "origin", ff.origin, "error", err)
+			c.reportAssetError("@font-face", err,
+				"family", ff.family, "src", src, "origin", ff.origin)
 			continue
 		}
 		ef := font.NewEmbeddedFont(face)
@@ -528,8 +601,8 @@ func (c *converter) getFallbackFont() *font.EmbeddedFont {
 			c.fallbackFont = font.NewEmbeddedFont(face)
 			return c.fallbackFont
 		} else {
-			c.logger.Warn("folio/html: FallbackFontPath load failed",
-				"path", c.opts.FallbackFontPath, "error", err)
+			c.reportAssetError("FallbackFontPath", err,
+				"path", c.opts.FallbackFontPath)
 		}
 	}
 

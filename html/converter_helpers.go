@@ -567,14 +567,14 @@ func (c *converter) resolveBackgroundImage(style computedStyle) *layout.Backgrou
 		if strings.HasPrefix(imgPath, "http://") || strings.HasPrefix(imgPath, "https://") {
 			loaded, err := c.fetchImage(imgPath)
 			if err != nil {
-				c.logger.Warn("folio/html: background-image fetch failed", "src", imgPath, "error", err)
+				c.reportAssetError("background-image", err, "src", imgPath)
 				return nil
 			}
 			img = loaded
 		} else {
 			loaded, err := c.loadLocalImage(imgPath)
 			if err != nil {
-				c.logger.Warn("folio/html: background-image load failed", "src", imgPath, "error", err)
+				c.reportAssetError("background-image", err, "src", imgPath)
 				return nil
 			}
 			img = loaded

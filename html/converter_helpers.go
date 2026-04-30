@@ -619,7 +619,9 @@ func (c *converter) resolveBackgroundImage(style computedStyle) *layout.Backgrou
 
 	// Parse explicit size values.
 	if style.BackgroundSize != "" && style.BackgroundSize != "cover" && style.BackgroundSize != "contain" && style.BackgroundSize != "auto" {
-		parts := strings.Fields(style.BackgroundSize)
+		// splitTopLevelFields keeps calc()/min()/max()/clamp() values as
+		// a single token even when they contain internal whitespace.
+		parts := splitTopLevelFields(style.BackgroundSize)
 		if len(parts) >= 1 {
 			if l := parseLength(parts[0]); l != nil {
 				bgImg.SizeW = l.toPoints(0, style.FontSize)

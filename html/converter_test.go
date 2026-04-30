@@ -6695,6 +6695,141 @@ func TestBackgroundSize(t *testing.T) {
 	}
 }
 
+// TestBackgroundSizeWithCalc is a regression test for the same
+// strings.Fields tokenization bug fixed for `flex:` (#236),
+// `margin:`/`padding:` (#237), `font:` (#240), and `border:` (#242),
+// applied here to `background-size:`. Pre-fix, a value like
+// `background-size: calc(50px + 50px) 100px` was split into 5 tokens
+// ["calc(50px", "+", "50px)", "100px", ...]; parts[0] = "calc(50px"
+// (unbalanced) parsed nil → SizeW stayed 0; parts[1] = "+" parsed nil
+// → SizeH stayed 0; the explicit size was silently lost.
+//
+// Pre-existing limitation NOT addressed here: SizeW/SizeH are stored
+// as float64 and the parser passes relativeTo=0 to toPoints, so plain
+// percent values (`background-size: 50%`) resolve to 0pt. Mirrors the
+// margin/padding limitation called out in #237. Out of scope.
+func TestBackgroundSizeWithCalc(t *testing.T) {
+	tests := []struct {
+		name      string
+		size      string
+		wantSizeW float64 // in pt
+		wantSizeH float64 // 0 means unset
+	}{
+		{
+			name: "calc width, plain px height",
+			size: "calc(50px + 50px) 100px",
+			// 100px = 75pt, 100px = 75pt.
+			wantSizeW: 75, wantSizeH: 75,
+		},
+		{
+			name: "calc width only",
+			size: "calc(50px + 50px)",
+			// Single value → only SizeW set.
+			wantSizeW: 75, wantSizeH: 0,
+		},
+		{
+			name: "calc on both axes",
+			size: "calc(50px + 50px) calc(20px * 2)",
+			// 100px = 75pt; 40px = 30pt.
+			wantSizeW: 75, wantSizeH: 30,
+		},
+		{
+			name: "min() width, max() height",
+			size: "min(80px, 100px) max(40px, 60px)",
+			// min picks 80px = 60pt; max picks 60px = 45pt.
+			wantSizeW: 60, wantSizeH: 45,
+		},
+		{
+			name: "clamp() width",
+			size: "clamp(50px, 100px, 200px) 80px",
+			// clamp middle = 100px = 75pt; 80px = 60pt.
+			wantSizeW: 75, wantSizeH: 60,
+		},
+		{
+			name: "calc with subtraction",
+			size: "calc(200px - 100px) 50px",
+			// 100px = 75pt, 50px = 37.5pt.
+			wantSizeW: 75, wantSizeH: 37.5,
+		},
+		{
+			name: "calc with multiplication",
+			size: "calc(50px * 2) 50px",
+			// 100px = 75pt, 50px = 37.5pt.
+			wantSizeW: 75, wantSizeH: 37.5,
+		},
+		{
+			name: "calc with division",
+			size: "calc(200px / 2) 50px",
+			// 100px = 75pt.
+			wantSizeW: 75, wantSizeH: 37.5,
+		},
+		{
+			name:      "tab as separator",
+			size:      "calc(50px + 50px)\t100px",
+			wantSizeW: 75, wantSizeH: 75,
+		},
+		{
+			name:      "newline as separator",
+			size:      "calc(50px + 50px)\n100px",
+			wantSizeW: 75, wantSizeH: 75,
+		},
+		{
+			name:      "plain two-value (no calc) still works post-swap",
+			size:      "100px 50px",
+			wantSizeW: 75, wantSizeH: 37.5,
+		},
+		{
+			name: "3+ tokens: extras silently dropped",
+			// CSS background-size accepts 1 or 2 values. The parser only
+			// reads parts[0] and parts[1]; any extras are ignored. Locks
+			// that contract.
+			size:      "100px 50px 25px",
+			wantSizeW: 75, wantSizeH: 37.5,
+		},
+		{
+			name: "auto keyword short-circuits before token parsing",
+			// "auto" hits the early-exit guard before splitTopLevelFields
+			// is reached; SizeW/SizeH stay at 0. Sanity check that the
+			// guard wasn't accidentally dropped by this PR.
+			size:      "auto",
+			wantSizeW: 0, wantSizeH: 0,
+		},
+		{
+			name: "unbalanced calc paren: SizeW and SizeH stay 0",
+			// splitTopLevelFields keeps the unbalanced calc + trailing
+			// characters as one single token (depth never returns to 0).
+			// So len(parts) == 1: parseLength rejects the lone token →
+			// SizeW stays 0; SizeH stays 0 because there's no parts[1] —
+			// not because parseLength rejected anything. Documents the
+			// no-crash invariant on malformed input.
+			size:      "calc(50px + 50px 100px",
+			wantSizeW: 0, wantSizeH: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &converter{
+				embeddedFonts: make(map[string]*font.EmbeddedFont),
+			}
+			style := computedStyle{
+				BackgroundImage: "linear-gradient(red, blue)",
+				BackgroundSize:  tt.size,
+				FontSize:        12,
+			}
+			bgImg := c.resolveBackgroundImage(style)
+			if bgImg == nil {
+				t.Fatal("resolveBackgroundImage returned nil")
+			}
+			if math.Abs(bgImg.SizeW-tt.wantSizeW) > 0.01 {
+				t.Errorf("SizeW = %.4f, want %.4f", bgImg.SizeW, tt.wantSizeW)
+			}
+			if math.Abs(bgImg.SizeH-tt.wantSizeH) > 0.01 {
+				t.Errorf("SizeH = %.4f, want %.4f", bgImg.SizeH, tt.wantSizeH)
+			}
+		})
+	}
+}
+
 func TestBackgroundPosition(t *testing.T) {
 	htmlStr := `<div style="background-image: linear-gradient(to right, red, blue); background-position: center; padding: 10px;"><p>Center</p></div>`
 	elems, err := Convert(htmlStr, nil)

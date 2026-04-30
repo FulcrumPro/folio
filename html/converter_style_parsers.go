@@ -297,3 +297,38 @@ func splitTopLevelCommas(s string) []string {
 	parts = append(parts, s[start:])
 	return parts
 }
+
+// splitTopLevelFields splits a string on whitespace at paren depth 0,
+// keeping functional values like "calc(50% - 8px)" or "min(10px, 5%)"
+// intact as a single field. Differs from strings.Fields, which would
+// split such values on their internal whitespace.
+func splitTopLevelFields(s string) []string {
+	var parts []string
+	depth := 0
+	start := -1
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch c {
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		}
+		if depth == 0 && (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+			if start >= 0 {
+				parts = append(parts, s[start:i])
+				start = -1
+			}
+			continue
+		}
+		if start < 0 {
+			start = i
+		}
+	}
+	if start >= 0 {
+		parts = append(parts, s[start:])
+	}
+	return parts
+}

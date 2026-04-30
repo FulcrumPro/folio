@@ -49,14 +49,22 @@ func baselineShiftFromStyle(style computedStyle) float64 {
 }
 
 // cssLengthToUnitValue converts a cssLength to a layout.UnitValue.
-// Percentage values are stored lazily (resolved at layout time).
-// Absolute values are resolved immediately to points.
+// Plain percentages and calc/min/max/clamp expressions that depend on a
+// percentage are deferred to layout time so they resolve against the
+// actual layout area rather than the converter's containerWidth (which
+// does not know about page margins or other late-bound constraints).
+// Pure absolute values are resolved immediately to points.
 func cssLengthToUnitValue(l *cssLength, containerWidth, fontSize float64) layout.UnitValue {
 	if l == nil {
 		return layout.Pt(0)
 	}
 	if l.Unit == "%" {
 		return layout.Pct(l.Value)
+	}
+	if l.dependsOnPercent() {
+		return layout.CalcUnit(func(available float64) float64 {
+			return l.toPoints(available, fontSize)
+		})
 	}
 	return layout.Pt(l.toPoints(containerWidth, fontSize))
 }

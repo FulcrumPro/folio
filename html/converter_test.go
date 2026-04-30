@@ -2116,6 +2116,179 @@ func TestParseBorderFull(t *testing.T) {
 	}
 }
 
+// TestParseBorderFullWithCalc is a regression test for the same
+// strings.Fields tokenization bug fixed for `flex:` (#236),
+// `margin:`/`padding:` (#237), and `font:` (#240) — applied here to
+// `border:`. The parser iterates each whitespace-delimited token and
+// classifies as keyword, length, or color. Pre-fix, calc/min/max/clamp
+// values for the width and rgb()/rgba()/hsl() values for the color
+// (when written with internal whitespace) were shredded into fragments
+// that matched none of those classifiers, so the width fell back to
+// the default thin (0.75pt) and the color stayed black.
+func TestParseBorderFullWithCalc(t *testing.T) {
+	red := layout.Color{R: 1, G: 0, B: 0}
+	tests := []struct {
+		name      string
+		input     string
+		wantWidth float64
+		wantStyle string
+		wantColor layout.Color
+	}{
+		{
+			name:  "calc width",
+			input: "calc(1px + 1px) solid red",
+			// 2px = 1.5pt.
+			wantWidth: 1.5, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:  "min() width",
+			input: "min(2px, 4px) solid red",
+			// min picks 2px = 1.5pt.
+			wantWidth: 1.5, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:  "max() width",
+			input: "max(1px, 3px) dotted red",
+			// max picks 3px = 2.25pt.
+			wantWidth: 2.25, wantStyle: "dotted", wantColor: red,
+		},
+		{
+			name:  "clamp() width",
+			input: "clamp(1px, 2px, 4px) dashed red",
+			// clamp middle = 2px = 1.5pt.
+			wantWidth: 1.5, wantStyle: "dashed", wantColor: red,
+		},
+		{
+			name:  "calc with subtraction",
+			input: "calc(4px - 2px) solid red",
+			// 2px = 1.5pt.
+			wantWidth: 1.5, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:  "calc with multiplication",
+			input: "calc(2px * 2) solid red",
+			// 4px = 3pt.
+			wantWidth: 3, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:  "calc with division",
+			input: "calc(8px / 2) solid red",
+			// 4px = 3pt.
+			wantWidth: 3, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:  "rgb() color with internal whitespace",
+			input: "1px solid rgb(255, 0, 0)",
+			// Pre-fix the rgb was shredded to "rgb(255," / "0," / "0)"
+			// and color stayed at default black.
+			wantWidth: 0.75, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:  "rgba() color with internal whitespace",
+			input: "2px dashed rgba(255, 0, 0, 0.5)",
+			// Color alpha is not tracked on layout.Color; assert RGB only.
+			wantWidth: 1.5, wantStyle: "dashed", wantColor: red,
+		},
+		{
+			name:  "hsl() color with internal whitespace",
+			input: "1px solid hsl(0, 100%, 50%)",
+			// hsl(0, 100%, 50%) is pure red. Pre-fix the hsl was
+			// shredded the same way as rgb and color stayed black.
+			wantWidth: 0.75, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:      "calc width with rgb color (both compound)",
+			input:     "calc(1px + 1px) solid rgb(255, 0, 0)",
+			wantWidth: 1.5, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:      "hex color",
+			input:     "1px solid #ff0000",
+			wantWidth: 0.75, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:      "tabs and newlines as separators",
+			input:     "calc(1px + 1px)\tsolid\nred",
+			wantWidth: 1.5, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:  "thick keyword still works",
+			input: "thick solid red",
+			// "thick" → 3.75pt.
+			wantWidth: 3.75, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:  "reverse order: color style width",
+			input: "red solid 2px",
+			// Parser is order-agnostic — each token is classified
+			// independently, so reversed order resolves identically.
+			wantWidth: 1.5, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:  "style only (no width or color)",
+			input: "dashed",
+			// Width defaults to thin (0.75pt), color to black.
+			wantWidth: 0.75, wantStyle: "dashed", wantColor: layout.ColorBlack,
+		},
+		{
+			name:  "lone width (no style or color)",
+			input: "2px",
+			// Style defaults to "solid", color to black.
+			wantWidth: 1.5, wantStyle: "solid", wantColor: layout.ColorBlack,
+		},
+		{
+			name:  "5+ tokens — extras are silently classified",
+			input: "1px solid red foo bar",
+			// "foo"/"bar" don't classify as keyword/length/color, so
+			// they're ignored. Width/style/color come from the first
+			// three valid tokens.
+			wantWidth: 0.75, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:  "none style zeros the width even if calc set",
+			input: "calc(2px + 2px) none red",
+			// "none" forces width to 0.
+			wantWidth: 0, wantStyle: "none", wantColor: red,
+		},
+		{
+			name: "empty input returns defaults",
+			// parseBorderFull short-circuits on empty input, returning
+			// width=0, style="none" (NOT the "solid" default used for
+			// non-empty inputs), color=black.
+			input:     "",
+			wantWidth: 0, wantStyle: "none", wantColor: layout.ColorBlack,
+		},
+		{
+			name: "unbalanced calc paren swallows everything to defaults",
+			// splitTopLevelFields keeps the unbalanced calc + trailing
+			// characters as one token (depth never returns to 0). That
+			// single token doesn't classify as keyword, length, or color
+			// — so width, style, and color all keep their non-empty-input
+			// defaults (0.75pt thin, "solid", black). Note "solid" here
+			// is the default style, NOT a recognized second token.
+			// Documents the no-crash invariant on malformed input.
+			input:     "calc(1px + 1px solid red",
+			wantWidth: 0.75, wantStyle: "solid", wantColor: layout.ColorBlack,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w, s, c := parseBorderFull(tt.input, 12)
+			if math.Abs(w-tt.wantWidth) > 0.01 {
+				t.Errorf("width = %.4f, want %.4f", w, tt.wantWidth)
+			}
+			if s != tt.wantStyle {
+				t.Errorf("style = %q, want %q", s, tt.wantStyle)
+			}
+			if math.Abs(c.R-tt.wantColor.R) > 0.01 ||
+				math.Abs(c.G-tt.wantColor.G) > 0.01 ||
+				math.Abs(c.B-tt.wantColor.B) > 0.01 {
+				t.Errorf("color RGB = %+v, want %+v", c, tt.wantColor)
+			}
+		})
+	}
+}
+
 // --- Full document test ---
 
 func TestConvertFullDocument(t *testing.T) {

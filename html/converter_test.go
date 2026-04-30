@@ -4752,6 +4752,148 @@ func TestCustomFontFamilyWithFontShorthand(t *testing.T) {
 	}
 }
 
+// TestParseFontShorthandWithCalc is a regression test for the same
+// strings.Fields tokenization bug fixed for `flex:` (#236) and
+// `margin:`/`padding:` (#237) — applied here to `font:`. Pre-fix,
+// `font: calc(1em + 2px) sans-serif` was split into 4 tokens
+// ["calc(1em", "+", "2px)", "sans-serif"], the size position got
+// "calc(1em" (unbalanced calc → parseLength nil → size 0), and the
+// remaining tokens were mis-routed into font-family.
+//
+// Pre-existing limitations NOT addressed here:
+//   - Whitespace around the slash (e.g. `font: 12px / 1.5 sans`)
+//     makes `/` its own token and it ends up consumed as font-family.
+//   - The slash detector uses strings.IndexByte('/') against the size
+//     token, which is paren-blind. Any `/` inside the size calc
+//     (e.g. `calc(2em / 2)` for division, or any line-height calc
+//     containing a `/`) is misread as the line-height separator,
+//     splitting the calc mid-expression.
+//
+// Both are scoped out of this tokenization fix.
+func TestParseFontShorthandWithCalc(t *testing.T) {
+	const parentSize = 12.0
+	tests := []struct {
+		name           string
+		input          string
+		wantStyle      string
+		wantWeight     string
+		wantSize       float64 // in pt
+		wantLineHeight float64
+		wantFamily     string
+	}{
+		{
+			name:  "calc in size, single family",
+			input: "calc(1em + 2px) sans-serif",
+			// 1em at parent=12pt → 12pt; +2px(=1.5pt) → 13.5pt.
+			wantSize:   13.5,
+			wantFamily: "sans-serif",
+		},
+		{
+			name:  "min() in size",
+			input: "min(14px, 1.2em) sans-serif",
+			// min(10.5pt, 14.4pt) = 10.5pt.
+			wantSize:   10.5,
+			wantFamily: "sans-serif",
+		},
+		{
+			name:  "max() in size",
+			input: "max(8px, 14px) sans-serif",
+			// max(6pt, 10.5pt) = 10.5pt.
+			wantSize:   10.5,
+			wantFamily: "sans-serif",
+		},
+		{
+			name:  "clamp() in size",
+			input: "clamp(8px, 16px, 24px) sans-serif",
+			// middle wins: 16px = 12pt.
+			wantSize:   12,
+			wantFamily: "sans-serif",
+		},
+		{
+			name:  "calc in size with /line-height (no surrounding spaces)",
+			input: "calc(1em + 2px)/1.5 sans-serif",
+			// Size resolves to 13.5pt; line-height is the unitless multiplier 1.5.
+			wantSize:       13.5,
+			wantLineHeight: 1.5,
+			wantFamily:     "sans-serif",
+		},
+		{
+			name:       "italic + calc + family",
+			input:      "italic calc(1em + 2px) sans-serif",
+			wantStyle:  "italic",
+			wantSize:   13.5,
+			wantFamily: "sans-serif",
+		},
+		{
+			name:       "bold + calc + multi-word family",
+			input:      "bold calc(1em + 2px) Helvetica Neue",
+			wantWeight: "bold",
+			wantSize:   13.5,
+			wantFamily: "helvetica neue",
+		},
+		{
+			name:  "calc with subtraction",
+			input: "calc(2em - 4px) sans-serif",
+			// 2em at 12pt = 24pt; -4px(=3pt) = 21pt.
+			wantSize:   21,
+			wantFamily: "sans-serif",
+		},
+		{
+			name:  "calc with multiplication",
+			input: "calc(1em * 1.5) sans-serif",
+			// 12pt * 1.5 = 18pt.
+			wantSize:   18,
+			wantFamily: "sans-serif",
+		},
+		// `calc(... / ...)` and `<size>/calc(...)` cases are intentionally
+		// omitted — they hit the paren-blind slash detector documented
+		// above, not the tokenization bug fixed here.
+		{
+			name:  "calc size with keyword line-height",
+			input: "calc(1em + 2px)/normal sans-serif",
+			// "normal" → multiplier 1.2.
+			wantSize:       13.5,
+			wantLineHeight: 1.2,
+			wantFamily:     "sans-serif",
+		},
+		{
+			name:  "calc size with quoted multi-word family",
+			input: `calc(1em + 2px) "Times New Roman", serif`,
+			// parseFontFamily picks the first family from the comma list,
+			// strips quotes, lowercases.
+			wantSize:   13.5,
+			wantFamily: "times new roman",
+		},
+		{
+			name:  "empty input keeps parentSize default",
+			input: "",
+			// Parser short-circuits and returns parentSize.
+			wantSize: parentSize,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			style, weight, size, lh, family :=
+				parseFontShorthand(tt.input, parentSize)
+			if style != tt.wantStyle {
+				t.Errorf("style = %q, want %q", style, tt.wantStyle)
+			}
+			if weight != tt.wantWeight {
+				t.Errorf("weight = %q, want %q", weight, tt.wantWeight)
+			}
+			if math.Abs(size-tt.wantSize) > 0.01 {
+				t.Errorf("size = %.4f, want %.4f", size, tt.wantSize)
+			}
+			if math.Abs(lh-tt.wantLineHeight) > 0.01 {
+				t.Errorf("lineHeight = %.4f, want %.4f", lh, tt.wantLineHeight)
+			}
+			if family != tt.wantFamily {
+				t.Errorf("family = %q, want %q", family, tt.wantFamily)
+			}
+		})
+	}
+}
+
 // TestStandardFontFamilyStillWorks verifies that standard font names
 // (courier, times, helvetica) still resolve correctly after the refactor.
 func TestStandardFontFamilyStillWorks(t *testing.T) {

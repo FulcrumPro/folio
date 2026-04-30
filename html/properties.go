@@ -792,7 +792,11 @@ func parseFontShorthand(value string, parentSize float64) (style, weight string,
 		return "", "", parentSize, 0, ""
 	}
 
-	parts := strings.Fields(value)
+	// splitTopLevelFields keeps calc()/min()/max()/clamp() values as a
+	// single token even when they contain internal whitespace. The
+	// font-family tail is rejoined below with strings.Join, so multi-word
+	// families like "Helvetica Neue" survive.
+	parts := splitTopLevelFields(value)
 	if len(parts) == 0 {
 		return "", "", parentSize, 0, ""
 	}

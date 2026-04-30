@@ -46,7 +46,7 @@ func (c *converter) convertImage(n *html.Node, style computedStyle) []layout.Ele
 		img, err = c.loadLocalImage(src)
 	}
 	if err != nil {
-		c.logger.Warn("folio/html: image load failed", "src", src, "error", err)
+		c.reportAssetError("image", err, "src", src)
 		if alt != "" {
 			return c.altTextFallback(alt, style)
 		}
@@ -278,7 +278,7 @@ func (c *converter) convertImgSVG(src, alt string, style computedStyle) []layout
 		}
 	}
 
-	c.logger.Warn("folio/html: SVG image load failed", "src", src, "error", err)
+	c.reportAssetError("SVG image", err, "src", src)
 	if alt != "" {
 		return c.altTextFallback(alt, style)
 	}

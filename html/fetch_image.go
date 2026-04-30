@@ -24,7 +24,7 @@ func makeCSSFetcher(policy URLPolicy, client *http.Client) func(string) ([]byte,
 	return func(url string) ([]byte, error) {
 		if policy != nil {
 			if err := policy(url); err != nil {
-				return nil, err
+				return nil, fmt.Errorf("%w: %w", ErrURLPolicyDenied, err)
 			}
 		}
 		// Limit to 10MB for stylesheets.
@@ -52,7 +52,7 @@ func httpGetBytes(client *http.Client, url string, maxBytes int64) ([]byte, erro
 func (c *converter) fetchImage(url string) (*folioimage.Image, error) {
 	if c.urlPolicy != nil {
 		if err := c.urlPolicy(url); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %w", ErrURLPolicyDenied, err)
 		}
 	}
 

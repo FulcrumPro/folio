@@ -970,6 +970,30 @@ func (p *Paragraph) MaxWidth() float64 {
 	return total
 }
 
+// MeasureLines reports how many wrapped lines this paragraph produces at
+// maxWidth. Equivalent to len(p.Layout(maxWidth)). Useful for clamp
+// decisions ("if MeasureLines > 8 then split") without inspecting words.
+//
+// Safe to call concurrently with other read methods (Layout, MeasureHeight)
+// as long as no goroutine is mutating the paragraph through setters.
+func (p *Paragraph) MeasureLines(maxWidth float64) int {
+	return len(p.Layout(maxWidth))
+}
+
+// MeasureHeight reports the rendered height (in points) of this paragraph
+// at maxWidth — the sum of each line's Height. Does NOT include
+// SpaceBefore or SpaceAfter; the caller adds those if relevant.
+//
+// Safe to call concurrently with other read methods (Layout, MeasureLines)
+// as long as no goroutine is mutating the paragraph through setters.
+func (p *Paragraph) MeasureHeight(maxWidth float64) float64 {
+	total := 0.0
+	for _, line := range p.Layout(maxWidth) {
+		total += line.Height
+	}
+	return total
+}
+
 // splitWords splits text into words, preserving \n as a lineBreakMarker
 // sentinel that forces a line break during word-wrapping. CJK character
 // splitting is NOT done here; it happens in breakCJKWords after word

@@ -88,9 +88,36 @@ func TestCJKExampleProducesValidPDF(t *testing.T) {
 	// "+<PostScriptName>". Asserting on the requested font specifically
 	// (not just /BaseFont presence) catches a regression where the
 	// example silently falls back to a system font that also embeds.
+	//
+	// Note: font/embed.go runs the PostScript name through
+	// sanitizePSName before the subset prefix is glued on. For all
+	// candidate TTFs in loadAnyTTF (ArialMT, DejaVuSans, etc.) the
+	// sanitizer is a no-op so the raw PostScriptName matches what
+	// appears in the PDF; if a future candidate is added whose name
+	// contains characters the sanitizer rewrites, this assertion will
+	// need to mirror that transformation.
 	needle := []byte("+" + wantPS)
 	if !bytes.Contains(pdfBytes, needle) {
 		t.Errorf("output PDF does not embed the requested font: looking for %q (subset of synthetic TTC's PostScriptName %q)", needle, wantPS)
+	}
+}
+
+// TestCJKExampleQuotesFontURL is a unit-level guard for the CSS src
+// format. The example's @font-face emits url('%s'); a regression that
+// drops the quotes (url(%s)) can be subtly broken because some CSS
+// parsers tolerate unquoted paths but the CJK example's tempdir paths
+// often contain characters that strict parsing requires to be quoted.
+// Without this test, a silent regression where the @font-face src is
+// malformed could still produce a valid-looking PDF via the system
+// fallback chain — the +<PostScriptName> assertion above catches the
+// most likely cases, but not all.
+//
+// Asserting on the format directly is much cheaper than a full PDF
+// round-trip and surfaces the regression at its actual source.
+func TestCJKExampleQuotesFontURL(t *testing.T) {
+	html := buildHTML("/some/path/font.ttc")
+	if !bytes.Contains([]byte(html), []byte(`url('/some/path/font.ttc')`)) {
+		t.Errorf("buildHTML did not emit single-quoted url('...') around the font path; CSS may misparse paths with spaces, parentheses, or commas. Generated HTML head excerpt: %q", html[:min(500, len(html))])
 	}
 }
 

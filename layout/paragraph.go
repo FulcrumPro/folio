@@ -1550,9 +1550,35 @@ func truncateWithEllipsis(line Line, maxWidth float64) Line {
 }
 
 // wordToRun converts a Word back to a TextRun, preserving all styling fields.
+//
+// For shaped scripts (Arabic, Indic), Word.Text holds post-shape codepoints
+// (Presentation Forms-B for Arabic, post-reorder logical text for Indic)
+// while Word.OriginalText holds the pre-shape input. The reconstructed
+// TextRun must use the pre-shape text so that re-laying the cloned
+// paragraph re-runs the shaper from scratch and re-populates OriginalText
+// for /ActualText marked-content recovery (ISO 32000-2 §14.9.4). Without
+// this, accessibility and copy/paste fidelity silently regress on any
+// paragraph that crosses a page-split boundary.
+//
+// Word.InlineBlock holds the inline element (image, SVG, etc.) and round-
+// trips to TextRun.InlineElement. Word.InlineWidth and Word.InlineHeight
+// are cached measurements that re-compute during Layout; they do not need
+// to round-trip. Word.GIDs are shaper output; TextRun has no GIDs field,
+// so the shaper regenerates them on re-layout from the pre-shape input
+// in TextRun.Text.
+//
+// Note: hyphenated words produced by hyphenateWord do not enter this
+// path — hyphenation runs only inside Layout(), not in the wrapWords
+// path used by PlanLayout. If hyphenation is ever wired into PlanLayout,
+// the trailing "-" word and its rest pair will need a join-without-space
+// fix in cloneWithWords (see issue tracking breakLongWords field loss).
 func wordToRun(w Word) TextRun {
+	text := w.Text
+	if w.OriginalText != "" {
+		text = w.OriginalText
+	}
 	return TextRun{
-		Text:            w.Text,
+		Text:            text,
 		Font:            w.Font,
 		Embedded:        w.Embedded,
 		FontSize:        w.FontSize,
@@ -1566,6 +1592,7 @@ func wordToRun(w Word) TextRun {
 		LinkURI:         w.LinkURI,
 		TextShadow:      w.TextShadow,
 		BackgroundColor: w.BackgroundColor,
+		InlineElement:   w.InlineBlock,
 	}
 }
 
@@ -1592,7 +1619,13 @@ func (p *Paragraph) cloneWithWords(words []Word) *Paragraph {
 				cur.Text += "\n"
 				continue
 			}
-			sameRun := w.Font == cur.Font && w.Embedded == cur.Embedded &&
+			// Inline elements never merge with text or with another inline
+			// element — each one needs its own TextRun so the renderer can
+			// place the embedded element at the right point in the run list.
+			isInline := w.InlineBlock != nil
+			curInline := cur.InlineElement != nil
+			sameRun := !isInline && !curInline &&
+				w.Font == cur.Font && w.Embedded == cur.Embedded &&
 				w.FontSize == cur.FontSize && w.Color == cur.Color &&
 				w.Decoration == cur.Decoration && w.BaselineShift == cur.BaselineShift &&
 				w.LetterSpacing == cur.LetterSpacing && w.WordSpacing == cur.WordSpacing &&

@@ -176,7 +176,11 @@ func normaliseFSPath(p string) (string, error) {
 //     the OS via os.ReadFile. Typically a system font path like
 //     "/System/Library/Fonts/STHeiti Light.ttc" or
 //     `C:\Windows\Fonts\msyh.ttc` referenced from programmatically-built
-//     HTML where the caller chose not to configure a BaseFS.
+//     HTML where the caller chose not to configure a BaseFS. When
+//     opts.BaseFS is set, an absolute path is treated as web-style root
+//     of BaseFS instead — joinFSPath strips the leading slash and reads
+//     from the BaseFS root, matching how `<base href="/">` resolves in
+//     browsers.
 //
 //  4. Otherwise — resolved via joinFSPath relative to origin's directory
 //     (or BaseFS root for inline contexts) and read through opts.BaseFS.
@@ -188,9 +192,14 @@ func normaliseFSPath(p string) (string, error) {
 // resolve relative to origin's directory (or BaseFS root when origin is
 // empty).
 //
-// maxBytes caps HTTP downloads. 0 means use the default 50MB; pass 10MB
-// for stylesheets to match the historical CSS fetch limit. The cap
-// ignored for filesystem reads — those are bounded by the source data.
+// src is expected pre-trimmed of surrounding whitespace; call sites
+// (parseStyleBlocks for href, parseFontFaceSrc for url(), getAttr for
+// img src) already trim before reaching the resolver.
+//
+// maxBytes caps HTTP downloads. 0 (or any non-positive value) means use
+// the default 50MB; pass 10MB for stylesheets to match the historical
+// CSS fetch limit. The cap is ignored for filesystem reads — those are
+// bounded by the source data.
 //
 // data: URIs are NOT handled here; callers parse them inline because
 // each asset type has its own metadata-aware decoder (font.Face from
@@ -362,7 +371,7 @@ func ConvertFull(htmlStr string, opts *Options) (*ConvertResult, error) {
 			stylesheetErrs = append(stylesheetErrs, formatAssetError("stylesheet", err, []any{"href", href}))
 		}
 	}
-	ss := parseStyleBlocks(doc, o, o.URLPolicy, logStylesheetErr)
+	ss := parseStyleBlocks(doc, o, logStylesheetErr)
 
 	c := &converter{opts: o, logger: logger, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth, counters: make(map[string][]int), urlPolicy: o.URLPolicy, strictErrs: stylesheetErrs}
 
@@ -421,7 +430,7 @@ func Convert(htmlStr string, opts *Options) ([]layout.Element, error) {
 			stylesheetErrs = append(stylesheetErrs, formatAssetError("stylesheet", err, []any{"href", href}))
 		}
 	}
-	ss := parseStyleBlocks(doc, o, o.URLPolicy, logStylesheetErr)
+	ss := parseStyleBlocks(doc, o, logStylesheetErr)
 
 	c := &converter{opts: o, logger: logger, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth, counters: make(map[string][]int), urlPolicy: o.URLPolicy, strictErrs: stylesheetErrs}
 

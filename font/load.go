@@ -35,6 +35,9 @@ func ParseFont(data []byte) (Face, error) {
 			return nil, fmt.Errorf("decode TTC: %w", err)
 		}
 		return ParseTTF(ttfData)
+	// When adding a magic to this switch, also extend
+	// TestParseFontDispatchSurface in issue230_test.go so the audit
+	// keeps matching what the dispatch claims to support.
 	case 0x00010000, // TrueType
 		0x4F54544F, // "OTTO" (OpenType/CFF)
 		0x74727565: // "true" (legacy Apple TrueType)

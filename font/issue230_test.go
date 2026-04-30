@@ -61,9 +61,14 @@ func TestParseFontDispatchSurface(t *testing.T) {
 			binary.BigEndian.PutUint32(data[0:4], tc.magic)
 			_, err := ParseFont(data)
 			if err == nil {
-				// Acceptable for some magics if a 16-byte minimal
-				// payload happened to parse; we only care that the
-				// dispatch did not return ErrUnknownFormat.
+				// No current parser returns nil for 16 magic-prefixed
+				// zeroed bytes (sfnt rejects the truncated table
+				// directory; decodeWOFF rejects on header size;
+				// extractTTCFont rejects on numFonts == 0). Log
+				// rather than fail so a future parser change that
+				// accepts garbage at least surfaces in test output
+				// without taking down the suite.
+				t.Logf("unexpected nil error for magic 0x%08X (parser accepted minimal input)", tc.magic)
 				return
 			}
 			if errors.Is(err, ErrUnknownFormat) {

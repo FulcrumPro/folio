@@ -35,10 +35,12 @@ func ParseFont(data []byte) (Face, error) {
 			return nil, fmt.Errorf("decode TTC: %w", err)
 		}
 		return ParseTTF(ttfData)
+	// When adding a magic to this switch, also extend
+	// TestParseFontDispatchSurface in issue230_test.go so the audit
+	// keeps matching what the dispatch claims to support.
 	case 0x00010000, // TrueType
 		0x4F54544F, // "OTTO" (OpenType/CFF)
-		0x74727565, // "true"
-		0x74797031: // "typ1"
+		0x74727565: // "true" (legacy Apple TrueType)
 		return ParseTTF(data)
 	}
 	return nil, fmt.Errorf("unknown font magic 0x%08X: %w", sig, ErrUnknownFormat)

@@ -10,18 +10,27 @@
 // embedding uses CIDFont Type0 with Identity-H encoding and ToUnicode
 // mapping for copy/paste, so extracted text round-trips cleanly.
 //
-// Required fonts (the example exits with a message if none resolve):
+// Required fonts (the example exits with a message if none resolve).
+// SC-specific variants come first because the example body is in
+// Simplified Chinese; pan-CJK collections (NotoSansCJK-Regular.ttc,
+// msgothic.ttc) are accepted as fallbacks but their default face is
+// JP and the rendered glyphs lean Japanese:
 //
 //	macOS   /Library/Fonts/Arial Unicode.ttf
 //	        /System/Library/Fonts/STHeiti Light.ttc
 //	        /System/Library/Fonts/Hiragino Sans GB.ttc
 //	        /System/Library/Fonts/PingFang.ttc
-//	Linux   /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
-//	        /usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc
-//	        /usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc
-//	Windows C:\Windows\Fonts\msyh.ttc
-//	        C:\Windows\Fonts\msgothic.ttc
-//	        C:\Windows\Fonts\malgun.ttf
+//	Linux   /usr/share/fonts/opentype/noto/NotoSansSC-Regular.otf  (SC-specific)
+//	        /usr/share/fonts/truetype/wqy/wqy-zenhei.ttc          (SC-specific)
+//	        /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc (pan-CJK fallback)
+//	Windows C:\Windows\Fonts\simsun.ttc                            (SC-native)
+//	        C:\Windows\Fonts\msyh.ttc                              (SC-native)
+//	        C:\Windows\Fonts\msgothic.ttc                          (JP fallback)
+//
+// Programmatic callers who load a TTC directly (without going
+// through @font-face url()) can pick a non-default face by language
+// using font.ParseFontForLanguage("zh-CN", data) instead of
+// font.ParseFont(data); see the font package documentation.
 //
 // Usage:
 //
@@ -379,6 +388,15 @@ th { background: #e8e8e8; }
 }
 
 // findCJKFont searches common system paths for a font with CJK coverage.
+//
+// SC-specific (Simplified Chinese) fonts come first in the search
+// order on Linux and Windows. The example renders a Chinese paragraph,
+// and pan-CJK collections like NotoSansCJK-Regular.ttc default to the
+// JP face at index 0 — which still covers the full CJK repertoire but
+// produces glyphs with a slight Japanese design lean. Programmatic
+// callers who need explicit face selection from a TTC should use
+// font.ParseFontForLanguage rather than relying on the candidate
+// ordering here.
 func findCJKFont() string {
 	var paths []string
 
@@ -393,6 +411,13 @@ func findCJKFont() string {
 		}
 	case "linux":
 		paths = []string{
+			// SC-specific variants first; design glyphs match the example's
+			// Chinese text content. Fall back to the pan-CJK TTC (face 0
+			// is JP per the upstream ordering) when only the bundle is
+			// installed.
+			"/usr/share/fonts/opentype/noto/NotoSansSC-Regular.otf",
+			"/usr/share/fonts/noto-cjk/NotoSansSC-Regular.otf",
+			"/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
 			"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
 			"/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
 			"/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
@@ -401,10 +426,13 @@ func findCJKFont() string {
 		}
 	case "windows":
 		paths = []string{
+			// SimSun and Microsoft YaHei carry SC glyphs natively; prefer
+			// them over MS Gothic (Japanese) and Malgun Gothic (Korean).
+			`C:\Windows\Fonts\simsun.ttc`,
 			`C:\Windows\Fonts\msyh.ttc`,
+			`C:\Windows\Fonts\msyhbd.ttc`,
 			`C:\Windows\Fonts\msgothic.ttc`,
 			`C:\Windows\Fonts\malgun.ttf`,
-			`C:\Windows\Fonts\simsun.ttc`,
 		}
 	}
 

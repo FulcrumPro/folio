@@ -14,10 +14,51 @@ import (
 // collections, the first face is selected — matching the convention used
 // by browsers and font tools for url() references without a `#` fragment.
 //
+// Programmatic callers who need a non-default face from a TTC (for
+// example, the SC variant of NotoSansCJK rather than the JP variant
+// at face 0) should use [ParseFontForLanguage] instead.
+//
 // Errors returned by this function wrap one of the sentinel errors
 // [ErrUnknownFormat], [ErrTruncated], or [ErrCorruptTable] so callers
 // can match failure modes with errors.Is.
 func ParseFont(data []byte) (Face, error) {
+	return ParseFontForLanguage(data, "")
+}
+
+// ParseFontForLanguage parses a font from raw bytes like [ParseFont]
+// but, for TrueType Collections, picks the face whose name-table
+// FontFamily best matches the given BCP-47 language tag. Empty lang
+// (or any non-TTC input) behaves identically to ParseFont — face 0
+// for collections, the single face for standalone TTF/OTF/WOFF.
+//
+// Pan-CJK font collections (NotoSansCJK, Source Han Sans, Hiragino,
+// PingFang, msgothic.ttc, Apple's STHeiti family) ship with separate
+// faces for Japanese, Korean, Simplified Chinese, and Traditional
+// Chinese variants. Their FontFamily names embed regional tokens
+// like "JP", "SC", "TC", "Hans", "Hant", "Japanese", "Korean". This
+// function matches those tokens against the requested language; a
+// match returns the corresponding face, no match falls back to face
+// 0 (so existing behavior is unchanged when the hint is absent or
+// doesn't apply).
+//
+// Recognised language hints:
+//
+//   - "zh-CN", "zh-Hans", "zh-SG" — Simplified Chinese (SC / Hans)
+//   - "zh-TW", "zh-Hant", "zh-HK", "zh-MO" — Traditional Chinese (TC / Hant)
+//   - "zh" alone — Simplified, matching the IETF/CLDR default-script
+//   - "ja" — Japanese (JP / Japanese / Jpan)
+//   - "ko" — Korean (KR / Korean / Kore)
+//
+// Other languages and Latin TTCs (Helvetica.ttc, Courier.ttc) silently
+// fall back to face 0 because their face names encode weight/style
+// tokens rather than regional ones; callers that need a specific
+// weight should use the existing weight/style API on [sfntFace], not
+// language matching.
+//
+// Errors returned by this function wrap one of the sentinel errors
+// [ErrUnknownFormat], [ErrTruncated], or [ErrCorruptTable] so callers
+// can match failure modes with errors.Is.
+func ParseFontForLanguage(data []byte, lang string) (Face, error) {
 	if len(data) < 4 {
 		return nil, fmt.Errorf("font data too short to determine format: %w", ErrTruncated)
 	}
@@ -30,7 +71,8 @@ func ParseFont(data []byte) (Face, error) {
 		}
 		return ParseTTF(ttfData)
 	case ttcMagic:
-		ttfData, err := extractTTCFont(data, 0)
+		idx := max(pickFaceForLanguage(data, lang), 0)
+		ttfData, err := extractTTCFont(data, idx)
 		if err != nil {
 			return nil, fmt.Errorf("decode TTC: %w", err)
 		}

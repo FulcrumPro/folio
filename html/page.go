@@ -53,7 +53,7 @@ func parsePageConfig(rules []pageRule, defaultFontSize float64) *PageConfig {
 
 			switch prop {
 			case "size":
-				parsePageSize(val, pc)
+				parsePageSize(val, pc, defaultFontSize)
 				hasAny = true
 			case "margin":
 				t, r, b, l := parseMarginShorthand(val, defaultFontSize)
@@ -219,10 +219,16 @@ func parseContentValue(val string) string {
 }
 
 // parsePageSize parses the CSS @page size property.
-// Supports: "a4", "letter", "a4 landscape", "8.5in 11in", "210mm 297mm"
-func parsePageSize(val string, pc *PageConfig) {
+// Supports: "a4", "letter", "a4 landscape", "8.5in 11in", "210mm 297mm",
+// and functional values like "calc(8in + 0.5in) 11in".
+//
+// fontSize is used to resolve em/rem inside calc() and is passed through
+// to parseLengthPt (which routes through the main parseLength).
+func parsePageSize(val string, pc *PageConfig, fontSize float64) {
 	val = strings.ToLower(strings.TrimSpace(val))
-	parts := strings.Fields(val)
+	// splitTopLevelFields keeps calc()/min()/max()/clamp() values as a
+	// single token even when they contain internal whitespace.
+	parts := splitTopLevelFields(val)
 
 	if len(parts) == 0 {
 		return
@@ -250,11 +256,15 @@ func parsePageSize(val string, pc *PageConfig) {
 		return // no dimensions, just orientation
 	}
 
-	// Explicit dimensions: "8.5in 11in" or "210mm 297mm"
+	// Explicit dimensions: "8.5in 11in" or "210mm 297mm" or
+	// "calc(8in + 0.5in) 11in". parseLengthPt routes through the
+	// calc-aware parseLength in properties.go (NOT the page-local
+	// parseSingleLength/parseCSSLengthWithUnit, which only strip unit
+	// suffixes and don't understand functional values).
 	// Special case: height of "0" means auto-height (size page to content).
 	if len(parts) >= 2 {
-		w := parseCSSLength(parts[0])
-		h := parseCSSLength(parts[1])
+		w := parseLengthPt(parts[0], fontSize)
+		h := parseLengthPt(parts[1], fontSize)
 		explicitZeroH := parts[1] == "0"
 		if w > 0 && (h > 0 || explicitZeroH) {
 			pc.Width = w
@@ -268,7 +278,7 @@ func parsePageSize(val string, pc *PageConfig) {
 		}
 	} else if len(parts) == 1 {
 		// Single dimension → square page
-		s := parseCSSLength(parts[0])
+		s := parseLengthPt(parts[0], fontSize)
 		if s > 0 {
 			pc.Width = s
 			pc.Height = s
@@ -283,30 +293,6 @@ func parseSingleLength(val string, fontSize float64) float64 {
 		return 0
 	}
 	return l.toPoints(0, fontSize)
-}
-
-// parseCSSLength parses a CSS length string (e.g. "8.5in", "210mm") to points.
-func parseCSSLength(val string) float64 {
-	val = strings.TrimSpace(strings.ToLower(val))
-
-	if strings.HasSuffix(val, "in") {
-		return parseFloat(strings.TrimSuffix(val, "in")) * 72
-	}
-	if strings.HasSuffix(val, "mm") {
-		return parseFloat(strings.TrimSuffix(val, "mm")) * 72 / 25.4
-	}
-	if strings.HasSuffix(val, "cm") {
-		return parseFloat(strings.TrimSuffix(val, "cm")) * 72 / 2.54
-	}
-	if strings.HasSuffix(val, "pt") {
-		return parseFloat(strings.TrimSuffix(val, "pt"))
-	}
-	if strings.HasSuffix(val, "px") {
-		return parseFloat(strings.TrimSuffix(val, "px")) * 0.75
-	}
-
-	// Bare number → assume px
-	return parseFloat(val) * 0.75
 }
 
 // parseCSSLengthWithUnit parses a CSS length into a cssLength struct.

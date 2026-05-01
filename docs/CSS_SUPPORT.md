@@ -1,6 +1,6 @@
 # Folio CSS support
 
-> Auto-generated from `html/css_props.go` and `html/css.go`. Do not edit by hand.
+> Auto-generated from `html/css_props.go`, `html/css.go`, and the function parsers in `html/`. Do not edit by hand.
 > Run `go generate ./html/...` to regenerate after changing the registry.
 
 Folio's HTML-to-PDF converter recognizes the CSS properties listed below.
@@ -313,6 +313,94 @@ these produce a warning — the rule and its body are dropped during parsing.
 | `@counter-style` | Custom list counter styles are not parsed; only the keywords listed under `list-style-type` are recognized. |
 | `@namespace`, `@charset` | Not interpreted. |
 | `@layer`, `@scope`, `@container`, `@property` | Newer CSS spec features; not interpreted. |
+
+## Functions
+
+CSS functional values recognized by Folio's parsers, grouped by category.
+Functions not listed here pass through as opaque text and almost always
+cause the containing declaration to be discarded.
+
+### Math
+
+Accepted everywhere a `<length>` or `<percentage>` is expected.
+Folio's parser preserves these as single tokens through shorthand splitting,
+so they survive inside `margin`, `padding`, `flex`, `transform()`, etc.
+
+| Function | Notes |
+|---|---|
+| `calc()` | Supports `+`, `-`, `*`, `/` with operator precedence and nested parentheses. Mixed units (e.g. `calc(100% - 20px)`) resolve at layout time. |
+| `min()` | Comma-separated argument list. Returns the smallest resolved value. |
+| `max()` | Comma-separated argument list. Returns the largest resolved value. |
+| `clamp()` | `clamp(<min>, <preferred>, <max>)`. |
+
+Known limitations: `calc()` does not yet expand inside `rotate()`, `scale()`, `skew()`, `background-position`, or `linear-gradient()` color stops — see issues #265, #266, #274, #275.
+
+### Color
+
+Accepted everywhere a `<color>` is expected. Output is sRGB regardless of input form.
+
+| Function | Notes |
+|---|---|
+| `rgb()` | `rgb(R, G, B)` or `rgb(R G B)`. Components are 0-255 integers or 0-100% percentages. |
+| `rgba()` | `rgba(R, G, B, A)`. Alpha is 0-1 or 0-100%. |
+| `hsl()` | `hsl(H, S%, L%)`. Hue in degrees. |
+| `hsla()` | `hsla(H, S%, L%, A)`. |
+| `cmyk()` / `device-cmyk()` | `cmyk(C, M, Y, K)` with components as 0-1 or 0-100%. Folio converts to sRGB for raster compositing; the original CMYK is preserved in the PDF color space for print pipelines. |
+
+Known unsupported color functions: `oklch()`, `oklab()`, `lch()`, `lab()`, `color-mix()`, `color()` — see [Known unsupported features](#known-unsupported-features) for workarounds.
+
+### Gradients
+
+Accepted as `background-image` values.
+
+| Function | Notes |
+|---|---|
+| `linear-gradient()` | Direction (`to right`, `45deg`, etc.) plus 2+ `<color>` stops. |
+| `repeating-linear-gradient()` | Same syntax; tiles the gradient pattern. |
+| `radial-gradient()` | Shape (`circle`, `ellipse`), size, and `<color>` stops. |
+| `repeating-radial-gradient()` | Same syntax; tiles the gradient pattern. |
+
+`conic-gradient()` is not supported.
+
+### Content and counters
+
+Used in `string-set`, `bookmark-label`, `content`, and `@page` margin boxes.
+
+| Function | Notes |
+|---|---|
+| `var()` | CSS custom property reference. Supports a fallback as the second argument: `var(--c, #000)`. Resolved BEFORE per-property dispatch, so functions and gradients receive resolved values. |
+| `attr()` | Reads an HTML attribute. Used in `bookmark-label`. |
+| `content()` | Substitutes the element's text content. Used in `string-set` and `bookmark-label`. |
+| `counter()` | `counter(<name>)` or `counter(<name>, <list-style>)`. Page counter `counter(page)` is supported in `@page` margin boxes. |
+| `counters()` | `counters(<name>, <separator>)` for nested counter chains. |
+| `string()` | Reads the latest value of a named string set via `string-set` (used in running headers). |
+
+Known unsupported: `target-counter()` for cross-references — tracked as #222.
+
+### Transform
+
+Used in `transform`. Multiple functions compose in the listed order.
+
+| Function | Notes |
+|---|---|
+| `translate()` | `translate(<tx>)` or `translate(<tx>, <ty>)`. Lengths in any supported unit; bare numbers treated as px. |
+| `translateX()` | Single `<length>` argument. |
+| `translateY()` | Single `<length>` argument. |
+| `rotate()` | Single `<angle>`: `deg`, `rad`, `grad`, `turn`, or bare number (degrees). |
+| `scale()` | `scale(<s>)` (uniform) or `scale(<sx>, <sy>)`. |
+| `scaleX()` | Single `<number>` argument. |
+| `scaleY()` | Single `<number>` argument. |
+| `skew()` | `skew(<ax>)` or `skew(<ax>, <ay>)`. |
+| `skewX()` | Single `<angle>` argument. |
+| `skewY()` | Single `<angle>` argument. |
+
+Known unsupported: `matrix()`, `matrix3d()`, `translate3d()`, `rotate3d()`, `scale3d()`, `perspective()` — Folio renders 2D only.
+
+### Other
+
+| Function | Notes |
+|---|---|
+| `url()` | Used in `background-image`, `@font-face` `src`, and asset references. Resolves through Folio's asset loader (BaseFS or HTTP via Client, subject to `Options.URLPolicy`). |
 
 ## Known unsupported features
 

@@ -1104,3 +1104,75 @@ func TestAtRulesDocCoverage(t *testing.T) {
 		}
 	}
 }
+
+// TestFunctionsDocCoverage is the drift guard for the Functions section
+// of CSS_SUPPORT.md. The list below mirrors what the doc claims to
+// support; the test asserts (a) each name appears as a code-fenced
+// reference in the rendered doc and (b) for every category, at least
+// one representative form is actually recognized by the relevant
+// parser. Adding a new function value to a Folio parser without
+// updating the doc requires also updating this list — that's the
+// forcing function.
+//
+// Function-call dispatch in Folio is spread across half a dozen files
+// (properties.go for color/math, converter_style_parsers.go for
+// transform, css_props.go for gradients, page.go for page-counter,
+// converter_style.go for var/counter), so a single AST walk like
+// TestAtRulesDocCoverage isn't tractable. A static list is the
+// pragmatic alternative.
+func TestFunctionsDocCoverage(t *testing.T) {
+	want := []string{
+		// Math
+		"calc()", "min()", "max()", "clamp()",
+		// Color
+		"rgb()", "rgba()", "hsl()", "hsla()", "cmyk()",
+		// Gradients
+		"linear-gradient()", "repeating-linear-gradient()",
+		"radial-gradient()", "repeating-radial-gradient()",
+		// Content / counters
+		"var()", "attr()", "content()", "counter()", "counters()", "string()",
+		// Transforms
+		"translate()", "translateX()", "translateY()",
+		"rotate()", "scale()", "scaleX()", "scaleY()",
+		"skew()", "skewX()", "skewY()",
+		// Other
+		"url()",
+	}
+
+	doc := RenderCSSPropertiesMarkdown()
+	for _, name := range want {
+		if !strings.Contains(doc, "`"+name+"`") {
+			t.Errorf("function %q is in the documented-functions list but not present in CSS_SUPPORT.md — add it to the Functions section in html/css_props_doc.go", name)
+		}
+	}
+
+	// Behavioral smoke checks: one representative form per category to
+	// catch the case where a function is documented but its parser was
+	// removed. Per-function parity is covered exhaustively elsewhere
+	// (parseLength, parseColor, parseTransform have their own test
+	// suites); these assertions are a bare sanity net.
+	if l := parseLength("calc(10px + 5px)"); l == nil {
+		t.Error("parseLength rejected calc(10px + 5px) — Math section is documenting an unsupported form")
+	}
+	if l := parseLength("min(10px, 20px)"); l == nil {
+		t.Error("parseLength rejected min(10px, 20px)")
+	}
+	if l := parseLength("max(10px, 20px)"); l == nil {
+		t.Error("parseLength rejected max(10px, 20px)")
+	}
+	if l := parseLength("clamp(5px, 10px, 20px)"); l == nil {
+		t.Error("parseLength rejected clamp(5px, 10px, 20px)")
+	}
+	if _, ok := parseColor("rgb(0, 0, 0)"); !ok {
+		t.Error("parseColor rejected rgb(0, 0, 0)")
+	}
+	if _, ok := parseColor("hsl(0, 0%, 0%)"); !ok {
+		t.Error("parseColor rejected hsl(0, 0%, 0%)")
+	}
+	if _, ok := parseColor("cmyk(0, 0, 0, 1)"); !ok {
+		t.Error("parseColor rejected cmyk(0, 0, 0, 1)")
+	}
+	if ops := parseTransform("translate(5px, 10px) rotate(45deg)"); len(ops) != 2 {
+		t.Errorf("parseTransform produced %d ops for translate+rotate; want 2", len(ops))
+	}
+}

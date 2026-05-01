@@ -29,16 +29,46 @@ func parseTransform(val string) []layout.TransformOp {
 			break
 		}
 		fname := strings.TrimSpace(val[:parenIdx])
-		closeIdx := strings.Index(val[parenIdx:], ")")
-		if closeIdx < 0 {
+		// Find the matching close paren respecting nesting. A naive
+		// strings.Index(val[parenIdx:], ")") returns the FIRST close
+		// paren, which truncates mid-expression for inputs like
+		// `translate(calc(50% - 10px), 0)` — the calc's inner `)` would
+		// be mistaken for the outer function close.
+		closeAbs := -1
+		depth := 0
+		for i := parenIdx; i < len(val); i++ {
+			switch val[i] {
+			case '(':
+				depth++
+			case ')':
+				depth--
+				if depth == 0 {
+					closeAbs = i
+				}
+			}
+			if closeAbs >= 0 {
+				break
+			}
+		}
+		if closeAbs < 0 {
 			break
 		}
-		argsStr := val[parenIdx+1 : parenIdx+closeIdx]
-		val = strings.TrimSpace(val[parenIdx+closeIdx+1:])
+		argsStr := val[parenIdx+1 : closeAbs]
+		val = strings.TrimSpace(val[closeAbs+1:])
 
-		// Parse arguments (comma or space separated).
-		argsStr = strings.ReplaceAll(argsStr, ",", " ")
-		parts := strings.Fields(argsStr)
+		// Parse arguments. CSS Transforms L1 grammar is comma-separated;
+		// browsers also accept legacy space-separated forms. Split on
+		// top-level commas first; if that yields a single token, fall
+		// back to top-level whitespace splitting for the legacy form.
+		// Both helpers respect paren depth, so nested calls like
+		// `min(10px, 20px)` survive intact.
+		parts := splitTopLevelCommas(argsStr)
+		if len(parts) <= 1 {
+			parts = splitTopLevelFields(argsStr)
+		}
+		for i := range parts {
+			parts[i] = strings.TrimSpace(parts[i])
+		}
 
 		switch fname {
 		case "rotate":

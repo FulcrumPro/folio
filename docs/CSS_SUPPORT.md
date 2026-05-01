@@ -48,11 +48,13 @@ Angle-bracket placeholders used in the per-property tables below.
 
 | Placeholder | Meaning |
 |---|---|
-| `<length>` | A CSS length: `<number><unit>` where unit is `px`, `pt`, `em`, `rem`, `cm`, `mm`, `in`, or `%`. Examples: `12px`, `1.5em`, `0.5in`. |
+| `<length>` | A CSS length: `<number><unit>` where unit is `px`, `pt`, `em`, `rem`, `cm`, `mm`, or `in`. Examples: `12px`, `1.5em`, `0.5in`. Distinct from `<percentage>`, which is listed separately as an alternative in per-property tables. |
 | `<percentage>` | A `<number>%`. Resolves against the containing context (line-height, parent dimension, etc.). |
 | `<number>` | A unitless real number, e.g. `1.5`, `0.7`, `-2`. |
 | `<integer>` | A whole number, e.g. `0`, `5`, `-1`. Range constraints (e.g. `<integer 1..6>`) are listed in the per-property table. |
-| `<color>` | Any of: named (`red`, `transparent`), hex (`#abc`, `#aabbcc`), `rgb()`, `rgba()`, `hsl()`, `hsla()`, `cmyk()`. Folio renders sRGB only — `oklch()` and `color-mix()` are not supported. |
+| `<string>` | A quoted text literal, e.g. `"My Title"` or `'caption'`. |
+| `<color>` | Any of: `<named>` (`red`, `transparent`), `<hex>` (`#abc`, `#aabbcc`), `rgb()`, `rgba()`, `hsl()`, `hsla()`, `cmyk()`. Folio renders sRGB only — `oklch()` and `color-mix()` are not supported. |
+| `<named>`, `<hex>` | Component forms of `<color>`: `<named>` is a CSS named color (`red`, `aliceblue`, etc.); `<hex>` is `#RGB`, `#RGBA`, `#RRGGBB`, or `#RRGGBBAA`. |
 | `<line-width>` | A `<length>` or one of the keywords `thin`, `medium`, `thick`. Used in border/outline shorthands. |
 | `<line-style>` | One of `solid`, `dashed`, `dotted`, `double`, `none`. |
 | `<position>` | A 1- or 2-component position keyword/length. Examples: `center`, `top right`, `50% 25%`, `10px 20px`. Applies to `background-position`, `object-position`, `transform-origin`. |
@@ -61,6 +63,8 @@ Angle-bracket placeholders used in the per-property tables below.
 | `<track-size>` | A single grid track size: `<length>`, `<percentage>`, `<number>fr`, `auto`, `min-content`, `max-content`. |
 | `<ratio>` | An aspect ratio expressed as `<number>/<number>` or a single `<number>`. Example: `16/9`. |
 | `<gradient>` | `linear-gradient(...)`, `repeating-linear-gradient(...)`, `radial-gradient(...)`, or `repeating-radial-gradient(...)`. |
+| `<transform-function>` | A CSS transform: `translate()`, `translateX()`/`Y()`, `rotate()`, `scale()`/`X()`/`Y()`, `skew()`/`X()`/`Y()`. |
+| `<offset-x>`, `<offset-y>`, `<blur>`, `<spread>` | Component lengths in shadow shorthands (`box-shadow`, `text-shadow`). All are `<length>`; spread accepts negatives to inset the shadow. |
 | `<identifier>` | A custom name, e.g. for `counter-reset` or `string-set`. |
 
 **`calc()`, `min()`, `max()`, `clamp()`** are accepted everywhere a `<length>` or `<percentage>` is. The parser preserves them as single tokens through shorthand splitting.
@@ -294,7 +298,7 @@ would have applied in a browser.
 |---|---|---|
 | `oklch()`, `oklab()`, `lch()`, `lab()` color | Folio renders sRGB only; no ICC profile support. | Precompute the sRGB equivalent and use `#hex` or `rgb()`. |
 | `color-mix()` | Folio's parser doesn't expand the function. | Precompute the mixed color, or assign it to a CSS variable: `--btn-tint: #c44;`. |
-| `-webkit-line-clamp` / `line-clamp` | PDFs are paginated, not scrollable; "hide overflow below N lines" has no meaning. | Truncate at the template / runtime layer before HTML emission. For "first N lines + linked appendix", use `layout.Paragraph.SplitAfterLine`. |
+| `-webkit-line-clamp` / `line-clamp` | PDFs are paginated, not scrollable; the property has no analogue. | Truncate before HTML emission, or use `layout.Paragraph.SplitAfterLine` for first-N-lines-plus-appendix flows. |
 | `text-wrap: pretty` / `text-wrap: balance` | Browser-only line-break heuristic; cosmetic. | Render without it. |
 | `filter`, `backdrop-filter`, `mix-blend-mode` | PDF lacks an analogue for screen-compositing. | Pre-bake effects into images. |
 | `:hover`, `:focus`, `:active` | PDF has no interaction state. | Style the static state directly. |

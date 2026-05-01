@@ -299,6 +299,12 @@ func TestCSSPropertyMetadataComplete(t *testing.T) {
 		if len(p.Values) == 0 {
 			t.Errorf("%q: Values is empty (every property needs at least one accepted value form for the generated doc)", p.Name)
 		}
+		// Notes are rendered into a markdown table cell. An unescaped
+		// `|` would break the table; escape with `\|` if a pipe is
+		// truly needed in the prose (none of the current entries do).
+		if strings.ContainsRune(p.Notes, '|') {
+			t.Errorf("%q: Notes contains an unescaped `|` which would break the markdown table; use `\\|`", p.Name)
+		}
 	}
 }
 

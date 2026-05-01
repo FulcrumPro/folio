@@ -496,6 +496,229 @@ func TestParseBoxShadowInset(t *testing.T) {
 	}
 }
 
+// TestParseBoxShadowWithCalc is a regression test for the same
+// strings.Fields tokenization bug fixed for `flex:` (#236),
+// `margin:`/`padding:` (#237), `font:` (#240), `border:` (#242),
+// `background-size:` (#244), `@page size` (#247), `gap:` (#249),
+// and `border-radius:` (#252) — applied here to `box-shadow`. Pre-fix
+// `box-shadow: calc(2px + 2px) 4px black` became 5 tokens
+// ["calc(2px", "+", "2px)", "4px", "black"]; the calc fragments all
+// failed parseLength and were accumulated into the colorToken,
+// leaving only one length (4px) — len(lengths) < 2 → both offsets
+// stayed 0 → the shadow was effectively invisible.
+//
+// rgb()/rgba()/hsl() with internal whitespace happened to work
+// pre-fix by coincidence: the comma-separated fragments all failed
+// parseLength and were re-joined with " " into colorToken, which
+// parseColor then accepted. Post-fix it works directly via a single
+// token — same observable behavior, cleaner code path.
+// TestParseBoxShadowsWithCalcMultiple exercises the parseBoxShadows
+// (plural) wrapper with calc inside one of the comma-separated entries.
+// splitTopLevelCommas already keeps commas inside parens intact (so
+// rgba(255, 0, 0, 0.5) survives), and parseBoxShadow now keeps calc
+// lengths intact too — they should compose without interference.
+func TestParseBoxShadowsWithCalcMultiple(t *testing.T) {
+	shadows := parseBoxShadows("calc(2px + 2px) 4px red, 0 0 4px rgba(0, 0, 255, 0.5)", 12)
+	if len(shadows) != 2 {
+		t.Fatalf("expected 2 shadows, got %d", len(shadows))
+	}
+	// First: calc offset → 3pt; 4px → 3pt; red.
+	if math.Abs(shadows[0].OffsetX-3) > 0.01 || math.Abs(shadows[0].OffsetY-3) > 0.01 {
+		t.Errorf("shadows[0] offsets = (%.4f, %.4f), want (3, 3)",
+			shadows[0].OffsetX, shadows[0].OffsetY)
+	}
+	if math.Abs(shadows[0].Color.R-1) > 0.01 {
+		t.Errorf("shadows[0].Color.R = %.4f, want 1", shadows[0].Color.R)
+	}
+	// Second: 0/0/4px=3pt blur, blue.
+	if math.Abs(shadows[1].Blur-3) > 0.01 {
+		t.Errorf("shadows[1].Blur = %.4f, want 3", shadows[1].Blur)
+	}
+	if math.Abs(shadows[1].Color.B-1) > 0.01 {
+		t.Errorf("shadows[1].Color.B = %.4f, want 1 (blue)", shadows[1].Color.B)
+	}
+}
+
+func TestParseBoxShadowWithCalc(t *testing.T) {
+	tests := []struct {
+		name                string
+		val                 string
+		wantX               float64 // in pt
+		wantY               float64
+		wantBlur            float64
+		wantSpread          float64
+		wantR, wantG, wantB float64
+		wantInset           bool
+	}{
+		{
+			name: "canonical regression: calc(2px + 2px) 4px black",
+			// The exact pre-fix regression case. Pre-fix the calc was
+			// shredded into ["calc(2px","+","2px)"], all three failed
+			// parseLength and were accumulated into colorToken — leaving
+			// only one length (4px), so OffsetX/Y stayed 0 and the
+			// shadow was effectively invisible.
+			val:   "calc(2px + 2px) 4px black",
+			wantX: 3, wantY: 3,
+		},
+		{
+			name: "calc offsetX, plain offsetY, plain color",
+			val:  "calc(2px + 2px) 6px black",
+			// 4px = 3pt; 6px = 4.5pt.
+			wantX: 3, wantY: 4.5,
+		},
+		{
+			name: "hex color with calc lengths",
+			val:  "calc(2px + 2px) 4px #ff0000",
+			// Hex color is single-token; covers the parseColor branch
+			// alongside named/rgb/rgba/hsl.
+			wantX: 3, wantY: 3,
+			wantR: 1, wantG: 0, wantB: 0,
+		},
+		{
+			name: "inset + calc + rgba",
+			// Exercises all three accumulators (inset, calc length, rgba
+			// color) in one shot.
+			val:   "inset calc(2px + 2px) 4px rgba(255, 0, 0, 0.5)",
+			wantX: 3, wantY: 3,
+			wantR: 1, wantG: 0, wantB: 0,
+			wantInset: true,
+		},
+		{
+			name: "plain offsets, calc blur",
+			val:  "2px 4px calc(8px + 4px) red",
+			// X=1.5pt, Y=3pt, blur=12px=9pt; red.
+			wantX: 1.5, wantY: 3, wantBlur: 9,
+			wantR: 1, wantG: 0, wantB: 0,
+		},
+		{
+			name: "calc on all four length slots",
+			val:  "calc(2px + 0px) calc(4px + 0px) calc(8px + 0px) calc(2px + 0px) red",
+			// X=2px=1.5pt; Y=4px=3pt; blur=8px=6pt; spread=2px=1.5pt.
+			wantX: 1.5, wantY: 3, wantBlur: 6, wantSpread: 1.5,
+			wantR: 1, wantG: 0, wantB: 0,
+		},
+		{
+			name: "min() and max() in length slots",
+			val:  "min(2px, 4px) max(4px, 8px) red",
+			// X=min(2px,4px)=1.5pt; Y=max(4px,8px)=6pt.
+			wantX: 1.5, wantY: 6,
+			wantR: 1, wantG: 0, wantB: 0,
+		},
+		{
+			name: "clamp() in length slot",
+			val:  "clamp(1px, 4px, 8px) 4px red",
+			// X=clamp middle=4px=3pt.
+			wantX: 3, wantY: 3,
+			wantR: 1, wantG: 0, wantB: 0,
+		},
+		{
+			name: "calc with subtraction",
+			val:  "calc(8px - 4px) 4px red",
+			// X=4px=3pt.
+			wantX: 3, wantY: 3,
+			wantR: 1, wantG: 0, wantB: 0,
+		},
+		{
+			name: "calc with multiplication",
+			val:  "calc(2px * 2) 4px red",
+			// X=4px=3pt.
+			wantX: 3, wantY: 3,
+			wantR: 1, wantG: 0, wantB: 0,
+		},
+		{
+			name: "calc with division",
+			val:  "calc(8px / 2) 4px red",
+			// X=4px=3pt.
+			wantX: 3, wantY: 3,
+			wantR: 1, wantG: 0, wantB: 0,
+		},
+		{
+			name:  "calc + rgb color (both compound)",
+			val:   "calc(2px + 2px) 4px rgb(255, 0, 0)",
+			wantX: 3, wantY: 3,
+			wantR: 1, wantG: 0, wantB: 0,
+		},
+		{
+			name: "calc + rgba color (both compound)",
+			val:  "calc(2px + 2px) 4px rgba(255, 0, 0, 0.5)",
+			// Color alpha is not tracked on layout.Color; assert RGB only.
+			wantX: 3, wantY: 3,
+			wantR: 1, wantG: 0, wantB: 0,
+		},
+		{
+			name: "calc + hsl color (both compound)",
+			val:  "calc(2px + 2px) 4px hsl(0, 100%, 50%)",
+			// hsl(0, 100%, 50%) is pure red.
+			wantX: 3, wantY: 3,
+			wantR: 1, wantG: 0, wantB: 0,
+		},
+		{
+			name:  "inset + calc",
+			val:   "inset calc(2px + 2px) 4px red",
+			wantX: 3, wantY: 3,
+			wantR: 1, wantG: 0, wantB: 0,
+			wantInset: true,
+		},
+		{
+			name:  "tab and newline separators",
+			val:   "calc(2px + 2px)\t4px\nred",
+			wantX: 3, wantY: 3,
+			wantR: 1, wantG: 0, wantB: 0,
+		},
+		{
+			name: "fewer than 2 lengths: shadow constructed with zeros",
+			// Parser only checks parts >= 2, NOT lengths >= 2. With one
+			// length + one color, bs is non-nil but OffsetX/OffsetY stay
+			// at zero defaults. Documents the existing contract.
+			val:   "calc(2px + 2px) red",
+			wantX: 0, wantY: 0,
+			wantR: 1, wantG: 0, wantB: 0,
+		},
+		{
+			name: "unbalanced calc paren: nil shadow",
+			// splitTopLevelFields keeps the unbalanced calc + trailing
+			// chars as one giant token. parts == 1 → early return nil.
+			val:   "calc(2px + 2px 4px red",
+			wantR: -1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bs := parseBoxShadow(tt.val, 12)
+			if tt.wantR == -1 {
+				if bs != nil {
+					t.Errorf("expected nil shadow, got %+v", bs)
+				}
+				return
+			}
+			if bs == nil {
+				t.Fatalf("got nil shadow")
+			}
+			if math.Abs(bs.OffsetX-tt.wantX) > 0.01 {
+				t.Errorf("OffsetX = %.4f, want %.4f", bs.OffsetX, tt.wantX)
+			}
+			if math.Abs(bs.OffsetY-tt.wantY) > 0.01 {
+				t.Errorf("OffsetY = %.4f, want %.4f", bs.OffsetY, tt.wantY)
+			}
+			if math.Abs(bs.Blur-tt.wantBlur) > 0.01 {
+				t.Errorf("Blur = %.4f, want %.4f", bs.Blur, tt.wantBlur)
+			}
+			if math.Abs(bs.Spread-tt.wantSpread) > 0.01 {
+				t.Errorf("Spread = %.4f, want %.4f", bs.Spread, tt.wantSpread)
+			}
+			if math.Abs(bs.Color.R-tt.wantR) > 0.01 ||
+				math.Abs(bs.Color.G-tt.wantG) > 0.01 ||
+				math.Abs(bs.Color.B-tt.wantB) > 0.01 {
+				t.Errorf("Color = %+v, want R=%.2f G=%.2f B=%.2f",
+					bs.Color, tt.wantR, tt.wantG, tt.wantB)
+			}
+			if bs.Inset != tt.wantInset {
+				t.Errorf("Inset = %v, want %v", bs.Inset, tt.wantInset)
+			}
+		})
+	}
+}
+
 func TestBoxShadowHTMLMultiple(t *testing.T) {
 	src := `<div style="box-shadow: 2px 2px 4px rgba(0,0,0,0.5), 0 0 10px red; padding: 10px;">
 		<p>Shadowed content</p>

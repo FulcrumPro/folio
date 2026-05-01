@@ -591,7 +591,9 @@ func (c *converter) applyProperty(prop, val string, style *computedStyle) {
 			style.Order = v
 		}
 	case "gap", "grid-gap":
-		parts := strings.Fields(strings.TrimSpace(val))
+		// splitTopLevelFields keeps calc()/min()/max()/clamp() values as
+		// a single token even when they contain internal whitespace.
+		parts := splitTopLevelFields(strings.TrimSpace(val))
 		if len(parts) == 1 {
 			v := parseBoxSide(parts[0], style.FontSize)
 			style.Gap = v

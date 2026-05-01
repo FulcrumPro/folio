@@ -1374,6 +1374,135 @@ func TestConvertFlexWithGap(t *testing.T) {
 	}
 }
 
+// TestGapShorthandWithCalc is a regression test for the same
+// strings.Fields tokenization bug fixed for `flex:` (#236),
+// `margin:`/`padding:` (#237), `font:` (#240), `border:` (#242),
+// `background-size:` (#244), and `@page size` (#247) — applied here
+// to the `gap`/`grid-gap` shorthand. Pre-fix `gap: calc(10px + 5px) 8px`
+// became 4 tokens ["calc(10px", "+", "5px)", "8px"]; parts[0] = "calc(10px"
+// failed parseBoxSide → row-gap stayed 0; parts[1] = "+" failed too →
+// column-gap stayed 0; both gaps silently lost.
+func TestGapShorthandWithCalc(t *testing.T) {
+	tests := []struct {
+		name              string
+		val               string
+		wantRowGap        float64 // in pt
+		wantGap           float64 // flex compat: equals row-gap
+		wantGridColumnGap float64
+	}{
+		{
+			name: "single calc value applies to both axes",
+			val:  "calc(10px + 5px)",
+			// 15px = 11.25pt.
+			wantRowGap: 11.25, wantGap: 11.25, wantGridColumnGap: 11.25,
+		},
+		{
+			name: "two values: calc row-gap, plain column-gap",
+			val:  "calc(10px + 5px) 8px",
+			// row = 11.25pt; col = 6pt.
+			wantRowGap: 11.25, wantGap: 11.25, wantGridColumnGap: 6,
+		},
+		{
+			name: "two values: plain row-gap, calc column-gap",
+			val:  "12px calc(2px * 4)",
+			// row = 9pt; col = 8px = 6pt.
+			wantRowGap: 9, wantGap: 9, wantGridColumnGap: 6,
+		},
+		{
+			name: "two calcs",
+			val:  "calc(10px + 5px) calc(20px / 2)",
+			// row = 11.25pt; col = 10px = 7.5pt.
+			wantRowGap: 11.25, wantGap: 11.25, wantGridColumnGap: 7.5,
+		},
+		{
+			name: "calc with subtraction",
+			val:  "calc(20px - 5px) 8px",
+			// row = 15px = 11.25pt; col = 6pt.
+			wantRowGap: 11.25, wantGap: 11.25, wantGridColumnGap: 6,
+		},
+		{
+			name: "min() row, max() column",
+			val:  "min(10px, 20px) max(8px, 16px)",
+			// row = 10px = 7.5pt; col = 16px = 12pt.
+			wantRowGap: 7.5, wantGap: 7.5, wantGridColumnGap: 12,
+		},
+		{
+			name: "clamp() single value",
+			val:  "clamp(8px, 16px, 24px)",
+			// 16px = 12pt, applied to both axes.
+			wantRowGap: 12, wantGap: 12, wantGridColumnGap: 12,
+		},
+		{
+			name:       "tab separator",
+			val:        "calc(10px + 5px)\t8px",
+			wantRowGap: 11.25, wantGap: 11.25, wantGridColumnGap: 6,
+		},
+		{
+			name:       "newline separator",
+			val:        "calc(10px + 5px)\n8px",
+			wantRowGap: 11.25, wantGap: 11.25, wantGridColumnGap: 6,
+		},
+		{
+			name: "4+ tokens: parser uses only first two",
+			val:  "10px 8px 5px 3px",
+			// row = 7.5pt; col = 6pt; tokens 3 and 4 ignored.
+			wantRowGap: 7.5, wantGap: 7.5, wantGridColumnGap: 6,
+		},
+		{
+			name: "unbalanced calc paren: gaps stay 0",
+			// splitTopLevelFields keeps the unbalanced calc + trailing
+			// characters as one token; parseBoxSide → parseLength fails
+			// → 0 for the single-value branch.
+			val:        "calc(10px + 5px",
+			wantRowGap: 0, wantGap: 0, wantGridColumnGap: 0,
+		},
+		{
+			name: "empty value: gaps stay 0",
+			// splitTopLevelFields returns no parts → neither branch
+			// runs → gaps stay at zero default.
+			val:        "",
+			wantRowGap: 0, wantGap: 0, wantGridColumnGap: 0,
+		},
+		{
+			name:       "whitespace-only value: gaps stay 0",
+			val:        "   \t\n   ",
+			wantRowGap: 0, wantGap: 0, wantGridColumnGap: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &converter{}
+			style := &computedStyle{FontSize: 12}
+			c.applyProperty("gap", tt.val, style)
+			if math.Abs(style.RowGap-tt.wantRowGap) > 0.01 {
+				t.Errorf("RowGap = %.4f, want %.4f", style.RowGap, tt.wantRowGap)
+			}
+			if math.Abs(style.Gap-tt.wantGap) > 0.01 {
+				t.Errorf("Gap = %.4f, want %.4f", style.Gap, tt.wantGap)
+			}
+			if math.Abs(style.GridColumnGap-tt.wantGridColumnGap) > 0.01 {
+				t.Errorf("GridColumnGap = %.4f, want %.4f",
+					style.GridColumnGap, tt.wantGridColumnGap)
+			}
+		})
+	}
+}
+
+// TestGridGapAliasMatchesGap pins that `grid-gap` (legacy alias for `gap`)
+// routes through the same code path. Pre-fix this would silently drop
+// calc values the same way `gap` did.
+func TestGridGapAliasMatchesGap(t *testing.T) {
+	c := &converter{}
+	style := &computedStyle{FontSize: 12}
+	c.applyProperty("grid-gap", "calc(10px + 5px) 8px", style)
+	if math.Abs(style.RowGap-11.25) > 0.01 {
+		t.Errorf("RowGap = %.4f, want 11.25", style.RowGap)
+	}
+	if math.Abs(style.GridColumnGap-6) > 0.01 {
+		t.Errorf("GridColumnGap = %.4f, want 6", style.GridColumnGap)
+	}
+}
+
 func TestConvertFlexJustifyCenter(t *testing.T) {
 	html := `<div style="display: flex; justify-content: center">
 		<p>Centered</p>

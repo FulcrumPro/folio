@@ -1175,6 +1175,141 @@ func TestParseMarginShorthandWithCalc(t *testing.T) {
 	}
 }
 
+// TestMarginAutoFlagsWithCalc is a regression test for the auxiliary
+// auto-flag scan in `applyProperty("margin", ...)`. parseMarginShorthand
+// itself was migrated to splitTopLevelFields in #237, but this scan still
+// used strings.Fields — so a calc()/min()/max()/clamp() value with
+// internal whitespace would inflate len(parts), shifting the auto-flag
+// positions relative to the parsed margin values.
+//
+// Example pre-fix: `margin: calc(10px + 20px) auto`. parseMarginShorthand
+// (post-#237) correctly tokenizes 2 parts → top/bottom=22.5pt, left/right=
+// auto. But the auxiliary scan strings.Fields → 5 tokens
+// ["calc(10px","+","20px)","auto"] (the trailing 4th value), yielding
+// autoFlags = [false,false,false,true,false]; with len(parts)==4 it
+// hit case 4 (4-side margin) and only flagged left=auto, missing right.
+//
+// Post-fix the auxiliary scan uses the same paren-aware tokenizer as
+// parseMarginShorthand, so auto-flag positions stay aligned.
+func TestMarginAutoFlagsWithCalc(t *testing.T) {
+	tests := []struct {
+		name          string
+		val           string
+		wantTopAuto   bool
+		wantLeftAuto  bool
+		wantRightAuto bool
+	}{
+		{
+			name: "calc top/bottom + auto left/right (centering)",
+			// CSS classic: `margin: <length> auto` centers horizontally.
+			val:           "calc(10px + 20px) auto",
+			wantTopAuto:   false,
+			wantLeftAuto:  true,
+			wantRightAuto: true,
+		},
+		{
+			name:          "auto top + calc right/left",
+			val:           "auto calc(10px + 20px)",
+			wantTopAuto:   true,
+			wantLeftAuto:  false,
+			wantRightAuto: false,
+		},
+		{
+			name: "3-side: auto top + calc lr + plain bottom",
+			// CSS 3-value margin grammar: top, left+right, bottom.
+			// position 1 (calc) covers BOTH left and right, so only
+			// MarginTopAuto is set here.
+			val:           "auto calc(10px + 5px) 8px",
+			wantTopAuto:   true,
+			wantLeftAuto:  false,
+			wantRightAuto: false,
+		},
+		{
+			name: "3-side: plain top + auto lr + calc bottom",
+			// Position 1 = auto → both Left and Right auto.
+			val:           "8px auto calc(10px + 5px)",
+			wantTopAuto:   false,
+			wantLeftAuto:  true,
+			wantRightAuto: true,
+		},
+		{
+			name:          "calc top + auto right + calc bottom + auto left (4-side)",
+			val:           "calc(10px + 0px) auto calc(20px - 4px) auto",
+			wantTopAuto:   false,
+			wantLeftAuto:  true,
+			wantRightAuto: true,
+		},
+		{
+			name:          "single auto applies to all sides",
+			val:           "auto",
+			wantTopAuto:   true,
+			wantLeftAuto:  true,
+			wantRightAuto: true,
+		},
+		{
+			name:          "single calc value: no auto flags",
+			val:           "calc(10px + 20px)",
+			wantTopAuto:   false,
+			wantLeftAuto:  false,
+			wantRightAuto: false,
+		},
+		{
+			name:          "min() top + auto lr (centering with min)",
+			val:           "min(10px, 20px) auto",
+			wantTopAuto:   false,
+			wantLeftAuto:  true,
+			wantRightAuto: true,
+		},
+		{
+			name:          "max() top + auto lr",
+			val:           "max(10px, 20px) auto",
+			wantTopAuto:   false,
+			wantLeftAuto:  true,
+			wantRightAuto: true,
+		},
+		{
+			name:          "clamp() top + auto lr",
+			val:           "clamp(10px, 16px, 24px) auto",
+			wantTopAuto:   false,
+			wantLeftAuto:  true,
+			wantRightAuto: true,
+		},
+		{
+			name:          "tab separator preserves auto positions",
+			val:           "calc(10px + 20px)\tauto",
+			wantTopAuto:   false,
+			wantLeftAuto:  true,
+			wantRightAuto: true,
+		},
+		{
+			name:          "newline separator preserves auto positions",
+			val:           "calc(10px + 20px)\nauto",
+			wantTopAuto:   false,
+			wantLeftAuto:  true,
+			wantRightAuto: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &converter{}
+			style := &computedStyle{FontSize: 12}
+			c.applyProperty("margin", tt.val, style)
+			if style.MarginTopAuto != tt.wantTopAuto {
+				t.Errorf("applyProperty(%q): MarginTopAuto = %v, want %v",
+					tt.val, style.MarginTopAuto, tt.wantTopAuto)
+			}
+			if style.MarginLeftAuto != tt.wantLeftAuto {
+				t.Errorf("applyProperty(%q): MarginLeftAuto = %v, want %v",
+					tt.val, style.MarginLeftAuto, tt.wantLeftAuto)
+			}
+			if style.MarginRightAuto != tt.wantRightAuto {
+				t.Errorf("applyProperty(%q): MarginRightAuto = %v, want %v",
+					tt.val, style.MarginRightAuto, tt.wantRightAuto)
+			}
+		})
+	}
+}
+
 // TestPaddingShorthandWithCalcEndToEnd verifies the fix flows through the
 // HTML converter for `padding:` (not just `margin:`) — both share
 // parseMarginShorthand. Pre-fix, all four padding sides became 0 because

@@ -206,7 +206,10 @@ func parseBoxShadow(val string, fontSize float64) *boxShadow {
 		val = strings.TrimSpace(val)
 	}
 
-	parts := strings.Fields(val)
+	// splitTopLevelFields keeps functional values intact (calc/min/max/
+	// clamp for the length slots, rgb/rgba/hsl for the color slot) when
+	// they contain internal whitespace.
+	parts := splitTopLevelFields(val)
 	if len(parts) < 2 {
 		return nil
 	}

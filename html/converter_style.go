@@ -927,7 +927,9 @@ func (c *converter) applyProperty(prop, val string, style *computedStyle) {
 			style.ColumnWidth = l.toPoints(0, style.FontSize)
 		}
 	case "columns":
-		parts := strings.Fields(strings.TrimSpace(val))
+		// splitTopLevelFields keeps calc()/min()/max()/clamp() values as
+		// a single token even when they contain internal whitespace.
+		parts := splitTopLevelFields(strings.TrimSpace(val))
 		for _, p := range parts {
 			if v, err := strconv.Atoi(p); err == nil && v > 0 {
 				style.ColumnCount = v

@@ -6211,6 +6211,148 @@ func TestColumnsShorthand(t *testing.T) {
 	}
 }
 
+// TestColumnsShorthandWithCalc is a regression test for the same
+// strings.Fields tokenization bug fixed for `flex:` (#236),
+// `margin:`/`padding:` (#237), `font:` (#240), `border:` (#242),
+// `background-size:` (#244), `@page size` (#247), `gap:` (#249),
+// `border-radius:` (#252), `box-shadow:` (#254),
+// `transform-origin:` (#257), and `border-spacing:` (#258) — applied
+// here to the `columns` shorthand. Pre-fix `columns: calc(8px + 2px) 3`
+// became 4 tokens ["calc(8px", "+", "2px)", "3"]; the calc fragments
+// all failed both strconv.Atoi (not integers) and parseLength
+// (unbalanced) → ColumnWidth stayed 0; only the integer "3" was
+// recognized, so ColumnCount was set but the requested column-width
+// was silently lost.
+func TestColumnsShorthandWithCalc(t *testing.T) {
+	tests := []struct {
+		name      string
+		val       string
+		wantCount int
+		wantWidth float64 // in pt
+	}{
+		{
+			name: "calc width + integer count",
+			val:  "calc(8px + 2px) 3",
+			// 10px = 7.5pt; count = 3.
+			wantWidth: 7.5, wantCount: 3,
+		},
+		{
+			name: "integer count + calc width (order reversed)",
+			val:  "3 calc(8px + 2px)",
+			// Parser is order-agnostic.
+			wantWidth: 7.5, wantCount: 3,
+		},
+		{
+			name: "calc width only",
+			val:  "calc(8px + 2px)",
+			// Width set; count stays at zero default.
+			wantWidth: 7.5, wantCount: 0,
+		},
+		{
+			name: "count only (no width)",
+			val:  "3",
+			// Count set; width stays at zero default.
+			wantWidth: 0, wantCount: 3,
+		},
+		{
+			name: "min() width",
+			val:  "min(8px, 16px) 2",
+			// min picks 8px = 6pt; count = 2.
+			wantWidth: 6, wantCount: 2,
+		},
+		{
+			name: "max() width",
+			val:  "max(8px, 16px) 4",
+			// max picks 16px = 12pt; count = 4.
+			wantWidth: 12, wantCount: 4,
+		},
+		{
+			name: "clamp() width",
+			val:  "clamp(4px, 8px, 16px) 3",
+			// clamp middle = 8px = 6pt.
+			wantWidth: 6, wantCount: 3,
+		},
+		{
+			name: "calc with subtraction",
+			val:  "calc(16px - 6px) 2",
+			// 10px = 7.5pt.
+			wantWidth: 7.5, wantCount: 2,
+		},
+		{
+			name: "calc with multiplication",
+			val:  "calc(5px * 2) 2",
+			// 10px = 7.5pt.
+			wantWidth: 7.5, wantCount: 2,
+		},
+		{
+			name: "calc with division",
+			val:  "calc(20px / 2) 2",
+			// 10px = 7.5pt.
+			wantWidth: 7.5, wantCount: 2,
+		},
+		{
+			name:      "tab separator",
+			val:       "calc(8px + 2px)\t3",
+			wantWidth: 7.5, wantCount: 3,
+		},
+		{
+			name:      "newline separator",
+			val:       "calc(8px + 2px)\n3",
+			wantWidth: 7.5, wantCount: 3,
+		},
+		{
+			name: "extra unrecognized tokens silently ignored",
+			// The loop iterates all tokens; non-integer non-length
+			// tokens are simply skipped.
+			val:       "auto 2 calc(8px + 2px) garbage",
+			wantWidth: 7.5, wantCount: 2,
+		},
+		{
+			name: "unbalanced calc paren: width stays 0, no crash",
+			// splitTopLevelFields keeps the unbalanced calc + trailing
+			// chars as one token; not an integer, parseLength fails
+			// → token silently ignored. No crash.
+			val:       "calc(8px + 2px",
+			wantWidth: 0, wantCount: 0,
+		},
+		{
+			name: "empty value: width and count stay 0",
+			val:  "",
+			// parts has length 0 → loop body never runs.
+			wantWidth: 0, wantCount: 0,
+		},
+		{
+			name:      "whitespace-only value: width and count stay 0",
+			val:       "   \t\n   ",
+			wantWidth: 0, wantCount: 0,
+		},
+		{
+			name: "negative integer is rejected (count requires > 0)",
+			// strconv.Atoi("-3") succeeds but the > 0 guard rejects it;
+			// "-3" then falls to parseLength which interprets it as
+			// "-3px" (bare number → px), so ColumnWidth = -3px = -2.25pt.
+			// Documents the existing contract; nobody should write this.
+			val:       "-3 4",
+			wantWidth: -2.25, wantCount: 4,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &converter{}
+			style := &computedStyle{FontSize: 12}
+			c.applyProperty("columns", tt.val, style)
+			if math.Abs(style.ColumnWidth-tt.wantWidth) > 0.01 {
+				t.Errorf("applyProperty(%q): ColumnWidth = %.4f, want %.4f",
+					tt.val, style.ColumnWidth, tt.wantWidth)
+			}
+			if style.ColumnCount != tt.wantCount {
+				t.Errorf("applyProperty(%q): ColumnCount = %d, want %d",
+					tt.val, style.ColumnCount, tt.wantCount)
+			}
+		})
+	}
+}
+
 func TestCSSColumnSpanAll(t *testing.T) {
 	// A multi-column container with a column-span: all child should split
 	// into three siblings: a Columns segment for the content before the

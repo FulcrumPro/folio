@@ -303,7 +303,7 @@ func parseColumnRule(val string, fontSize float64) (float64, string, layout.Colo
 	color := layout.ColorBlack
 	for _, p := range parts {
 		switch p {
-		case "solid", "dashed", "dotted", "double", "none":
+		case "solid", "dashed", "dotted", "double", "none", "hidden":
 			style = p
 		default:
 			if c, ok := parseColor(p); ok {
@@ -312,6 +312,12 @@ func parseColumnRule(val string, fontSize float64) (float64, string, layout.Colo
 				width = l.toPoints(0, fontSize)
 			}
 		}
+	}
+	// Per CSS Multi-column Layout L1, column-rule-style: none (or hidden)
+	// computes column-rule-width to 0 — same rule as the border shorthand
+	// (parseBorderFull below handles this identically).
+	if style == "none" || style == "hidden" {
+		width = 0
 	}
 	return width, style, color
 }
@@ -832,10 +838,13 @@ func parseFontShorthand(value string, parentSize float64) (style, weight string,
 	}
 
 	// Required: font-size (possibly with /line-height).
+	// indexByteAtTopLevel skips slashes inside parens, so a calc(2em / 2)
+	// size or a 12px/calc(1.2 * 1.5) line-height does not get split
+	// mid-calc.
 	if idx < len(parts) {
 		sizeStr := parts[idx]
 		idx++
-		if slashIdx := strings.IndexByte(sizeStr, '/'); slashIdx >= 0 {
+		if slashIdx := indexByteAtTopLevel(sizeStr, '/'); slashIdx >= 0 {
 			size = parseFontSize(sizeStr[:slashIdx], parentSize)
 			lineHeight = parseLineHeight(sizeStr[slashIdx+1:], size)
 		} else {

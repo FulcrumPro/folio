@@ -794,6 +794,57 @@ func TestSplitTopLevelFields(t *testing.T) {
 	}
 }
 
+func TestIndexByteAtTopLevel(t *testing.T) {
+	tests := []struct {
+		input string
+		b     byte
+		want  int
+	}{
+		// Basic finds.
+		{"a/b", '/', 1},
+		{"hello/world", '/', 5},
+		// Byte at index 0.
+		{"/abc", '/', 0},
+		// Slash inside parens is skipped.
+		{"calc(2em / 2)", '/', -1},
+		{"calc(1em + 2px)/1.5", '/', 15},
+		{"calc(1em + 2px)/calc(1em * 1.5)", '/', 15},
+		// Slash immediately after a closing paren is at depth 0 again.
+		{"calc(1)/2", '/', 7},
+		// "First top-level match wins" combined with "skip inside parens":
+		// the slash at index 5 is inside the calc; the next at index 9
+		// is at depth 0.
+		{"calc(1/2)/x", '/', 9},
+		// Plain "first wins" with no parens.
+		{"a/b/c", '/', 1},
+		// Slash inside nested parens is skipped.
+		{"min(calc(1/2), 3)", '/', -1},
+		// Unbalanced opener consumes the rest at depth>0.
+		{"calc(1/2", '/', -1},
+		// Unbalanced closer is a literal character; depth stays at 0.
+		{"a)b/c", '/', 3},
+		// Stray opener followed by balanced sub-expression: depth never
+		// returns to 0, so a `/` after the inner close paren is still
+		// at depth 1 and gets skipped.
+		{"((a)/b", '/', -1},
+		// Char never appears.
+		{"abc", '/', -1},
+		// Empty / whitespace-only input.
+		{"", '/', -1},
+		{"   ", '/', -1},
+		// Other separator chars.
+		{"a,b", ',', 1},
+		{"rgb(0, 0, 0)", ',', -1},
+	}
+	for _, tt := range tests {
+		got := indexByteAtTopLevel(tt.input, tt.b)
+		if got != tt.want {
+			t.Errorf("indexByteAtTopLevel(%q, %q) = %d, want %d",
+				tt.input, tt.b, got, tt.want)
+		}
+	}
+}
+
 func TestParseFlexShorthandWithCalc(t *testing.T) {
 	// Regression: `flex: 0 0 calc(50% - 8px)` was split on whitespace,
 	// yielding 5 tokens; no shorthand case matched and FlexBasis stayed nil.
@@ -3406,11 +3457,19 @@ func TestParseColumnRuleWithCalc(t *testing.T) {
 			wantWidth: 1.5, wantStyle: "solid", wantColor: red,
 		},
 		{
-			name: "none style with calc width: width unchanged",
-			// parseColumnRule does NOT zero width on style=none (unlike
-			// parseBorderFull). Documents the existing contract.
+			name: "none style zeros the width even if calc set",
+			// Per CSS Multi-column Layout L1, column-rule-style: none
+			// computes column-rule-width to 0 (same rule as the border
+			// shorthand). This was inconsistent pre-fix (parseColumnRule
+			// returned the parsed width regardless); aligned with
+			// parseBorderFull in this PR.
 			input:     "calc(2px + 2px) none red",
-			wantWidth: 3, wantStyle: "none", wantColor: red,
+			wantWidth: 0, wantStyle: "none", wantColor: red,
+		},
+		{
+			name:      "hidden style also zeros the width",
+			input:     "2px hidden red",
+			wantWidth: 0, wantStyle: "hidden", wantColor: red,
 		},
 		{
 			name:      "empty input returns defaults",
@@ -5694,16 +5753,14 @@ func TestCustomFontFamilyWithFontShorthand(t *testing.T) {
 // "calc(1em" (unbalanced calc → parseLength nil → size 0), and the
 // remaining tokens were mis-routed into font-family.
 //
-// Pre-existing limitations NOT addressed here:
+// Pre-existing limitation NOT addressed here:
 //   - Whitespace around the slash (e.g. `font: 12px / 1.5 sans`)
 //     makes `/` its own token and it ends up consumed as font-family.
-//   - The slash detector uses strings.IndexByte('/') against the size
-//     token, which is paren-blind. Any `/` inside the size calc
-//     (e.g. `calc(2em / 2)` for division, or any line-height calc
-//     containing a `/`) is misread as the line-height separator,
-//     splitting the calc mid-expression.
 //
-// Both are scoped out of this tokenization fix.
+// The paren-blind slash detector — which previously misread `/` inside
+// calc as the line-height separator — was fixed in a follow-up: see the
+// `calc with division in size` and `calc on both sides of slash` cases
+// below, which now pass thanks to indexByteAtTopLevel().
 func TestParseFontShorthandWithCalc(t *testing.T) {
 	const parentSize = 12.0
 	tests := []struct {
@@ -5779,9 +5836,44 @@ func TestParseFontShorthandWithCalc(t *testing.T) {
 			wantSize:   18,
 			wantFamily: "sans-serif",
 		},
-		// `calc(... / ...)` and `<size>/calc(...)` cases are intentionally
-		// omitted — they hit the paren-blind slash detector documented
-		// above, not the tokenization bug fixed here.
+		{
+			name: "calc with division in size — paren-aware slash detector",
+			// Pre-fix the paren-blind strings.IndexByte('/') would split
+			// "calc(3em / 2)" mid-expression into "calc(3em " and " 2)";
+			// parseFontSize("calc(3em ") fails and falls back to
+			// parentSize=12pt. Post-fix indexByteAtTopLevel skips `/`
+			// inside parens and the calc resolves to 3*12/2 = 18pt.
+			// The pre-fix fallback (12) and post-fix value (18) differ,
+			// so a regression to paren-blind splitting fails clearly.
+			input:      "calc(3em / 2) sans-serif",
+			wantSize:   18,
+			wantFamily: "sans-serif",
+		},
+		{
+			name: "calc on both sides of slash",
+			// Size and line-height are both calc expressions. The outer
+			// `/` is at depth 0; the inner `*` and `+` are inside parens.
+			input: "calc(1em + 2px)/calc(1em * 1.5) sans-serif",
+			// Size: 12 + 1.5 = 13.5pt. Line-height calc resolves
+			// at the size's fontSize (13.5pt as relativeTo): 1em *
+			// 1.5 with fontSize=13.5 → 13.5 * 1.5 = 20.25pt; the
+			// returned multiplier = 20.25 / 13.5 = 1.5.
+			wantSize:       13.5,
+			wantLineHeight: 1.5,
+			wantFamily:     "sans-serif",
+		},
+		{
+			name: "line-height as calc with em",
+			// parseLineHeight resolves a length-form calc by dividing
+			// the resulting points by fontSize. calc(1.5em) at fontSize
+			// 9pt = 13.5pt → multiplier = 13.5/9 = 1.5. (Note: a
+			// dimensionless calc like `calc(1.2 * 1.5)` is mishandled by
+			// parseLineHeight in a separate bug — out of scope here.)
+			input:          "12px/calc(1.5em) sans-serif",
+			wantSize:       9,
+			wantLineHeight: 1.5,
+			wantFamily:     "sans-serif",
+		},
 		{
 			name:  "calc size with keyword line-height",
 			input: "calc(1em + 2px)/normal sans-serif",

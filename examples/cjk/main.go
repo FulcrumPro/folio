@@ -414,14 +414,15 @@ func findCJKFont() string {
 			// SC-specific variants first; design glyphs match the example's
 			// Chinese text content. Fall back to the pan-CJK TTC (face 0
 			// is JP per the upstream ordering) when only the bundle is
-			// installed.
+			// installed. wqy-zenhei is the last-resort SC font on older
+			// Debian/Ubuntu installs.
 			"/usr/share/fonts/opentype/noto/NotoSansSC-Regular.otf",
 			"/usr/share/fonts/noto-cjk/NotoSansSC-Regular.otf",
-			"/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
 			"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
 			"/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
 			"/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
 			"/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+			"/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
 			"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 		}
 	case "windows":

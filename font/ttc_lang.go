@@ -5,6 +5,7 @@ package font
 
 import (
 	"encoding/binary"
+	"slices"
 	"strings"
 )
 
@@ -48,13 +49,34 @@ func pickFaceForLanguage(data []byte, lang string) int {
 		if family == "" {
 			continue
 		}
-		for _, tok := range tokens {
-			if strings.Contains(family, tok) {
-				return int(i)
-			}
+		if familyContainsAnyToken(family, tokens) {
+			return int(i)
 		}
 	}
 	return -1
+}
+
+// familyContainsAnyToken returns true when family — split into
+// space-separated words — contains at least one of tokens as a
+// whole word. Whole-word matching avoids the false positives
+// [strings.Contains] would produce against family names like
+// "Noto Sans Special Compressed" (contains the substring "SC" in
+// "Special" / "Compressed") or "JapanesEsque Title" — neither of
+// which represents a Japanese-targeting face. Pan-CJK collections
+// embed tokens as whole words ("Noto Sans CJK JP"), so the tighter
+// match still hits everything we need to.
+//
+// Comparison is case-sensitive because the regional tokens we
+// match against are stable upper-case ("JP", "SC") and the family
+// names that carry them are also case-stable. A future need for
+// case-insensitive matching would lower-case both sides.
+func familyContainsAnyToken(family string, tokens []string) bool {
+	for _, word := range strings.Fields(family) {
+		if slices.Contains(tokens, word) {
+			return true
+		}
+	}
+	return false
 }
 
 // readFontFamily extracts the FontFamily (NameID 1) string for a
@@ -162,8 +184,13 @@ func languageTokens(lang string) []string {
 		strings.HasPrefix(l, "zh-hk"), strings.HasPrefix(l, "zh-mo"):
 		return []string{"TC", "Hant", "Traditional"}
 	case strings.HasPrefix(l, "zh"):
-		// Bare "zh" without region defaults to Simplified, matching
-		// the IETF/CLDR default-script convention.
+		// Bare "zh" without region defaults to Simplified. RFC 5646
+		// itself takes no position on default scripts; this matches
+		// CLDR's likelySubtags entry mapping `zh` → `zh_Hans_CN`,
+		// which is what browsers (Chrome, Safari) and Wikipedia use
+		// when only `zh` is supplied. Callers who need the legacy
+		// `zh` → Traditional default should pass `zh-TW` or
+		// `zh-Hant` explicitly.
 		return []string{"SC", "Hans", "Simplified"}
 	case strings.HasPrefix(l, "ja"):
 		return []string{"JP", "Japanese", "Jpan"}

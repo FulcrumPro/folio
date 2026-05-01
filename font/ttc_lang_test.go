@@ -51,6 +51,95 @@ func TestPickFaceForLanguageMatchesRegionalFamily(t *testing.T) {
 	}
 }
 
+// TestPickFaceForLanguageDeterministicTiebreak pins the contract
+// when multiple faces match the same language. The picker walks
+// faces in TTC-declared order and returns the first match — this
+// is observable and deterministic, but the matrix test in
+// TestPickFaceForLanguageMatchesRegionalFamily can't catch a
+// regression that flips the iteration order, because each face
+// in that fixture matches exactly one language.
+//
+// Fixture: two faces both carrying the SC token. Expected: face 0
+// wins. A reverse-iteration regression would return face 1.
+func TestPickFaceForLanguageDeterministicTiebreak(t *testing.T) {
+	ttc := buildSyntheticCJKTTC(t,
+		"Noto Sans CJK SC",      // face 0 — first match wins
+		"Noto Sans CJK SC Bold", // face 1 — also matches
+	)
+	if got := pickFaceForLanguage(ttc, "zh-CN"); got != 0 {
+		t.Errorf("two-face tiebreak: got %d, want 0 (TTC-declared order regression)", got)
+	}
+}
+
+// TestPickFaceForLanguageSkipsMalformedFaceNameTable verifies the
+// safety contract for partially-malformed TTCs: when one face's
+// `name` table is unreadable (truncated, bad offsets), the picker
+// silently skips that face and continues to the next rather than
+// aborting the whole match. Real-world TTCs occasionally ship with
+// one corrupt face among several valid ones (font-tooling bugs,
+// truncated downloads); we don't want a single bad face to deny
+// all language selection from the collection.
+//
+// Fixture: face 0 has a `name` table whose stringOffset points
+// past the table's end (corrupt). Face 1 has a valid SC name.
+// Expected: picker returns 1.
+func TestPickFaceForLanguageSkipsMalformedFaceNameTable(t *testing.T) {
+	ttc := buildSyntheticCJKTTCWithCorruptFace(t,
+		"Noto Sans CJK JP", // face 0 — name table will be corrupted
+		"Noto Sans CJK SC", // face 1 — valid
+	)
+	if got := pickFaceForLanguage(ttc, "zh-CN"); got != 1 {
+		t.Errorf("malformed face skip: got %d, want 1 (picker should pass over face 0 and pick face 1)", got)
+	}
+}
+
+// TestParseFontForLanguageDifferentHintsReturnDifferentFaces is the
+// end-to-end pin for face-selection dispatch through the public API.
+// TestParseFontForLanguageRoundTripsThroughTTC only checks that some
+// face loads; this asserts that ja and zh-CN return BYTE-DIFFERENT
+// faces, proving the language hint actually drives selection rather
+// than both calls silently falling back to face 0.
+func TestParseFontForLanguageDifferentHintsReturnDifferentFaces(t *testing.T) {
+	ttfBytes := loadAnySystemTTF(t)
+	ttc := buildSyntheticCJKTTCFromTTF(t, ttfBytes,
+		"Noto Sans CJK JP",
+		"Noto Sans CJK SC",
+	)
+	jaFace, err := ParseFontForLanguage(ttc, "ja")
+	if err != nil {
+		t.Fatalf("ParseFontForLanguage(ja): %v", err)
+	}
+	zhFace, err := ParseFontForLanguage(ttc, "zh-CN")
+	if err != nil {
+		t.Fatalf("ParseFontForLanguage(zh-CN): %v", err)
+	}
+	if bytesEqual(jaFace.RawData(), zhFace.RawData()) {
+		t.Error("ja and zh-CN returned byte-identical faces; language hint did not drive selection")
+	}
+}
+
+// TestPickFaceForLanguageWordBoundaryMatch pins the false-positive
+// guard from the code review: a Latin face name where a regional
+// token appears as part of a longer word ("JPEG" contains "JP",
+// "HansLite" contains "Hans") must NOT match. The picker uses
+// strings.Fields + whole-word equality precisely to avoid this.
+func TestPickFaceForLanguageWordBoundaryMatch(t *testing.T) {
+	// "JPEG Designer" contains "JP" as a substring of "JPEG"; with
+	// pre-fix substring matching it would match "ja". Word-boundary
+	// matching splits into ["JPEG", "Designer"] — "JPEG" != "JP", so
+	// no match. Same shape for "HansLite" containing "Hans" → "zh".
+	ttc := buildSyntheticCJKTTC(t,
+		"JPEG Designer",
+		"HansLite Sans",
+	)
+	if got := pickFaceForLanguage(ttc, "ja"); got != -1 {
+		t.Errorf("'JPEG Designer' + ja: got %d, want -1 (substring 'JP' inside 'JPEG' regressed to a match)", got)
+	}
+	if got := pickFaceForLanguage(ttc, "zh-CN"); got != -1 {
+		t.Errorf("'HansLite Sans' + zh-CN: got %d, want -1 (substring 'Hans' inside 'HansLite' regressed to a match)", got)
+	}
+}
+
 // TestPickFaceForLanguageReturnsNegativeOnNoMatch verifies the
 // fallback signal: when no face matches the requested language (or
 // the language isn't a known CJK convention), the picker returns -1
@@ -219,6 +308,38 @@ func buildSyntheticCJKTTC(t *testing.T, families ...string) []byte {
 		binary.BigEndian.PutUint32(out[dirOff+12:dirOff+16], uint32(len(nt)))
 		// name table data
 		copy(out[nameTableOff:nameTableOff+len(nt)], nt)
+	}
+	return out
+}
+
+// buildSyntheticCJKTTCWithCorruptFace is buildSyntheticCJKTTC with a
+// single face's `name` table corrupted: the stringOffset header
+// field is set to a value past the table's end, so [readNameID1]
+// returns "" and the picker must silently move on. Used by
+// TestPickFaceForLanguageSkipsMalformedFaceNameTable to verify
+// per-face fault tolerance. Only face 0 is corrupted (in a TTC
+// where face 0 is JP and face 1 is SC); a regression that aborts
+// the picker on the first malformed face would return -1 instead
+// of 1 when asked for zh-CN.
+func buildSyntheticCJKTTCWithCorruptFace(t *testing.T, families ...string) []byte {
+	t.Helper()
+	out := buildSyntheticCJKTTC(t, families...)
+	// Find face 0's `name` table directory entry, follow it to the
+	// table data, and corrupt the stringOffset header field
+	// (uint16 at offset 4).
+	face0Off := int(binary.BigEndian.Uint32(out[12:16]))
+	numTables0 := int(binary.BigEndian.Uint16(out[face0Off+4 : face0Off+6]))
+	for i := range numTables0 {
+		entry := face0Off + 12 + i*16
+		if string(out[entry:entry+4]) != "name" {
+			continue
+		}
+		nameTableOff := int(binary.BigEndian.Uint32(out[entry+8 : entry+12]))
+		nameTableLen := int(binary.BigEndian.Uint32(out[entry+12 : entry+16]))
+		// Set stringOffset to a value past the table's end so
+		// readNameID1's `stringOff > dataLen` guard rejects.
+		binary.BigEndian.PutUint16(out[nameTableOff+4:nameTableOff+6], uint16(nameTableLen+1))
+		break
 	}
 	return out
 }

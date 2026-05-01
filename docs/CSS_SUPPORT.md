@@ -1,6 +1,6 @@
 # Folio CSS support
 
-> Auto-generated from `html/css_props.go`, `html/css.go`, and the function parsers in `html/`. Do not edit by hand.
+> Auto-generated from `html/css_props.go`, `html/css.go`, `html/css_selectors.go`, and the function parsers in `html/`. Do not edit by hand.
 > Run `go generate ./html/...` to regenerate after changing the registry.
 
 Folio's HTML-to-PDF converter recognizes the CSS properties listed below.
@@ -286,6 +286,78 @@ also takes effect on flex containers as the gap between items.
 | `counter-increment` | — | `<identifier> [<integer>]+` | — |
 | `counter-reset` | — | `<identifier> [<integer>]+` | — |
 | `string-set` | — | `<identifier> <content-list>` | Used by @page margin boxes for running headers/footers. |
+
+## Selectors
+
+CSS selectors recognized by Folio's stylesheet parser. Selectors not
+listed here are silently dropped at parse time — the rule's declarations
+never apply to any element.
+
+### Combinators
+
+| Combinator | Example | Meaning |
+|---|---|---|
+| descendant (space) | `article p` | `p` anywhere inside `article`. |
+| `>` | `ul > li` | Direct child only. |
+| `+` | `h2 + p` | Immediately-following sibling. |
+| `~` | `h2 ~ p` | Any later sibling. |
+
+### Simple selectors
+
+| Selector | Example | Notes |
+|---|---|---|
+| Type | `p`, `h1` | Element name match. |
+| Class | `.note` | Matches elements whose `class` attribute contains the name. Multiple classes can be chained: `.note.warning`. |
+| ID | `#title` | Matches the element with the given `id`. |
+| Universal | `*` | Matches every element. |
+| Attribute | `[lang]`, `[lang="en"]` | See attribute operators below. |
+
+Selectors compose: `article.featured > p.lead` matches a `p` with class `lead` that is a direct child of an `article` with class `featured`.
+
+### Attribute operators
+
+| Operator | Example | Matches when... |
+|---|---|---|
+| presence | `[hidden]` | Attribute is present (any value, including empty). |
+| `=` | `[type="submit"]` | Attribute value equals the operand exactly. |
+| `^=` | `[href^="https://"]` | Value starts with the operand. |
+| `$=` | `[src$=".pdf"]` | Value ends with the operand. |
+| `*=` | `[class*="btn"]` | Value contains the operand as a substring. |
+| `~=` | `[rel~="author"]` | Value, treated as a whitespace-separated list, contains the operand as a whole word. |
+| `|=` | `[lang|="en"]` | Value equals the operand or starts with `operand-`. |
+
+Case-sensitivity flags (`[lang="EN" i]`) are not parsed.
+
+### Pseudo-classes
+
+| Pseudo-class | Notes |
+|---|---|
+| `:root` | The document root (`<html>`). |
+| `:empty` | Element with no element children and no non-empty text nodes. |
+| `:first-child` | First child of its parent. |
+| `:last-child` | Last child of its parent. |
+| `:nth-child(<expr>)` | Position match. `<expr>` accepts `odd`, `even`, an integer, or `An+B` form (e.g. `2n+1`, `3n`, `-n+3`). |
+| `:nth-last-child(<expr>)` | Same as `:nth-child` but counted from the end. |
+| `:first-of-type` | First element of its tag type among siblings. |
+| `:last-of-type` | Last element of its tag type among siblings. |
+| `:nth-of-type(<expr>)` | Position match restricted to the element's tag type. |
+| `:nth-last-of-type(<expr>)` | Same, counted from the end. |
+| `:not(<simple>)` | Negation. Argument is a single simple selector — selector lists inside `:not()` are not parsed. |
+| `:is(<list>)` | Matches if any selector in the comma-separated list matches. Specificity follows the highest-specificity argument. |
+| `:where(<list>)` | Same matching as `:is()` but contributes zero specificity. |
+
+Interaction-state pseudo-classes (`:hover`, `:focus`, `:active`, `:visited`, `:target`, `:checked`, `:disabled`) are not supported — PDFs are static.
+
+### Pseudo-elements
+
+| Pseudo-element | Notes |
+|---|---|
+| `::before` | Inserts generated content before the element. Driven by the `content` declaration. |
+| `::after` | Inserts generated content after the element. |
+| `::marker` | Styles the list marker on `<li>` elements (`color`, `font-size`, etc.). |
+| `::placeholder` | Styles the placeholder text on form fields. |
+
+The double-colon form is required — single-colon legacy forms (`:before`, `:after`) are not recognized. `::first-letter`, `::first-line`, `::selection`, `::backdrop` are not supported.
 
 ## At-rules
 

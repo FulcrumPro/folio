@@ -23,7 +23,7 @@ func RenderCSSPropertiesMarkdown() string {
 	var b strings.Builder
 
 	b.WriteString("# Folio CSS support\n\n")
-	b.WriteString("> Auto-generated from `html/css_props.go`, `html/css.go`, and the function parsers in `html/`. Do not edit by hand.\n")
+	b.WriteString("> Auto-generated from `html/css_props.go`, `html/css.go`, `html/css_selectors.go`, and the function parsers in `html/`. Do not edit by hand.\n")
 	b.WriteString("> Run `go generate ./html/...` to regenerate after changing the registry.\n\n")
 	b.WriteString("Folio's HTML-to-PDF converter recognizes the CSS properties listed below.\n")
 	b.WriteString("Properties not in this document are silently ignored at render time.\n\n")
@@ -158,6 +158,68 @@ func RenderCSSPropertiesMarkdown() string {
 		}
 		b.WriteString("\n")
 	}
+
+	// Selectors — hand-curated section. ~33 entries already centralized
+	// in css_selectors.go; a registry-driven version was considered, but
+	// for a doc-only payoff a hand-written section + drift-guard test
+	// is the lower-friction option. TestSelectorsDocCoverage maintains
+	// the static expected list.
+	b.WriteString("## Selectors\n\n")
+	b.WriteString("CSS selectors recognized by Folio's stylesheet parser. Selectors not\n")
+	b.WriteString("listed here are silently dropped at parse time — the rule's declarations\n")
+	b.WriteString("never apply to any element.\n\n")
+	b.WriteString("### Combinators\n\n")
+	b.WriteString("| Combinator | Example | Meaning |\n")
+	b.WriteString("|---|---|---|\n")
+	b.WriteString("| descendant (space) | `article p` | `p` anywhere inside `article`. |\n")
+	b.WriteString("| `>` | `ul > li` | Direct child only. |\n")
+	b.WriteString("| `+` | `h2 + p` | Immediately-following sibling. |\n")
+	b.WriteString("| `~` | `h2 ~ p` | Any later sibling. |\n\n")
+	b.WriteString("### Simple selectors\n\n")
+	b.WriteString("| Selector | Example | Notes |\n")
+	b.WriteString("|---|---|---|\n")
+	b.WriteString("| Type | `p`, `h1` | Element name match. |\n")
+	b.WriteString("| Class | `.note` | Matches elements whose `class` attribute contains the name. Multiple classes can be chained: `.note.warning`. |\n")
+	b.WriteString("| ID | `#title` | Matches the element with the given `id`. |\n")
+	b.WriteString("| Universal | `*` | Matches every element. |\n")
+	b.WriteString("| Attribute | `[lang]`, `[lang=\"en\"]` | See attribute operators below. |\n\n")
+	b.WriteString("Selectors compose: `article.featured > p.lead` matches a `p` with class `lead` that is a direct child of an `article` with class `featured`.\n\n")
+	b.WriteString("### Attribute operators\n\n")
+	b.WriteString("| Operator | Example | Matches when... |\n")
+	b.WriteString("|---|---|---|\n")
+	b.WriteString("| presence | `[hidden]` | Attribute is present (any value, including empty). |\n")
+	b.WriteString("| `=` | `[type=\"submit\"]` | Attribute value equals the operand exactly. |\n")
+	b.WriteString("| `^=` | `[href^=\"https://\"]` | Value starts with the operand. |\n")
+	b.WriteString("| `$=` | `[src$=\".pdf\"]` | Value ends with the operand. |\n")
+	b.WriteString("| `*=` | `[class*=\"btn\"]` | Value contains the operand as a substring. |\n")
+	b.WriteString("| `~=` | `[rel~=\"author\"]` | Value, treated as a whitespace-separated list, contains the operand as a whole word. |\n")
+	b.WriteString("| `|=` | `[lang|=\"en\"]` | Value equals the operand or starts with `operand-`. |\n\n")
+	b.WriteString("Case-sensitivity flags (`[lang=\"EN\" i]`) are not parsed.\n\n")
+	b.WriteString("### Pseudo-classes\n\n")
+	b.WriteString("| Pseudo-class | Notes |\n")
+	b.WriteString("|---|---|\n")
+	b.WriteString("| `:root` | The document root (`<html>`). |\n")
+	b.WriteString("| `:empty` | Element with no element children and no non-empty text nodes. |\n")
+	b.WriteString("| `:first-child` | First child of its parent. |\n")
+	b.WriteString("| `:last-child` | Last child of its parent. |\n")
+	b.WriteString("| `:nth-child(<expr>)` | Position match. `<expr>` accepts `odd`, `even`, an integer, or `An+B` form (e.g. `2n+1`, `3n`, `-n+3`). |\n")
+	b.WriteString("| `:nth-last-child(<expr>)` | Same as `:nth-child` but counted from the end. |\n")
+	b.WriteString("| `:first-of-type` | First element of its tag type among siblings. |\n")
+	b.WriteString("| `:last-of-type` | Last element of its tag type among siblings. |\n")
+	b.WriteString("| `:nth-of-type(<expr>)` | Position match restricted to the element's tag type. |\n")
+	b.WriteString("| `:nth-last-of-type(<expr>)` | Same, counted from the end. |\n")
+	b.WriteString("| `:not(<simple>)` | Negation. Argument is a single simple selector — selector lists inside `:not()` are not parsed. |\n")
+	b.WriteString("| `:is(<list>)` | Matches if any selector in the comma-separated list matches. Specificity follows the highest-specificity argument. |\n")
+	b.WriteString("| `:where(<list>)` | Same matching as `:is()` but contributes zero specificity. |\n\n")
+	b.WriteString("Interaction-state pseudo-classes (`:hover`, `:focus`, `:active`, `:visited`, `:target`, `:checked`, `:disabled`) are not supported — PDFs are static.\n\n")
+	b.WriteString("### Pseudo-elements\n\n")
+	b.WriteString("| Pseudo-element | Notes |\n")
+	b.WriteString("|---|---|\n")
+	b.WriteString("| `::before` | Inserts generated content before the element. Driven by the `content` declaration. |\n")
+	b.WriteString("| `::after` | Inserts generated content after the element. |\n")
+	b.WriteString("| `::marker` | Styles the list marker on `<li>` elements (`color`, `font-size`, etc.). |\n")
+	b.WriteString("| `::placeholder` | Styles the placeholder text on form fields. |\n\n")
+	b.WriteString("The double-colon form is required — single-colon legacy forms (`:before`, `:after`) are not recognized. `::first-letter`, `::first-line`, `::selection`, `::backdrop` are not supported.\n\n")
 
 	// At-rules — hand-curated section. The set of @-rules Folio
 	// recognizes is small and changes rarely; a parallel registry would

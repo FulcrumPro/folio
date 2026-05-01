@@ -1176,3 +1176,39 @@ func TestFunctionsDocCoverage(t *testing.T) {
 		t.Errorf("parseTransform produced %d ops for translate+rotate; want 2", len(ops))
 	}
 }
+
+// TestSelectorsDocCoverage is the drift guard for the Selectors
+// section of CSS_SUPPORT.md. The static lists below mirror what the
+// doc claims; the test asserts each name appears as a code-fenced
+// reference in the rendered doc.
+//
+// Behavioral coverage for selector matching is in TestSelectorMatches
+// (and friends) — this test focuses on the doc/parser surface area:
+// if a contributor adds a new pseudo-class to pseudoMatches without
+// also updating CSS_SUPPORT.md, this fails.
+func TestSelectorsDocCoverage(t *testing.T) {
+	combinators := []string{">", "+", "~"}
+	attrOps := []string{"^=", "$=", "*=", "~=", "|="}
+	pseudoClasses := []string{
+		":root", ":empty",
+		":first-child", ":last-child",
+		":nth-child(", ":nth-last-child(",
+		":first-of-type", ":last-of-type",
+		":nth-of-type(", ":nth-last-of-type(",
+		":not(", ":is(", ":where(",
+	}
+	pseudoElements := []string{"::before", "::after", "::marker", "::placeholder"}
+
+	doc := RenderCSSPropertiesMarkdown()
+	check := func(group string, names []string) {
+		for _, name := range names {
+			if !strings.Contains(doc, "`"+name) {
+				t.Errorf("%s %q is in the documented-selectors list but not present in CSS_SUPPORT.md — add it to the Selectors section in html/css_props_doc.go", group, name)
+			}
+		}
+	}
+	check("combinator", combinators)
+	check("attribute operator", attrOps)
+	check("pseudo-class", pseudoClasses)
+	check("pseudo-element", pseudoElements)
+}

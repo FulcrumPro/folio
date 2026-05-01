@@ -6,6 +6,22 @@
 Folio's HTML-to-PDF converter recognizes the CSS properties listed below.
 Properties not in this document are silently ignored at render time.
 
+## How to read this document
+
+Each per-category table lists the property name, any alternative names
+(aliases) accepted by the parser, the value forms that are recognized,
+and any notes about parsing or interactions with other properties.
+
+Value forms are written in CSS spec shorthand: `<length>` means a
+length value (e.g. `12px`, `1em`, `0.5in`); `<color>` means any
+supported color form (named, hex, rgb/rgba, hsl/hsla, cmyk); and so on.
+See [Value-form glossary](#value-form-glossary) below for the full list.
+
+If you don't see a property here, Folio's parser silently ignores it
+at render time — there is no warning. Use
+[`html.Options.StrictAssets`](../html) to escalate certain asset failures,
+but unknown CSS properties are always silent.
+
 ## At a glance
 
 | Category | Properties |
@@ -25,6 +41,39 @@ Properties not in this document are silently ignored at render time.
 | Effects | 12 |
 | PDF | 6 |
 | **Total** | **138** |
+
+## Value-form glossary
+
+Angle-bracket placeholders used in the per-property tables below.
+
+| Placeholder | Meaning |
+|---|---|
+| `<length>` | A CSS length: `<number><unit>` where unit is `px`, `pt`, `em`, `rem`, `cm`, `mm`, `in`, or `%`. Examples: `12px`, `1.5em`, `0.5in`. |
+| `<percentage>` | A `<number>%`. Resolves against the containing context (line-height, parent dimension, etc.). |
+| `<number>` | A unitless real number, e.g. `1.5`, `0.7`, `-2`. |
+| `<integer>` | A whole number, e.g. `0`, `5`, `-1`. Range constraints (e.g. `<integer 1..6>`) are listed in the per-property table. |
+| `<color>` | Any of: named (`red`, `transparent`), hex (`#abc`, `#aabbcc`), `rgb()`, `rgba()`, `hsl()`, `hsla()`, `cmyk()`. Folio renders sRGB only — `oklch()` and `color-mix()` are not supported. |
+| `<line-width>` | A `<length>` or one of the keywords `thin`, `medium`, `thick`. Used in border/outline shorthands. |
+| `<line-style>` | One of `solid`, `dashed`, `dotted`, `double`, `none`. |
+| `<position>` | A 1- or 2-component position keyword/length. Examples: `center`, `top right`, `50% 25%`, `10px 20px`. Applies to `background-position`, `object-position`, `transform-origin`. |
+| `<grid-line>` | A grid line reference: an integer (e.g. `2`), a `span` keyword (`span 3`), or a named line (rare; line names not yet supported). |
+| `<track-list>` | A space-separated list of track sizes for `grid-template-columns`/`-rows`. Examples: `1fr 1fr`, `100px auto`, `repeat(3, 1fr)`. |
+| `<track-size>` | A single grid track size: `<length>`, `<percentage>`, `<number>fr`, `auto`, `min-content`, `max-content`. |
+| `<ratio>` | An aspect ratio expressed as `<number>/<number>` or a single `<number>`. Example: `16/9`. |
+| `<gradient>` | `linear-gradient(...)`, `repeating-linear-gradient(...)`, `radial-gradient(...)`, or `repeating-radial-gradient(...)`. |
+| `<identifier>` | A custom name, e.g. for `counter-reset` or `string-set`. |
+
+**`calc()`, `min()`, `max()`, `clamp()`** are accepted everywhere a `<length>` or `<percentage>` is. The parser preserves them as single tokens through shorthand splitting.
+
+## Box-alignment properties
+
+`justify-content`, `align-items`, `align-self`, and `align-content` are
+listed under Flexbox or Grid in the per-category tables for grouping,
+but per CSS Box Alignment Level 3 they apply to BOTH flex and grid
+containers. Folio honors them in either context.
+
+Similarly, `gap` (and its alias `grid-gap`) is grouped under Grid but
+also takes effect on flex containers as the gap between items.
 
 ## Typography
 
@@ -236,12 +285,31 @@ Properties not in this document are silently ignored at render time.
 
 ## Known unsupported features
 
-These properties are commonly requested but NOT supported by Folio's HTML converter:
+These properties / values are commonly requested but NOT recognized by Folio.
+Folio silently ignores unknown property names, so a stylesheet that uses
+any of these will render — just without the styling those declarations
+would have applied in a browser.
 
-| Feature | Workaround |
-|---|---|
-| `oklch()` color | Use precomputed hex equivalents. Folio renders sRGB only. |
-| `color-mix()` | Precompute the mixed color or define a CSS variable with the result. |
-| `-webkit-line-clamp` / `line-clamp` | Truncate at the template / runtime layer before HTML emission; PDFs are paginated, not scrollable. |
-| `text-wrap: pretty` | Cosmetic only; render without it. |
-| ICC profiles | Folio renders into the sRGB color space. |
+| Feature | Why | Workaround |
+|---|---|---|
+| `oklch()`, `oklab()`, `lch()`, `lab()` color | Folio renders sRGB only; no ICC profile support. | Precompute the sRGB equivalent and use `#hex` or `rgb()`. |
+| `color-mix()` | Folio's parser doesn't expand the function. | Precompute the mixed color, or assign it to a CSS variable: `--btn-tint: #c44;`. |
+| `-webkit-line-clamp` / `line-clamp` | PDFs are paginated, not scrollable; "hide overflow below N lines" has no meaning. | Truncate at the template / runtime layer before HTML emission. For "first N lines + linked appendix", use `layout.Paragraph.SplitAfterLine`. |
+| `text-wrap: pretty` / `text-wrap: balance` | Browser-only line-break heuristic; cosmetic. | Render without it. |
+| `filter`, `backdrop-filter`, `mix-blend-mode` | PDF lacks an analogue for screen-compositing. | Pre-bake effects into images. |
+| `:hover`, `:focus`, `:active` | PDF has no interaction state. | Style the static state directly. |
+| Custom HTML elements / Web Components | Folio's HTML parser handles a fixed element set. | Pre-render to a known element (`<div>` / `<span>`) before passing to Folio. |
+| `@media` queries | PDF output has fixed page geometry. | Use `@page` rules for page-size-specific styling. |
+| `position: sticky` | Has no analogue in paginated layout. | Use `@page` running headers/footers via margin boxes. |
+| ICC profiles for color management | Folio is sRGB-only. | Use sRGB-correct hex values; convert assets to sRGB before embedding. |
+
+## Adding a new CSS property
+
+1. Append a `cssProperty` entry to `cssProperties` in `html/css_props.go`.
+   Required: `Name` and `Apply`. Recommended: `Category`, `Values`, `Notes`.
+2. Run `go generate ./html/...` to regenerate this document.
+3. Add at least one row to `TestCSSPropertyParitySnapshot` in
+   `html/css_props_test.go` asserting the new property's behavior.
+4. CI guards: `TestCSSDocsInSync` ensures the doc matches the registry,
+   and `TestNoSwitchRegistryOverlap` ensures no legacy switch case is
+   reintroduced for a registered property.

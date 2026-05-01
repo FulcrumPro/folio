@@ -28,6 +28,21 @@ func RenderCSSPropertiesMarkdown() string {
 	b.WriteString("Folio's HTML-to-PDF converter recognizes the CSS properties listed below.\n")
 	b.WriteString("Properties not in this document are silently ignored at render time.\n\n")
 
+	// Orientation paragraph: tells a first-time evaluator how to read
+	// the rest of the document.
+	b.WriteString("## How to read this document\n\n")
+	b.WriteString("Each per-category table lists the property name, any alternative names\n")
+	b.WriteString("(aliases) accepted by the parser, the value forms that are recognized,\n")
+	b.WriteString("and any notes about parsing or interactions with other properties.\n\n")
+	b.WriteString("Value forms are written in CSS spec shorthand: `<length>` means a\n")
+	b.WriteString("length value (e.g. `12px`, `1em`, `0.5in`); `<color>` means any\n")
+	b.WriteString("supported color form (named, hex, rgb/rgba, hsl/hsla, cmyk); and so on.\n")
+	b.WriteString("See [Value-form glossary](#value-form-glossary) below for the full list.\n\n")
+	b.WriteString("If you don't see a property here, Folio's parser silently ignores it\n")
+	b.WriteString("at render time — there is no warning. Use\n")
+	b.WriteString("[`html.Options.StrictAssets`](../html) to escalate certain asset failures,\n")
+	b.WriteString("but unknown CSS properties are always silent.\n\n")
+
 	// Sort properties by Category, then by Name. Categories appear in a
 	// fixed display order so the doc is stable across runs.
 	categoryOrder := []string{
@@ -72,6 +87,41 @@ func RenderCSSPropertiesMarkdown() string {
 	}
 	fmt.Fprintf(&b, "| **Total** | **%d** |\n\n", totalCount)
 
+	// Value-form glossary — disambiguates the angle-bracket placeholders
+	// that appear in per-property "Accepted values" columns.
+	b.WriteString("## Value-form glossary\n\n")
+	b.WriteString("Angle-bracket placeholders used in the per-property tables below.\n\n")
+	b.WriteString("| Placeholder | Meaning |\n")
+	b.WriteString("|---|---|\n")
+	b.WriteString("| `<length>` | A CSS length: `<number><unit>` where unit is `px`, `pt`, `em`, `rem`, `cm`, `mm`, `in`, or `%`. Examples: `12px`, `1.5em`, `0.5in`. |\n")
+	b.WriteString("| `<percentage>` | A `<number>%`. Resolves against the containing context (line-height, parent dimension, etc.). |\n")
+	b.WriteString("| `<number>` | A unitless real number, e.g. `1.5`, `0.7`, `-2`. |\n")
+	b.WriteString("| `<integer>` | A whole number, e.g. `0`, `5`, `-1`. Range constraints (e.g. `<integer 1..6>`) are listed in the per-property table. |\n")
+	b.WriteString("| `<color>` | Any of: named (`red`, `transparent`), hex (`#abc`, `#aabbcc`), `rgb()`, `rgba()`, `hsl()`, `hsla()`, `cmyk()`. Folio renders sRGB only — `oklch()` and `color-mix()` are not supported. |\n")
+	b.WriteString("| `<line-width>` | A `<length>` or one of the keywords `thin`, `medium`, `thick`. Used in border/outline shorthands. |\n")
+	b.WriteString("| `<line-style>` | One of `solid`, `dashed`, `dotted`, `double`, `none`. |\n")
+	b.WriteString("| `<position>` | A 1- or 2-component position keyword/length. Examples: `center`, `top right`, `50% 25%`, `10px 20px`. Applies to `background-position`, `object-position`, `transform-origin`. |\n")
+	b.WriteString("| `<grid-line>` | A grid line reference: an integer (e.g. `2`), a `span` keyword (`span 3`), or a named line (rare; line names not yet supported). |\n")
+	b.WriteString("| `<track-list>` | A space-separated list of track sizes for `grid-template-columns`/`-rows`. Examples: `1fr 1fr`, `100px auto`, `repeat(3, 1fr)`. |\n")
+	b.WriteString("| `<track-size>` | A single grid track size: `<length>`, `<percentage>`, `<number>fr`, `auto`, `min-content`, `max-content`. |\n")
+	b.WriteString("| `<ratio>` | An aspect ratio expressed as `<number>/<number>` or a single `<number>`. Example: `16/9`. |\n")
+	b.WriteString("| `<gradient>` | `linear-gradient(...)`, `repeating-linear-gradient(...)`, `radial-gradient(...)`, or `repeating-radial-gradient(...)`. |\n")
+	b.WriteString("| `<identifier>` | A custom name, e.g. for `counter-reset` or `string-set`. |\n")
+	b.WriteString("\n")
+	b.WriteString("**`calc()`, `min()`, `max()`, `clamp()`** are accepted everywhere a `<length>` or `<percentage>` is. The parser preserves them as single tokens through shorthand splitting.\n\n")
+
+	// Box-alignment cross-context callout. align-items / justify-content
+	// etc. are listed under Flexbox in the per-category tables, but in
+	// CSS 3 Box Alignment they apply to Grid containers too. Note this
+	// once at the top of the doc to avoid confusion.
+	b.WriteString("## Box-alignment properties\n\n")
+	b.WriteString("`justify-content`, `align-items`, `align-self`, and `align-content` are\n")
+	b.WriteString("listed under Flexbox or Grid in the per-category tables for grouping,\n")
+	b.WriteString("but per CSS Box Alignment Level 3 they apply to BOTH flex and grid\n")
+	b.WriteString("containers. Folio honors them in either context.\n\n")
+	b.WriteString("Similarly, `gap` (and its alias `grid-gap`) is grouped under Grid but\n")
+	b.WriteString("also takes effect on flex containers as the gap between items.\n\n")
+
 	// Per-category tables.
 	for _, cat := range categoryOrder {
 		entries := byCat[cat]
@@ -108,14 +158,34 @@ func RenderCSSPropertiesMarkdown() string {
 	// Known unsupported list — hardcoded for now; future work could
 	// derive this from a separate registry.
 	b.WriteString("## Known unsupported features\n\n")
-	b.WriteString("These properties are commonly requested but NOT supported by Folio's HTML converter:\n\n")
-	b.WriteString("| Feature | Workaround |\n")
-	b.WriteString("|---|---|\n")
-	b.WriteString("| `oklch()` color | Use precomputed hex equivalents. Folio renders sRGB only. |\n")
-	b.WriteString("| `color-mix()` | Precompute the mixed color or define a CSS variable with the result. |\n")
-	b.WriteString("| `-webkit-line-clamp` / `line-clamp` | Truncate at the template / runtime layer before HTML emission; PDFs are paginated, not scrollable. |\n")
-	b.WriteString("| `text-wrap: pretty` | Cosmetic only; render without it. |\n")
-	b.WriteString("| ICC profiles | Folio renders into the sRGB color space. |\n")
+	b.WriteString("These properties / values are commonly requested but NOT recognized by Folio.\n")
+	b.WriteString("Folio silently ignores unknown property names, so a stylesheet that uses\n")
+	b.WriteString("any of these will render — just without the styling those declarations\n")
+	b.WriteString("would have applied in a browser.\n\n")
+	b.WriteString("| Feature | Why | Workaround |\n")
+	b.WriteString("|---|---|---|\n")
+	b.WriteString("| `oklch()`, `oklab()`, `lch()`, `lab()` color | Folio renders sRGB only; no ICC profile support. | Precompute the sRGB equivalent and use `#hex` or `rgb()`. |\n")
+	b.WriteString("| `color-mix()` | Folio's parser doesn't expand the function. | Precompute the mixed color, or assign it to a CSS variable: `--btn-tint: #c44;`. |\n")
+	b.WriteString("| `-webkit-line-clamp` / `line-clamp` | PDFs are paginated, not scrollable; \"hide overflow below N lines\" has no meaning. | Truncate at the template / runtime layer before HTML emission. For \"first N lines + linked appendix\", use `layout.Paragraph.SplitAfterLine`. |\n")
+	b.WriteString("| `text-wrap: pretty` / `text-wrap: balance` | Browser-only line-break heuristic; cosmetic. | Render without it. |\n")
+	b.WriteString("| `filter`, `backdrop-filter`, `mix-blend-mode` | PDF lacks an analogue for screen-compositing. | Pre-bake effects into images. |\n")
+	b.WriteString("| `:hover`, `:focus`, `:active` | PDF has no interaction state. | Style the static state directly. |\n")
+	b.WriteString("| Custom HTML elements / Web Components | Folio's HTML parser handles a fixed element set. | Pre-render to a known element (`<div>` / `<span>`) before passing to Folio. |\n")
+	b.WriteString("| `@media` queries | PDF output has fixed page geometry. | Use `@page` rules for page-size-specific styling. |\n")
+	b.WriteString("| `position: sticky` | Has no analogue in paginated layout. | Use `@page` running headers/footers via margin boxes. |\n")
+	b.WriteString("| ICC profiles for color management | Folio is sRGB-only. | Use sRGB-correct hex values; convert assets to sRGB before embedding. |\n")
+	b.WriteString("\n")
+
+	// Final orientation: how to extend the registry.
+	b.WriteString("## Adding a new CSS property\n\n")
+	b.WriteString("1. Append a `cssProperty` entry to `cssProperties` in `html/css_props.go`.\n")
+	b.WriteString("   Required: `Name` and `Apply`. Recommended: `Category`, `Values`, `Notes`.\n")
+	b.WriteString("2. Run `go generate ./html/...` to regenerate this document.\n")
+	b.WriteString("3. Add at least one row to `TestCSSPropertyParitySnapshot` in\n")
+	b.WriteString("   `html/css_props_test.go` asserting the new property's behavior.\n")
+	b.WriteString("4. CI guards: `TestCSSDocsInSync` ensures the doc matches the registry,\n")
+	b.WriteString("   and `TestNoSwitchRegistryOverlap` ensures no legacy switch case is\n")
+	b.WriteString("   reintroduced for a registered property.\n")
 
 	return b.String()
 }

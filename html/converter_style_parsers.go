@@ -8,6 +8,7 @@
 package html
 
 import (
+	"math"
 	"strconv"
 	"strings"
 
@@ -139,35 +140,220 @@ func parseTransform(val string) []layout.TransformOp {
 	return ops
 }
 
-// parseAngle parses a CSS angle value like "45deg", "1.5rad", or "100grad".
-// Returns degrees.
+// parseAngle parses a CSS angle value like "45deg", "1.5rad", "100grad",
+// "0.5turn", or a calc/min/max/clamp expression containing angle leaves.
+// Returns degrees. Calc evaluation is angle-native: every leaf is parsed
+// as an angle (or dimensionless number that acts as a multiplier or
+// divisor) and arithmetic is applied directly. Mixing length units with
+// angles is not meaningful in CSS and yields 0 from the offending leaf.
 func parseAngle(s string) float64 {
 	s = strings.TrimSpace(strings.ToLower(s))
-	if strings.HasSuffix(s, "deg") {
-		v, _ := strconv.ParseFloat(strings.TrimSuffix(s, "deg"), 64)
-		return v
+	if s == "" {
+		return 0
 	}
-	if strings.HasSuffix(s, "rad") {
-		v, _ := strconv.ParseFloat(strings.TrimSuffix(s, "rad"), 64)
-		return v * 180 / 3.14159265358979323846
+	if strings.HasPrefix(s, "calc(") && strings.HasSuffix(s, ")") {
+		return resolveAngleCalc(s[5 : len(s)-1])
+	}
+	if strings.HasPrefix(s, "min(") && strings.HasSuffix(s, ")") {
+		parts := splitTopLevelCommas(s[4 : len(s)-1])
+		if len(parts) == 0 {
+			return 0
+		}
+		out := parseAngle(parts[0])
+		for _, a := range parts[1:] {
+			if v := parseAngle(a); v < out {
+				out = v
+			}
+		}
+		return out
+	}
+	if strings.HasPrefix(s, "max(") && strings.HasSuffix(s, ")") {
+		parts := splitTopLevelCommas(s[4 : len(s)-1])
+		if len(parts) == 0 {
+			return 0
+		}
+		out := parseAngle(parts[0])
+		for _, a := range parts[1:] {
+			if v := parseAngle(a); v > out {
+				out = v
+			}
+		}
+		return out
+	}
+	if strings.HasPrefix(s, "clamp(") && strings.HasSuffix(s, ")") {
+		parts := splitTopLevelCommas(s[6 : len(s)-1])
+		if len(parts) != 3 {
+			return 0
+		}
+		lo, mid, hi := parseAngle(parts[0]), parseAngle(parts[1]), parseAngle(parts[2])
+		if mid < lo {
+			return lo
+		}
+		if mid > hi {
+			return hi
+		}
+		return mid
+	}
+	return parseAngleLeaf(s)
+}
+
+// resolveAngleCalc evaluates the inside of a calc() over angles. The
+// grammar mirrors parseCalcExpr (top-level + and - first; then * and /;
+// parenthesised sub-expressions recurse), but every leaf is read as an
+// angle in degrees (or a dimensionless number for use as a
+// multiplier/divisor). Whitespace around + and - is required by CSS;
+// * and / can be tight against their operands.
+func resolveAngleCalc(s string) float64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	// Top-level + or -, scanned right-to-left for left-associative eval.
+	depth := 0
+	for i := len(s) - 1; i > 0; i-- {
+		switch s[i] {
+		case ')':
+			depth++
+		case '(':
+			depth--
+		case '+', '-':
+			if depth != 0 {
+				continue
+			}
+			// Require surrounding whitespace per CSS spec.
+			if i+1 >= len(s) || i-1 < 0 || s[i-1] != ' ' || s[i+1] != ' ' {
+				continue
+			}
+			// Skip "-" that's part of a numeric literal in *... or /... position.
+			l := resolveAngleCalc(s[:i])
+			r := resolveAngleCalc(s[i+1:])
+			if s[i] == '+' {
+				return l + r
+			}
+			return l - r
+		}
+	}
+	// Top-level * or /.
+	depth = 0
+	for i := len(s) - 1; i > 0; i-- {
+		switch s[i] {
+		case ')':
+			depth++
+		case '(':
+			depth--
+		case '*', '/':
+			if depth != 0 {
+				continue
+			}
+			l := resolveAngleCalc(s[:i])
+			r := resolveAngleCalc(s[i+1:])
+			if s[i] == '*' {
+				return l * r
+			}
+			if r == 0 {
+				return 0
+			}
+			return l / r
+		}
+	}
+	// Parenthesised sub-expression.
+	if strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") {
+		return resolveAngleCalc(s[1 : len(s)-1])
+	}
+	// Nested calc/min/max/clamp.
+	if strings.HasPrefix(s, "calc(") || strings.HasPrefix(s, "min(") ||
+		strings.HasPrefix(s, "max(") || strings.HasPrefix(s, "clamp(") {
+		return parseAngle(s)
+	}
+	return parseAngleLeaf(s)
+}
+
+// parseAngleLeaf parses a single angle literal (no calc/min/max/clamp).
+// Recognised suffixes: turn, grad, rad, deg. A bare number is treated
+// as degrees. Suffix order matters — grad must be checked before rad
+// because "100grad" ends in "rad", and turn before either because some
+// CSS extensions (Folio doesn't ship them) use "turnxxx" suffixes.
+func parseAngleLeaf(s string) float64 {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if strings.HasSuffix(s, "turn") {
+		v, _ := strconv.ParseFloat(strings.TrimSuffix(s, "turn"), 64)
+		return v * 360
 	}
 	if strings.HasSuffix(s, "grad") {
 		v, _ := strconv.ParseFloat(strings.TrimSuffix(s, "grad"), 64)
 		return v * 0.9 // 400grad = 360deg
 	}
-	if strings.HasSuffix(s, "turn") {
-		v, _ := strconv.ParseFloat(strings.TrimSuffix(s, "turn"), 64)
-		return v * 360
+	if strings.HasSuffix(s, "rad") {
+		v, _ := strconv.ParseFloat(strings.TrimSuffix(s, "rad"), 64)
+		return v * 180 / math.Pi
 	}
-	// Bare number — assume degrees.
+	if strings.HasSuffix(s, "deg") {
+		v, _ := strconv.ParseFloat(strings.TrimSuffix(s, "deg"), 64)
+		return v
+	}
 	v, _ := strconv.ParseFloat(s, 64)
 	return v
 }
 
-// parseNumericVal parses a bare numeric value (no unit).
+// parseNumericVal parses a bare numeric value (no unit). Recognises
+// calc/min/max/clamp wrappers whose leaves are dimensionless numbers,
+// so transforms like `scale(calc(0.5 + 0.5))` and `skew(min(1deg,
+// 2))` resolve correctly. min/max/clamp are evaluated directly here
+// rather than through parseLength because parseLength's math-arg
+// helper tags bare numbers as Unit "px" (the right default for length
+// contexts but wrong for dimensionless math).
 func parseNumericVal(s string) float64 {
-	v, _ := strconv.ParseFloat(strings.TrimSpace(s), 64)
-	return v
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" {
+		return 0
+	}
+	if v, err := strconv.ParseFloat(s, 64); err == nil {
+		return v
+	}
+	if strings.HasPrefix(s, "min(") && strings.HasSuffix(s, ")") {
+		parts := splitTopLevelCommas(s[4 : len(s)-1])
+		if len(parts) == 0 {
+			return 0
+		}
+		out := parseNumericVal(parts[0])
+		for _, a := range parts[1:] {
+			if v := parseNumericVal(a); v < out {
+				out = v
+			}
+		}
+		return out
+	}
+	if strings.HasPrefix(s, "max(") && strings.HasSuffix(s, ")") {
+		parts := splitTopLevelCommas(s[4 : len(s)-1])
+		if len(parts) == 0 {
+			return 0
+		}
+		out := parseNumericVal(parts[0])
+		for _, a := range parts[1:] {
+			if v := parseNumericVal(a); v > out {
+				out = v
+			}
+		}
+		return out
+	}
+	if strings.HasPrefix(s, "clamp(") && strings.HasSuffix(s, ")") {
+		parts := splitTopLevelCommas(s[6 : len(s)-1])
+		if len(parts) != 3 {
+			return 0
+		}
+		lo, mid, hi := parseNumericVal(parts[0]), parseNumericVal(parts[1]), parseNumericVal(parts[2])
+		if mid < lo {
+			return lo
+		}
+		if mid > hi {
+			return hi
+		}
+		return mid
+	}
+	if l := parseLength(s); l != nil && l.isDimensionless() {
+		return l.toPoints(0, 0)
+	}
+	return 0
 }
 
 // parseLengthPx parses a CSS length for use in transforms (px → pt conversion).

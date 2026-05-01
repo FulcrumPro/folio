@@ -344,8 +344,8 @@ func TestCSSDocsInSync(t *testing.T) {
 	if string(got) != want {
 		// Find the first line that differs to give a directly-actionable
 		// error rather than a byte-count mystery.
-		gotLines := strings.SplitN(string(got), "\n", -1)
-		wantLines := strings.SplitN(want, "\n", -1)
+		gotLines := strings.Split(string(got), "\n")
+		wantLines := strings.Split(want, "\n")
 		diffLine := -1
 		var gotL, wantL string
 		max := len(gotLines)

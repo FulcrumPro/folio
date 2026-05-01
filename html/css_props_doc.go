@@ -67,10 +67,10 @@ func RenderCSSPropertiesMarkdown() string {
 		if len(entries) == 0 {
 			continue
 		}
-		b.WriteString(fmt.Sprintf("| %s | %d |\n", cat, len(entries)))
+		fmt.Fprintf(&b, "| %s | %d |\n", cat, len(entries))
 		totalCount += len(entries)
 	}
-	b.WriteString(fmt.Sprintf("| **Total** | **%d** |\n\n", totalCount))
+	fmt.Fprintf(&b, "| **Total** | **%d** |\n\n", totalCount)
 
 	// Per-category tables.
 	for _, cat := range categoryOrder {
@@ -100,7 +100,7 @@ func RenderCSSPropertiesMarkdown() string {
 			if notes == "" {
 				notes = "—"
 			}
-			b.WriteString(fmt.Sprintf("| `%s` | %s | %s | %s |\n", p.Name, aliases, values, notes))
+			fmt.Fprintf(&b, "| `%s` | %s | %s | %s |\n", p.Name, aliases, values, notes)
 		}
 		b.WriteString("\n")
 	}

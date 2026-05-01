@@ -6677,6 +6677,151 @@ func TestTransformOrigin(t *testing.T) {
 	}
 }
 
+// TestParseTransformOriginWithCalc is a regression test for the same
+// strings.Fields tokenization bug fixed for `flex:` (#236),
+// `margin:`/`padding:` (#237), `font:` (#240), `border:` (#242),
+// `background-size:` (#244), `@page size` (#247), `gap:` (#249),
+// `border-radius:` (#252), and `box-shadow:` (#254) — applied here
+// to `transform-origin`. Pre-fix `transform-origin: calc(50% - 10px) center`
+// became 5 tokens ["calc(50%", "-", "10px)", "center"]; parts[0] =
+// "calc(50%" was an unbalanced calc → parseLength returned nil → the
+// fallback in resolveOriginComponent used dimension/2, silently losing
+// the requested origin.
+func TestParseTransformOriginWithCalc(t *testing.T) {
+	const w, h, fs = 200.0, 100.0, 12.0
+	tests := []struct {
+		name  string
+		val   string
+		wantX float64
+		wantY float64
+	}{
+		{
+			name: "calc x, keyword y",
+			val:  "calc(50% - 10px) center",
+			// 50% × 200 - 10px(=7.5pt) = 92.5pt; center of 100 = 50.
+			wantX: 92.5, wantY: 50,
+		},
+		{
+			name: "keyword x, calc y",
+			val:  "left calc(50% + 10px)",
+			// left = 0; 50% × 100 + 10px(=7.5pt) = 57.5pt.
+			wantX: 0, wantY: 57.5,
+		},
+		{
+			name: "calc on both axes",
+			val:  "calc(50% - 10px) calc(25% + 5px)",
+			// X: 100 - 7.5 = 92.5pt; Y: 25 + 3.75 = 28.75pt.
+			wantX: 92.5, wantY: 28.75,
+		},
+		{
+			name: "single calc value (Y defaults to center)",
+			val:  "calc(50% - 10px)",
+			// X = 92.5pt; Y = h/2 = 50pt.
+			wantX: 92.5, wantY: 50,
+		},
+		{
+			name: "calc with addition",
+			val:  "calc(10px + 10px) calc(20px + 0px)",
+			// X = 20px = 15pt; Y = 20px = 15pt.
+			wantX: 15, wantY: 15,
+		},
+		{
+			name:  "calc with multiplication",
+			val:   "calc(10px * 2) calc(20px * 1)",
+			wantX: 15, wantY: 15,
+		},
+		{
+			name: "calc with division",
+			val:  "calc(40px / 2) calc(20px / 2)",
+			// X = 20px = 15pt; Y = 10px = 7.5pt.
+			wantX: 15, wantY: 7.5,
+		},
+		{
+			name: "min() x, max() y",
+			val:  "min(20px, 40px) max(10px, 30px)",
+			// X = min(20px, 40px) = 15pt; Y = max(10px, 30px) = 22.5pt.
+			wantX: 15, wantY: 22.5,
+		},
+		{
+			name: "clamp() x",
+			val:  "clamp(10px, 20px, 40px) center",
+			// X = clamp middle = 20px = 15pt; Y = h/2 = 50.
+			wantX: 15, wantY: 50,
+		},
+		{
+			name:  "tab separator",
+			val:   "calc(50% - 10px)\tcenter",
+			wantX: 92.5, wantY: 50,
+		},
+		{
+			name:  "newline separator",
+			val:   "calc(50% - 10px)\ncenter",
+			wantX: 92.5, wantY: 50,
+		},
+		{
+			name: "plain percent x, plain percent y (no calc, regression-safe)",
+			val:  "50% 25%",
+			// X = 100; Y = 25.
+			wantX: 100, wantY: 25,
+		},
+		{
+			name: "empty value defaults to center center",
+			val:  "",
+			// X = w/2 = 100; Y = h/2 = 50.
+			wantX: 100, wantY: 50,
+		},
+		{
+			name: "unbalanced calc paren falls back to dimension/2",
+			// resolveOriginComponent's parseLength fails → returns
+			// dimension/2 as the fallback. splitTopLevelFields keeps
+			// the unclosed-paren run as one token, so len(parts)==1 →
+			// Y also defaults to height/2.
+			val:   "calc(50% - 10px",
+			wantX: 100, wantY: 50,
+		},
+		{
+			name: "keyword-only: top left",
+			// Locks the keyword-resolution branch alongside the calc
+			// branch. left → 0; top → 0.
+			val:   "top left",
+			wantX: 0, wantY: 0,
+		},
+		{
+			name: "keyword-only: bottom right",
+			// right → w (200); bottom → h (100).
+			val:   "right bottom",
+			wantX: 200, wantY: 100,
+		},
+		{
+			name:  "keyword-only: center center",
+			val:   "center center",
+			wantX: 100, wantY: 50,
+		},
+		{
+			name: "3-value form: Z component is silently dropped",
+			// CSS 3D transform-origin allows a Z component, but
+			// parseTransformOrigin only reads parts[0] and parts[1].
+			// Locks current contract: extras ignored, X/Y still
+			// parsed correctly.
+			val:   "50% 50% 10px",
+			wantX: 100, wantY: 50,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotX, gotY := parseTransformOrigin(tt.val, w, h, fs)
+			if math.Abs(gotX-tt.wantX) > 0.01 {
+				t.Errorf("parseTransformOrigin(%q): X = %.4f, want %.4f",
+					tt.val, gotX, tt.wantX)
+			}
+			if math.Abs(gotY-tt.wantY) > 0.01 {
+				t.Errorf("parseTransformOrigin(%q): Y = %.4f, want %.4f",
+					tt.val, gotY, tt.wantY)
+			}
+		})
+	}
+}
+
 func TestTransformNone(t *testing.T) {
 	h := `<div style="transform: none; padding: 5px;"><p>No transform</p></div>`
 	elems, err := Convert(h, nil)

@@ -8,26 +8,20 @@ import (
 	"fmt"
 	"math"
 	"os"
-
-	xfont "golang.org/x/image/font"
-	"golang.org/x/image/font/sfnt"
-	"golang.org/x/image/math/fixed"
 )
 
-// sfntFace is the Face implementation backed by golang.org/x/image/font/sfnt.
-// Lazy caches (tables, gsubResult, gidToUnicodeMap, kernPairs) are
-// unsynchronized; callers must not share a single sfntFace across
-// goroutines. This is an internal implementation — callers use the
-// Face interface.
+// sfntFace is the Face implementation backed by Folio's in-tree
+// TrueType / OpenType table parsers. Lazy caches (gsubResult,
+// gidToUnicodeMap, kernPairs) are unsynchronized; callers must not
+// share a single sfntFace across goroutines. This is an internal
+// implementation — callers use the Face interface.
+//
+// The name "sfntFace" is retained for source compatibility with the
+// previous `golang.org/x/image/font/sfnt`-backed implementation; the
+// dependency itself is gone from the metric path (issue #260).
 type sfntFace struct {
-	font    *sfnt.Font
+	pf      *parsedFont
 	rawData []byte
-	buf     sfnt.Buffer // reusable buffer for sfnt operations
-	ppem    fixed.Int26_6
-
-	// Cached table data from raw TTF (parsed lazily).
-	tables       map[string][]byte
-	tablesParsed bool
 
 	// Cached GSUB substitution tables. gsubParsed distinguishes "not
 	// yet parsed" (false) from "parsed and empty" (true, gsubResult nil).
@@ -54,18 +48,19 @@ type sfntFace struct {
 
 // ParseTTF parses a TrueType (.ttf) or OpenType (.otf) font from raw bytes.
 // Returns a Face that can be used for PDF embedding.
+//
+// The metric tables (head, hhea, maxp, hmtx, OS/2, name, cmap) are
+// decoded eagerly via Folio's in-tree parsers; opaque tables (glyf,
+// loca, post, kern, GSUB, GPOS, CFF) are kept as raw byte slices and
+// decoded on first use by their respective callers.
 func ParseTTF(data []byte) (Face, error) {
-	f, err := sfnt.Parse(data)
+	pf, err := parseAllTables(data)
 	if err != nil {
 		return nil, fmt.Errorf("parse font: %w", err)
 	}
-	// Set ppem to UnitsPerEm so that all metrics are returned in
-	// font design units (as 26.6 fixed-point).
-	ppem := fixed.I(int(f.UnitsPerEm()))
 	return &sfntFace{
-		font:    f,
+		pf:      pf,
 		rawData: data,
-		ppem:    ppem,
 	}, nil
 }
 
@@ -78,136 +73,111 @@ func LoadTTF(path string) (Face, error) {
 	return ParseTTF(data)
 }
 
-// PostScriptName returns the PostScript name, falling back to the full name
-// if the PostScript name entry is missing or empty.
+// PostScriptName returns the PostScript name (NameID 6), falling back
+// to the full name (NameID 4) if the PostScript name entry is missing
+// or empty.
 func (f *sfntFace) PostScriptName() string {
-	name, err := f.font.Name(&f.buf, sfnt.NameIDPostScript)
-	if err != nil || name == "" {
-		name, _ = f.font.Name(&f.buf, sfnt.NameIDFull)
+	if f.pf.postScriptName != "" {
+		return f.pf.postScriptName
 	}
-	return name
+	return f.pf.fullName
 }
 
-// UnitsPerEm returns the font's design units per em.
+// UnitsPerEm returns the font's design units per em (head.unitsPerEm).
 func (f *sfntFace) UnitsPerEm() int {
-	return int(f.font.UnitsPerEm())
+	return int(f.pf.head.unitsPerEm)
 }
 
 // GlyphIndex returns the glyph ID for r, or 0 if the rune is not in the font.
 func (f *sfntFace) GlyphIndex(r rune) uint16 {
-	idx, err := f.font.GlyphIndex(&f.buf, r)
-	if err != nil {
-		return 0
-	}
-	return uint16(idx)
+	return f.pf.cmap[r]
 }
 
-// GlyphAdvance returns the advance width in font design units, or 0 on error.
+// GlyphAdvance returns the advance width in font design units, or 0 if
+// the glyph ID is out of range.
 func (f *sfntFace) GlyphAdvance(glyphID uint16) int {
-	adv, err := f.font.GlyphAdvance(&f.buf, sfnt.GlyphIndex(glyphID), f.ppem, xfont.HintingNone)
-	if err != nil {
+	if int(glyphID) >= len(f.pf.advances) {
 		return 0
 	}
-	return fix26_6ToInt(adv)
+	return int(f.pf.advances[glyphID])
 }
 
 // Ascent returns the typographic ascent in font design units.
+//
+// Selection follows the OpenType USE_TYPO_METRICS convention
+// (OS/2 fsSelection bit 7): when set, the foundry has explicitly
+// requested the typo metrics, so we use sTypoAscender; otherwise we
+// match golang.org/x/image/font/sfnt and use the hhea ascender.
+// Fonts without an OS/2 table fall back to hhea unconditionally.
+//
+// This preserves byte-identical FontDescriptor /Ascent values for
+// every font where USE_TYPO_METRICS is unset (the majority — and
+// every font sfnt v0.39.0 produced metrics for) while honoring the
+// foundry's explicit override on the small set of fonts that opt in.
 func (f *sfntFace) Ascent() int {
-	metrics, err := f.font.Metrics(&f.buf, f.ppem, xfont.HintingNone)
-	if err != nil {
-		return 0
+	if f.pf.os2 != nil && f.pf.os2.useTypoMetrics() {
+		return int(f.pf.os2.sTypoAscender)
 	}
-	return fix26_6ToInt(metrics.Ascent)
+	return int(f.pf.hhea.ascender)
 }
 
-// Descent returns the typographic descent as a negative value in font design
-// units. The sfnt library returns descent as positive, so this method negates it.
+// Descent returns the typographic descent as a negative value in font
+// design units. PDF's font descriptor expects a negative number per
+// ISO 32000 Table 122; both sTypoDescender (OS/2) and the hhea
+// descender are already stored as signed values, so a font that ships
+// a positive descent (rare but legal) round-trips that sign here.
+//
+// Selection mirrors [Ascent]: USE_TYPO_METRICS gates the choice
+// between sTypoDescender and hhea.descender, preserving sfnt parity
+// for fonts where the bit is unset.
 func (f *sfntFace) Descent() int {
-	metrics, err := f.font.Metrics(&f.buf, f.ppem, xfont.HintingNone)
-	if err != nil {
-		return 0
+	if f.pf.os2 != nil && f.pf.os2.useTypoMetrics() {
+		return int(f.pf.os2.sTypoDescender)
 	}
-	// sfnt returns descent as a positive number; PDF expects negative
-	return -fix26_6ToInt(metrics.Descent)
+	return int(f.pf.hhea.descender)
 }
 
-// BBox returns the font bounding box as [xMin, yMin, xMax, yMax] in font
-// design units, converted from sfnt's Y-down coordinates to PDF's Y-up system.
+// BBox returns the font bounding box from head.{xMin,yMin,xMax,yMax}
+// in font design units. The head table already stores the bbox in
+// PDF's Y-up coordinate system, so no axis flip is required.
 func (f *sfntFace) BBox() [4]int {
-	bounds, err := f.font.Bounds(&f.buf, f.ppem, xfont.HintingNone)
-	if err != nil {
-		return [4]int{}
-	}
-	// sfnt uses Y-increasing-downward; PDF uses Y-increasing-upward.
-	// Negate and swap Y values for PDF coordinate system.
 	return [4]int{
-		fix26_6ToInt(bounds.Min.X),  // xMin
-		-fix26_6ToInt(bounds.Max.Y), // yMin (was yMax in sfnt coords)
-		fix26_6ToInt(bounds.Max.X),  // xMax
-		-fix26_6ToInt(bounds.Min.Y), // yMax (was yMin in sfnt coords)
+		int(f.pf.head.xMin),
+		int(f.pf.head.yMin),
+		int(f.pf.head.xMax),
+		int(f.pf.head.yMax),
 	}
 }
 
-// rawTables lazily parses the raw TTF table directory and caches the result.
-func (f *sfntFace) rawTables() map[string][]byte {
-	if !f.tablesParsed {
-		f.tables, _ = parseTTFTables(f.rawData)
-		f.tablesParsed = true
-	}
-	return f.tables
-}
-
-// ItalicAngle returns the italic angle by parsing the post table's Fixed 16.16
-// field at offset 4. Returns 0 if the post table is missing or too short.
+// ItalicAngle returns the italic angle by parsing the post table's
+// Fixed 16.16 field at offset 4. Returns 0 if the post table is
+// missing or too short.
 func (f *sfntFace) ItalicAngle() float64 {
-	// Parse italic angle from the post table (offset 4, Fixed 16.16).
-	tables := f.rawTables()
-	if tables == nil {
-		return 0
-	}
-	post, ok := tables["post"]
+	post, ok := f.pf.rawTables["post"]
 	if !ok || len(post) < 8 {
 		return 0
 	}
-	// italicAngle is a Fixed 16.16 at offset 4.
 	raw := binary.BigEndian.Uint32(post[4:8])
 	intPart := int16(raw >> 16)
 	fracPart := float64(raw&0xFFFF) / 65536.0
 	return float64(intPart) + fracPart
 }
 
-// CapHeight returns the cap height from the OS/2 table (sCapHeight at offset
-// 88). Requires OS/2 version >= 2. Returns 0 if unavailable.
+// CapHeight returns the cap height from the OS/2 table. Requires
+// OS/2 version >= 2; returns 0 otherwise.
 func (f *sfntFace) CapHeight() int {
-	// OS/2 table, sCapHeight at offset 88 (requires version >= 2).
-	tables := f.rawTables()
-	if tables == nil {
+	if f.pf.os2 == nil {
 		return 0
 	}
-	os2, ok := tables["OS/2"]
-	if !ok || len(os2) < 90 {
-		return 0
-	}
-	// Check version >= 2 (offset 0).
-	version := binary.BigEndian.Uint16(os2[0:2])
-	if version < 2 {
-		return 0
-	}
-	return int(int16(binary.BigEndian.Uint16(os2[88:90])))
+	return int(f.pf.os2.sCapHeight)
 }
 
-// StemV derives the dominant vertical stem width from the OS/2 usWeightClass
-// using the formula: 10 + 220*(weightClass-50)/900, clamped to a minimum of 10.
-// Returns 80 as a fallback if the OS/2 table is missing.
+// StemV derives the dominant vertical stem width from the OS/2
+// usWeightClass using the formula 10 + 220*(weightClass-50)/900,
+// clamped to a minimum of 10. Returns 80 as a fallback if the OS/2
+// table is missing.
 func (f *sfntFace) StemV() int {
-	// Derive from OS/2 usWeightClass (offset 4).
-	// Formula: StemV = 10 + 220 * (weightClass - 50) / 900
-	// Clamp to reasonable range.
-	tables := f.rawTables()
-	if tables == nil {
-		return 80
-	}
-	os2, ok := tables["OS/2"]
+	os2, ok := f.pf.rawTables["OS/2"]
 	if !ok || len(os2) < 6 {
 		return 80
 	}
@@ -228,10 +198,8 @@ func (f *sfntFace) Kern(left, right uint16) int {
 		}
 	}
 	if !f.kernPairsParsed {
-		if tables := f.rawTables(); tables != nil {
-			if kern, ok := tables["kern"]; ok {
-				f.kernPairs = ParseKern(kern)
-			}
+		if kern, ok := f.pf.rawTables["kern"]; ok {
+			f.kernPairs = ParseKern(kern)
 		}
 		f.kernPairsParsed = true
 	}
@@ -275,11 +243,7 @@ func (f *sfntFace) Flags() uint32 {
 
 // isFixedPitch checks the post table isFixedPitch field (offset 12).
 func (f *sfntFace) isFixedPitch() bool {
-	tables := f.rawTables()
-	if tables == nil {
-		return false
-	}
-	post, ok := tables["post"]
+	post, ok := f.pf.rawTables["post"]
 	if !ok || len(post) < 16 {
 		return false
 	}
@@ -289,11 +253,7 @@ func (f *sfntFace) isFixedPitch() bool {
 // isSerif checks the OS/2 sFamilyClass field (offset 30-31).
 // Family classes 1-5 and 7 indicate serif fonts.
 func (f *sfntFace) isSerif() bool {
-	tables := f.rawTables()
-	if tables == nil {
-		return false
-	}
-	os2, ok := tables["OS/2"]
+	os2, ok := f.pf.rawTables["OS/2"]
 	if !ok || len(os2) < 32 {
 		return false
 	}
@@ -303,16 +263,10 @@ func (f *sfntFace) isSerif() bool {
 
 // isItalicFromOS2 checks OS/2 fsSelection bit 0 (Italic).
 func (f *sfntFace) isItalicFromOS2() bool {
-	tables := f.rawTables()
-	if tables == nil {
+	if f.pf.os2 == nil {
 		return false
 	}
-	os2, ok := tables["OS/2"]
-	if !ok || len(os2) < 64 {
-		return false
-	}
-	fsSelection := binary.BigEndian.Uint16(os2[62:64])
-	return fsSelection&1 != 0
+	return f.pf.os2.fsSelection&1 != 0
 }
 
 // RawData returns the complete, unmodified font file bytes.
@@ -322,7 +276,7 @@ func (f *sfntFace) RawData() []byte {
 
 // NumGlyphs returns the total number of glyphs in the font.
 func (f *sfntFace) NumGlyphs() int {
-	return f.font.NumGlyphs()
+	return int(f.pf.maxp.numGlyphs)
 }
 
 // GSUB returns the parsed GSUB substitution tables. The result is cached
@@ -351,14 +305,14 @@ func (f *sfntFace) GPOS() *GPOSAdjustments {
 }
 
 // GIDToUnicode returns a reverse mapping from glyph ID to Unicode codepoint.
-// Built lazily from the font's cmap table. Used to convert GSUB-substituted
-// GIDs back to codepoints for the text rendering pipeline.
+// Built lazily from the font's parsed cmap. Used to convert
+// GSUB-substituted GIDs back to codepoints for the text rendering pipeline.
 func (f *sfntFace) GIDToUnicode() map[uint16]rune {
 	if f.gidToUnicodeBuilt {
 		return f.gidToUnicodeMap
 	}
 	f.gidToUnicodeBuilt = true
-	f.gidToUnicodeMap = BuildGIDToUnicode(f.rawData)
+	f.gidToUnicodeMap = buildGIDToUnicodeFromCmap(f.pf.cmap)
 	return f.gidToUnicodeMap
 }
 
@@ -367,39 +321,39 @@ func (f *sfntFace) GIDToUnicode() map[uint16]rune {
 // This is used as a fallback for CIDFont text extraction when no
 // ToUnicode CMap is provided.
 //
-// The approach scans the Unicode BMP range (U+0000 to U+FFFF) and queries
-// the font for each rune's glyph index, then builds the reverse mapping.
-// First rune wins if multiple runes map to the same GID.
-// Returns nil if parsing fails.
+// First rune wins if multiple runes map to the same GID — matching
+// the previous sfnt-backed behavior, which scanned the BMP in
+// ascending order.
+//
+// Returns nil if parsing fails or the cmap yields no entries.
 func BuildGIDToUnicode(fontData []byte) map[uint16]rune {
-	f, err := sfnt.Parse(fontData)
+	pf, err := parseAllTables(fontData)
 	if err != nil {
 		return nil
 	}
-
-	var buf sfnt.Buffer
-	gidMap := make(map[uint16]rune)
-
-	// Scan the full Unicode BMP (U+0000 to U+FFFF).
-	for r := rune(0); r <= 0xFFFF; r++ {
-		gid, err := f.GlyphIndex(&buf, r)
-		if err != nil || gid == 0 {
-			continue
-		}
-		g := uint16(gid)
-		// First rune wins — don't overwrite if already mapped.
-		if _, exists := gidMap[g]; !exists {
-			gidMap[g] = r
-		}
-	}
-
-	if len(gidMap) == 0 {
-		return nil
-	}
-	return gidMap
+	return buildGIDToUnicodeFromCmap(pf.cmap)
 }
 
-// fix26_6ToInt converts a fixed.Int26_6 to a rounded integer.
-func fix26_6ToInt(v fixed.Int26_6) int {
-	return int((v + 32) >> 6)
+// buildGIDToUnicodeFromCmap inverts a parsed cmap into a GID→rune
+// map. When multiple runes target the same GID, the lowest rune wins
+// — this matches the previous sfnt-backed scan over U+0000..U+FFFF in
+// ascending order, which the text-extraction tests rely on for stable
+// mappings of common Latin characters.
+func buildGIDToUnicodeFromCmap(cmap cmapTable) map[uint16]rune {
+	if len(cmap) == 0 {
+		return nil
+	}
+	out := make(map[uint16]rune, len(cmap))
+	for r, gid := range cmap {
+		if gid == 0 {
+			continue
+		}
+		if existing, ok := out[gid]; !ok || r < existing {
+			out[gid] = r
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

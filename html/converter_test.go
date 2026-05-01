@@ -4764,6 +4764,139 @@ func TestBorderRadius(t *testing.T) {
 	}
 }
 
+// TestBorderRadiusShorthandWithCalc is a regression test for the same
+// strings.Fields tokenization bug fixed for `flex:` (#236),
+// `margin:`/`padding:` (#237), `font:` (#240), `border:` (#242),
+// `background-size:` (#244), `@page size` (#247), and `gap:` (#249) —
+// applied here to the `border-radius` shorthand. Pre-fix
+// `border-radius: calc(4px + 2px) 8px` became 4 tokens
+// ["calc(4px", "+", "2px)", "8px"], which fell into the 4-arity case
+// and parsed each fragment as its own corner, yielding 0 for the calc
+// fragments and silently shifting the corner mapping.
+//
+// CSS border-radius arity → corner mapping (TL, TR, BR, BL):
+//
+//	1 value:  v       → all four corners = v
+//	2 values: a b     → TL=BR=a, TR=BL=b
+//	3 values: a b c   → TL=a, TR=BL=b, BR=c
+//	4 values: a b c d → TL=a, TR=b, BR=c, BL=d
+func TestBorderRadiusShorthandWithCalc(t *testing.T) {
+	tests := []struct {
+		name                           string
+		val                            string
+		wantTL, wantTR, wantBR, wantBL float64
+	}{
+		{
+			name: "1-value calc applies to all four corners",
+			val:  "calc(4px + 2px)",
+			// 6px = 4.5pt.
+			wantTL: 4.5, wantTR: 4.5, wantBR: 4.5, wantBL: 4.5,
+		},
+		{
+			name: "2-value: calc TL/BR, plain TR/BL",
+			val:  "calc(4px + 2px) 8px",
+			// TL=BR=6px=4.5pt; TR=BL=8px=6pt.
+			wantTL: 4.5, wantTR: 6, wantBR: 4.5, wantBL: 6,
+		},
+		{
+			name: "2-value: plain TL/BR, calc TR/BL",
+			val:  "8px calc(2px * 2)",
+			// TL=BR=6pt; TR=BL=4px=3pt.
+			wantTL: 6, wantTR: 3, wantBR: 6, wantBL: 3,
+		},
+		{
+			name: "3-value with calc in TL position",
+			val:  "calc(4px + 4px) 6px 12px",
+			// TL=8px=6pt; TR=BL=6px=4.5pt; BR=12px=9pt.
+			wantTL: 6, wantTR: 4.5, wantBR: 9, wantBL: 4.5,
+		},
+		{
+			name: "3-value with calc in middle (TR=BL position)",
+			// Locks the TR/BL shared slot — a regression that broke the
+			// shared assignment (TR=parts[1], BL=parts[1]) would diverge.
+			val: "8px calc(2px + 2px) 12px",
+			// TL=8px=6pt; TR=BL=4px=3pt; BR=12px=9pt.
+			wantTL: 6, wantTR: 3, wantBR: 9, wantBL: 3,
+		},
+		{
+			name: "4-value with four distinct corner values",
+			// Each corner gets a different value so a regression that
+			// swapped any two corners (e.g. TR↔BR or BR↔BL) would fail
+			// clearly on the assertion for the affected corner.
+			val: "calc(2px + 2px) calc(4px + 4px) calc(8px + 4px) calc(8px + 8px)",
+			// TL=4px=3pt, TR=8px=6pt, BR=12px=9pt, BL=16px=12pt.
+			wantTL: 3, wantTR: 6, wantBR: 9, wantBL: 12,
+		},
+		{
+			name: "min() single value",
+			val:  "min(4px, 8px)",
+			// min picks 4px = 3pt.
+			wantTL: 3, wantTR: 3, wantBR: 3, wantBL: 3,
+		},
+		{
+			name: "max() single value",
+			val:  "max(4px, 8px)",
+			// max picks 8px = 6pt.
+			wantTL: 6, wantTR: 6, wantBR: 6, wantBL: 6,
+		},
+		{
+			name: "clamp() single value",
+			val:  "clamp(2px, 8px, 16px)",
+			// middle wins: 8px = 6pt.
+			wantTL: 6, wantTR: 6, wantBR: 6, wantBL: 6,
+		},
+		{
+			name:   "tab separator",
+			val:    "calc(4px + 2px)\t8px",
+			wantTL: 4.5, wantTR: 6, wantBR: 4.5, wantBL: 6,
+		},
+		{
+			name:   "newline separator",
+			val:    "calc(4px + 2px)\n8px",
+			wantTL: 4.5, wantTR: 6, wantBR: 4.5, wantBL: 6,
+		},
+		{
+			name: "5+ tokens hit the default branch (no-op)",
+			// Switch has no `case 5`/`default` body, so all four corners
+			// stay at zero default. Documents the contract.
+			val:    "1px 2px 3px 4px 5px",
+			wantTL: 0, wantTR: 0, wantBR: 0, wantBL: 0,
+		},
+		{
+			name: "unbalanced calc paren: corners stay 0",
+			// splitTopLevelFields keeps the unbalanced calc + trailing
+			// chars as one token; parseLength fails → 1-value branch
+			// assigns 0 to all corners. No crash.
+			val:    "calc(4px + 2px",
+			wantTL: 0, wantTR: 0, wantBR: 0, wantBL: 0,
+		},
+		{
+			name:   "empty value: corners stay 0",
+			val:    "",
+			wantTL: 0, wantTR: 0, wantBR: 0, wantBL: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &converter{}
+			style := &computedStyle{FontSize: 12}
+			c.applyProperty("border-radius", tt.val, style)
+			if math.Abs(style.BorderRadiusTL-tt.wantTL) > 0.01 {
+				t.Errorf("BorderRadiusTL = %.4f, want %.4f", style.BorderRadiusTL, tt.wantTL)
+			}
+			if math.Abs(style.BorderRadiusTR-tt.wantTR) > 0.01 {
+				t.Errorf("BorderRadiusTR = %.4f, want %.4f", style.BorderRadiusTR, tt.wantTR)
+			}
+			if math.Abs(style.BorderRadiusBR-tt.wantBR) > 0.01 {
+				t.Errorf("BorderRadiusBR = %.4f, want %.4f", style.BorderRadiusBR, tt.wantBR)
+			}
+			if math.Abs(style.BorderRadiusBL-tt.wantBL) > 0.01 {
+				t.Errorf("BorderRadiusBL = %.4f, want %.4f", style.BorderRadiusBL, tt.wantBL)
+			}
+		})
+	}
+}
+
 func TestOpacity(t *testing.T) {
 	html := `<div style="opacity: 0.5; background-color: blue; padding: 10px">
 <p>Semi-transparent</p>

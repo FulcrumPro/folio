@@ -3174,6 +3174,147 @@ func TestParseColumnRuleShorthand(t *testing.T) {
 	}
 }
 
+// TestParseColumnRuleWithCalc is a regression test for the same
+// strings.Fields tokenization bug fixed for `flex:` (#236),
+// `margin:`/`padding:` (#237), `font:` (#240), `border:` (#242),
+// `background-size:` (#244), `@page size` (#247), `gap:` (#249),
+// `border-radius:` (#252), `box-shadow:` (#254),
+// `transform-origin:` (#257), `border-spacing:` (#258), and
+// `columns:` (#259) — applied here to the `column-rule` shorthand.
+// Pre-fix `column-rule: calc(1px + 1px) solid red` became 5 tokens
+// ["calc(1px", "+", "1px)", "solid", "red"]; the calc fragments all
+// failed both parseColor and parseLength → width stayed 0 (default).
+//
+// Same hazard for rgb()/rgba()/hsl() colors with internal whitespace.
+func TestParseColumnRuleWithCalc(t *testing.T) {
+	red := layout.Color{R: 1, G: 0, B: 0}
+	tests := []struct {
+		name      string
+		input     string
+		wantWidth float64
+		wantStyle string
+		wantColor layout.Color
+	}{
+		{
+			name:  "calc width",
+			input: "calc(1px + 1px) solid red",
+			// 2px = 1.5pt.
+			wantWidth: 1.5, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:      "min() width",
+			input:     "min(2px, 4px) solid red",
+			wantWidth: 1.5, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:  "max() width",
+			input: "max(1px, 3px) dotted red",
+			// 3px = 2.25pt.
+			wantWidth: 2.25, wantStyle: "dotted", wantColor: red,
+		},
+		{
+			name:  "clamp() width",
+			input: "clamp(1px, 2px, 4px) dashed red",
+			// clamp middle = 2px = 1.5pt.
+			wantWidth: 1.5, wantStyle: "dashed", wantColor: red,
+		},
+		{
+			name:      "calc with subtraction",
+			input:     "calc(4px - 2px) solid red",
+			wantWidth: 1.5, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:      "calc with multiplication",
+			input:     "calc(1px * 2) solid red",
+			wantWidth: 1.5, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:      "calc with division",
+			input:     "calc(4px / 2) solid red",
+			wantWidth: 1.5, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:      "rgb() color with internal whitespace",
+			input:     "1px solid rgb(255, 0, 0)",
+			wantWidth: 0.75, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:  "rgba() color with internal whitespace",
+			input: "2px dashed rgba(255, 0, 0, 0.5)",
+			// Color alpha not tracked on layout.Color; assert RGB only.
+			wantWidth: 1.5, wantStyle: "dashed", wantColor: red,
+		},
+		{
+			name:  "hsl() color with internal whitespace",
+			input: "1px solid hsl(0, 100%, 50%)",
+			// hsl(0, 100%, 50%) is pure red.
+			wantWidth: 0.75, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:      "calc width + rgb color (both compound)",
+			input:     "calc(1px + 1px) solid rgb(255, 0, 0)",
+			wantWidth: 1.5, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:      "calc width + hex color",
+			input:     "calc(1px + 1px) solid #ff0000",
+			wantWidth: 1.5, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:      "tab and newline separators",
+			input:     "calc(1px + 1px)\tsolid\nred",
+			wantWidth: 1.5, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name:      "reverse order: color style width (parser is order-agnostic)",
+			input:     "red solid calc(1px + 1px)",
+			wantWidth: 1.5, wantStyle: "solid", wantColor: red,
+		},
+		{
+			name: "none style with calc width: width unchanged",
+			// parseColumnRule does NOT zero width on style=none (unlike
+			// parseBorderFull). Documents the existing contract.
+			input:     "calc(2px + 2px) none red",
+			wantWidth: 3, wantStyle: "none", wantColor: red,
+		},
+		{
+			name:      "empty input returns defaults",
+			input:     "",
+			wantWidth: 0, wantStyle: "solid", wantColor: layout.ColorBlack,
+		},
+		{
+			name:      "whitespace-only input returns defaults",
+			input:     "   \t\n   ",
+			wantWidth: 0, wantStyle: "solid", wantColor: layout.ColorBlack,
+		},
+		{
+			name: "unbalanced calc paren: stays at defaults",
+			// splitTopLevelFields keeps the unbalanced calc + trailing
+			// chars as one token; not a keyword, parseColor and
+			// parseLength both fail → no width/style/color set →
+			// defaults (width=0, style="solid", color=black) preserved.
+			input:     "calc(1px + 1px solid red",
+			wantWidth: 0, wantStyle: "solid", wantColor: layout.ColorBlack,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w, s, c := parseColumnRule(tt.input, 12)
+			if math.Abs(w-tt.wantWidth) > 0.01 {
+				t.Errorf("width = %.4f, want %.4f", w, tt.wantWidth)
+			}
+			if s != tt.wantStyle {
+				t.Errorf("style = %q, want %q", s, tt.wantStyle)
+			}
+			if math.Abs(c.R-tt.wantColor.R) > 0.01 ||
+				math.Abs(c.G-tt.wantColor.G) > 0.01 ||
+				math.Abs(c.B-tt.wantColor.B) > 0.01 {
+				t.Errorf("color RGB = %+v, want %+v", c, tt.wantColor)
+			}
+		})
+	}
+}
+
 func abs(x float64) float64 {
 	if x < 0 {
 		return -x

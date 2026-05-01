@@ -294,7 +294,10 @@ func parseAspectRatio(val string) float64 {
 
 // parseColumnRule parses a CSS column-rule shorthand: "<width> <style> <color>".
 func parseColumnRule(val string, fontSize float64) (float64, string, layout.Color) {
-	parts := strings.Fields(strings.TrimSpace(strings.ToLower(val)))
+	// splitTopLevelFields keeps functional values intact (calc/min/max/
+	// clamp for the width slot, rgb/rgba/hsl for the color slot) when
+	// they contain internal whitespace.
+	parts := splitTopLevelFields(strings.TrimSpace(strings.ToLower(val)))
 	var width float64
 	style := "solid"
 	color := layout.ColorBlack

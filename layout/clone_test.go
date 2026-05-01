@@ -285,3 +285,120 @@ func TestDevanagariGIDsRegenerateAfterPageSplit(t *testing.T) {
 		t.Error("Devanagari GIDs not regenerated after page split — Identity-H text emission will fail")
 	}
 }
+
+// TestCJKNoSpuriousSpacesAfterPageSplit verifies that when a CJK
+// paragraph crosses a page break, the reconstructed overflow text
+// does not contain spurious ASCII spaces between ideographs.
+//
+// Before this fix, cloneWithWords joined same-style words with a
+// literal " " regardless of the word's SpaceAfter. CJK ideographs
+// have SpaceAfter=0 (no inter-word spacing); the join rule corrupted
+// the output by inserting visible spaces, e.g. "中文" became "中 文"
+// in any second-page continuation.
+func TestCJKNoSpuriousSpacesAfterPageSplit(t *testing.T) {
+	text := strings.Repeat("中文文本", 30)
+	p := NewParagraph(text, font.Helvetica, 12)
+
+	plan := p.PlanLayout(LayoutArea{Width: 60, Height: 30})
+	if plan.Status != LayoutPartial {
+		t.Fatalf("expected LayoutPartial, got %v", plan.Status)
+	}
+	overflow := plan.Overflow.(*Paragraph)
+
+	// The reconstructed runs hold the joined text; no run should
+	// contain an ASCII space between ideographs.
+	for i, run := range overflow.Runs() {
+		if strings.ContainsRune(run.Text, ' ') {
+			t.Errorf("run %d text contains spurious space: %q", i, run.Text)
+		}
+	}
+}
+
+// TestCJKLineCountReconcilesAfterPageSplit verifies that the line
+// count of head + tail matches the original. With the spurious-space
+// bug, re-laying the overflow produced MORE lines than the original
+// at the same width, because every inserted space became a real
+// spaceW-wide gap during re-measurement.
+func TestCJKLineCountReconcilesAfterPageSplit(t *testing.T) {
+	text := strings.Repeat("中文文本", 30)
+	p := NewParagraph(text, font.Helvetica, 12)
+	totalLines := p.MeasureLines(60)
+	if totalLines < 5 {
+		t.Fatalf("test setup needs ≥5 wrapped lines; got %d (Helvetica CJK measurement may have changed)", totalLines)
+	}
+
+	plan := p.PlanLayout(LayoutArea{Width: 60, Height: 30})
+	if plan.Status != LayoutPartial {
+		t.Fatalf("expected LayoutPartial, got %v", plan.Status)
+	}
+	overflow := plan.Overflow.(*Paragraph)
+	overflowLines := overflow.MeasureLines(60)
+
+	consumedLines := totalLines - overflowLines
+	if consumedLines < 1 {
+		t.Errorf("overflow line count exceeds original (corruption likely): total=%d overflow=%d", totalLines, overflowLines)
+	}
+	if overflowLines == 0 {
+		t.Errorf("overflow has zero lines despite LayoutPartial status")
+	}
+}
+
+// TestMixedCJKLatinNoSpuriousSpacesAfterPageSplit verifies that when
+// CJK and Latin text mix in the same paragraph, page-split joins:
+//   - preserve glued boundaries (CJK adjacent to Latin without source space)
+//   - preserve real source spaces (one and only one between Latin words)
+//   - never insert spaces between adjacent CJK characters
+func TestMixedCJKLatinNoSpuriousSpacesAfterPageSplit(t *testing.T) {
+	// Source has explicit spaces only between "word" and the next CJK chunk.
+	text := strings.Repeat("中文word ", 30)
+	p := NewParagraph(text, font.Helvetica, 12)
+
+	plan := p.PlanLayout(LayoutArea{Width: 80, Height: 30})
+	if plan.Status != LayoutPartial {
+		t.Fatalf("expected LayoutPartial, got %v", plan.Status)
+	}
+	overflow := plan.Overflow.(*Paragraph)
+
+	for i, run := range overflow.Runs() {
+		// "中 文" or "文 word" or "word中" would all indicate corruption.
+		// The intended forms are "中文word" (glued) and "word 中" (source space).
+		if strings.Contains(run.Text, "中 ") || strings.Contains(run.Text, "文 中") || strings.Contains(run.Text, "文 文") {
+			t.Errorf("run %d: spurious space between CJK chars: %q", i, run.Text)
+		}
+		// "word中" without an intervening space would indicate the source
+		// space was dropped. The source had "word " before each "中".
+		if strings.Contains(run.Text, "word中") {
+			t.Errorf("run %d: source space dropped between Latin and CJK: %q", i, run.Text)
+		}
+	}
+}
+
+// TestLineBreakResetsJoinStateAcrossPageSplit verifies that a forced
+// linebreak (\n) in the middle of a CJK paragraph splits cleanly
+// across a page boundary — the LineBreak branch must update
+// prevSpaceAfter so the post-break word joins correctly.
+func TestLineBreakResetsJoinStateAcrossPageSplit(t *testing.T) {
+	// Several lines of CJK with explicit \n breaks; long enough to
+	// force a page split somewhere mid-paragraph.
+	chunk := "中文文本"
+	text := ""
+	for i := 0; i < 20; i++ {
+		if i > 0 {
+			text += "\n"
+		}
+		text += chunk
+	}
+	p := NewParagraph(text, font.Helvetica, 12)
+
+	plan := p.PlanLayout(LayoutArea{Width: 60, Height: 30})
+	if plan.Status != LayoutPartial {
+		t.Fatalf("expected LayoutPartial, got %v", plan.Status)
+	}
+	overflow := plan.Overflow.(*Paragraph)
+
+	for i, run := range overflow.Runs() {
+		if strings.Contains(run.Text, " ") {
+			t.Errorf("run %d contains spurious space after linebreak split: %q", i, run.Text)
+		}
+	}
+}

@@ -1611,12 +1611,26 @@ func (p *Paragraph) cloneWithWords(words []Word) *Paragraph {
 		if words[0].Text == "" && words[0].LineBreak {
 			cur.Text = "\n"
 		}
+		// Track the SpaceAfter of the most recently appended word so we
+		// can decide whether to insert a separator before the next word
+		// in the same run. The discriminator is SpaceAfter==0 vs >0,
+		// not script — glueAdjacentRuns zeros SpaceAfter on Latin words
+		// at run boundaries, breakCJKWords zeros it between CJK chars,
+		// and breakLongWords does the same for character-broken words.
+		// Re-measurement on the cloned paragraph regenerates the actual
+		// space width for the destination font/size, so we only need
+		// to faithfully encode "was there a space here" as a bool.
+		prevSpaceAfter := words[0].SpaceAfter
 		for _, w := range words[1:] {
 			// Blank words (from consecutive \n\n) represent empty lines.
 			// Serialize as "\n" so splitWords regenerates lineBreakMarkers.
 			// Blank words have no visible text so style doesn't matter.
 			if w.Text == "" && w.LineBreak {
 				cur.Text += "\n"
+				// A blank line resets the join state — whatever
+				// follows starts a fresh visual line and should not
+				// inherit the pre-blank-line word's SpaceAfter.
+				prevSpaceAfter = 0
 				continue
 			}
 			// Inline elements never merge with text or with another inline
@@ -1641,14 +1655,20 @@ func (p *Paragraph) cloneWithWords(words []Word) *Paragraph {
 					runs = append(runs, cur)
 					cur = wordToRun(w)
 				}
+				prevSpaceAfter = w.SpaceAfter
 				continue
 			}
 			if sameRun {
-				cur.Text += " " + w.Text
+				if prevSpaceAfter == 0 {
+					cur.Text += w.Text
+				} else {
+					cur.Text += " " + w.Text
+				}
 			} else {
 				runs = append(runs, cur)
 				cur = wordToRun(w)
 			}
+			prevSpaceAfter = w.SpaceAfter
 		}
 		runs = append(runs, cur)
 	}

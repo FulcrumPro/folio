@@ -303,6 +303,30 @@ func splitTopLevelCommas(s string) []string {
 	return parts
 }
 
+// indexByteAtTopLevel returns the index of the first occurrence of b in s
+// at paren depth 0, or -1 if b never appears at top level. Used to find
+// CSS-grammar separators (e.g. the `/` between size and line-height in
+// the font shorthand) without confusing them for characters inside
+// functional values like calc(2em / 2).
+func indexByteAtTopLevel(s string, b byte) int {
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch c {
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		}
+		if depth == 0 && c == b {
+			return i
+		}
+	}
+	return -1
+}
+
 // splitTopLevelFields splits a string on whitespace at paren depth 0,
 // keeping functional values like "calc(50% - 8px)" or "min(10px, 5%)"
 // intact as a single field. Differs from strings.Fields, which would

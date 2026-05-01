@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/carlos7ags/folio/document"
@@ -85,7 +86,13 @@ body { font-family: 'CJK'; font-size: 14px; }
 	if err != nil {
 		t.Fatalf("ExtractText: %v", err)
 	}
-	if !bytes.Contains([]byte(got), []byte(want)) {
-		t.Errorf("extracted text does not contain the original Chinese; ToUnicode CMap is broken.\n  want substring: %q\n  got: %q", want, got)
+	// Assert the full input phrase including the trailing 。 (U+3002).
+	// Tighter than substring-contains: a CMap regression that drops
+	// any trailing character (incl. the period) fails here. The text
+	// extractor may surround the paragraph with whitespace; trim
+	// before comparing.
+	wantFull := want + "。"
+	if strings.TrimSpace(got) != wantFull {
+		t.Errorf("extracted text does not match input.\n  want: %q\n  got:  %q", wantFull, got)
 	}
 }

@@ -53,9 +53,10 @@ func parseCmapTable(data []byte) (cmapTable, error) {
 	}
 
 	type pick struct {
-		score  int
-		offset uint64
-		format uint16
+		score    int
+		offset   uint64
+		format   uint16
+		isSymbol bool // true iff (3, 0) format-4 — Microsoft Symbol fallback
 	}
 	var best pick
 
@@ -70,19 +71,66 @@ func parseCmapTable(data []byte) (cmapTable, error) {
 		format := binary.BigEndian.Uint16(data[subOff : subOff+2])
 		score := scoreSubtable(platformID, encodingID, format)
 		if score > best.score {
-			best = pick{score: score, offset: subOff, format: format}
+			best = pick{
+				score:    score,
+				offset:   subOff,
+				format:   format,
+				isSymbol: platformID == 3 && encodingID == 0 && format == 4,
+			}
 		}
 	}
 	if best.score == 0 {
 		return nil, fmt.Errorf("cmap: no supported Unicode subtable: %w", ErrCorruptTable)
 	}
+	var (
+		out cmapTable
+		err error
+	)
 	switch best.format {
 	case 4:
-		return parseCmapFormat4(data, best.offset)
+		out, err = parseCmapFormat4(data, best.offset)
 	case 12:
-		return parseCmapFormat12(data, best.offset)
+		out, err = parseCmapFormat12(data, best.offset)
+	default:
+		return nil, fmt.Errorf("cmap: subtable format %d not implemented: %w", best.format, ErrCorruptTable)
 	}
-	return nil, fmt.Errorf("cmap: subtable format %d not implemented: %w", best.format, ErrCorruptTable)
+	if err != nil {
+		return nil, err
+	}
+	if best.isSymbol {
+		mirrorSymbolToASCII(out)
+	}
+	return out, nil
+}
+
+// mirrorSymbolToASCII augments a Symbol-cmap mapping (Microsoft
+// platform, encoding 0) with ASCII aliases for each PUA entry in the
+// 0xF020..0xF0FF range. After the augmentation, both the canonical
+// PUA codepoint AND the corresponding ASCII codepoint resolve to the
+// same glyph ID — so a caller using the natural ASCII codepoint
+// `'A'` (U+0041) gets the glyph the font intended at `0xF041`.
+//
+// Without this step, parseCmapTable could load Wingdings successfully
+// but a paragraph containing `<p>A</p>` would render as .notdef
+// because the html-shaping path uses U+0041, not U+F041. HarfBuzz
+// applies the same alias automatically; without it Symbol fonts work
+// in HarfBuzz but appear blank in any consumer that doesn't know to
+// pre-translate.
+//
+// The mirror is one-directional and additive: existing PUA entries
+// are preserved, and ASCII-range entries that already exist in the
+// source cmap (rare for Symbol fonts but legal) are NOT overwritten.
+func mirrorSymbolToASCII(t cmapTable) {
+	for r, gid := range t {
+		if r < 0xF020 || r > 0xF0FF {
+			continue
+		}
+		ascii := r - 0xF000
+		if _, exists := t[ascii]; exists {
+			continue
+		}
+		t[ascii] = gid
+	}
 }
 
 // scoreSubtable returns a priority score for a (platform, encoding,

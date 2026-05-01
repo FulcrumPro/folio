@@ -149,11 +149,6 @@ func (f *sfntFace) BBox() [4]int {
 	}
 }
 
-// rawTables returns the parsed TTF table directory.
-func (f *sfntFace) rawTables() map[string][]byte {
-	return f.pf.rawTables
-}
-
 // ItalicAngle returns the italic angle by parsing the post table's
 // Fixed 16.16 field at offset 4. Returns 0 if the post table is
 // missing or too short.

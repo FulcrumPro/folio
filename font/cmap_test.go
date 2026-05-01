@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"runtime"
+	"slices"
 	"testing"
 )
 
@@ -19,10 +20,7 @@ func buildFormat4Subtable(segments []struct {
 	start, end uint16
 	delta      int16
 }) []byte {
-	segs := append([]struct {
-		start, end uint16
-		delta      int16
-	}{}, segments...)
+	segs := slices.Clone(segments)
 	segs = append(segs, struct {
 		start, end uint16
 		delta      int16
@@ -209,17 +207,15 @@ func buildFormat4WithIndirectSegment(start, end uint16, glyphIDs []uint16) []byt
 	binary.BigEndian.PutUint16(buf[off:], 0)
 	binary.BigEndian.PutUint16(buf[off+2:], 1)
 	off += 4
-	// idRangeOffset[]: segment 0 points at glyphIdArray[0]; terminator = 0
-	idRangeOffsetBase := off
+	// idRangeOffset[]: segment 0 points at glyphIdArray[0]; terminator = 0.
 	// Distance in bytes from &idRangeOffset[0] to glyphIdArray[0]:
 	// glyphIdArray starts immediately after the four parallel arrays
-	// (so right after idRangeOffset[segCount-1] + 2). For segCount=2,
-	// that's idRangeOffsetBase + 4 bytes from idRangeOffset[0].
+	// (right after idRangeOffset[segCount-1] + 2). For segCount=2 that's
+	// 4 bytes from idRangeOffset[0].
 	rangeOffset := uint16(segCount * 2)
 	binary.BigEndian.PutUint16(buf[off:], rangeOffset)
 	binary.BigEndian.PutUint16(buf[off+2:], 0)
 	off += 4
-	_ = idRangeOffsetBase
 	// glyphIdArray
 	for i, gid := range glyphIDs {
 		binary.BigEndian.PutUint16(buf[off+i*2:], gid)
@@ -345,10 +341,39 @@ func TestParseCmapAcceptsMicrosoftSymbol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseCmapTable on symbol-only font: %v (regression — Folio used to reject these)", err)
 	}
+	// PUA codepoints — the canonical Symbol-font addressing.
 	for r, want := range map[rune]uint16{0xF041: 100, 0xF042: 101, 0xF043: 102} {
 		if g := got[r]; g != want {
 			t.Errorf("PUA U+%04X: got GID %d, want %d", r, g, want)
 		}
+	}
+	// ASCII mirror — the html-shaping path uses these. Without
+	// mirrorSymbolToASCII the font would load but paragraphs like
+	// `<p>A</p>` would render as .notdef.
+	for r, want := range map[rune]uint16{0x0041: 100, 0x0042: 101, 0x0043: 102} {
+		if g := got[r]; g != want {
+			t.Errorf("ASCII mirror U+%04X (from PUA U+%04X): got GID %d, want %d", r, r+0xF000, g, want)
+		}
+	}
+}
+
+// TestMirrorSymbolToASCIIDoesNotOverwriteExisting pins the additive-
+// only contract of mirrorSymbolToASCII: if the source cmap already
+// has an ASCII-range entry, the mirror does NOT overwrite it. This
+// matters for the rare Symbol font that ships an explicit ASCII
+// mapping alongside its PUA entries — those explicit values must win
+// over the synthesized aliases.
+func TestMirrorSymbolToASCIIDoesNotOverwriteExisting(t *testing.T) {
+	tab := cmapTable{
+		0xF041: 100, // PUA 'A' → GID 100
+		0x0041: 999, // explicit ASCII 'A' → GID 999 (must NOT be overwritten)
+	}
+	mirrorSymbolToASCII(tab)
+	if got := tab[0x0041]; got != 999 {
+		t.Errorf("explicit ASCII entry was overwritten by mirror: got %d, want 999", got)
+	}
+	if got := tab[0xF041]; got != 100 {
+		t.Errorf("PUA entry was modified by mirror: got %d, want 100", got)
 	}
 }
 

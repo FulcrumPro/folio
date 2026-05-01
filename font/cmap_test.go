@@ -316,6 +316,42 @@ func TestParseCmapFormat12LargeGroupCount(t *testing.T) {
 	}
 }
 
+// TestParseCmapAcceptsMicrosoftSymbol pins the symbol-font fallback
+// in scoreSubtable. Wingdings, Symbol, and dingbat fonts ship a
+// (platformID=3, encodingID=0) format-4 subtable mapping PUA
+// codepoints (0xF020..0xF0FF) instead of a Unicode subtable. Without
+// the score-20 entry for (3, 0), Folio rejects these fonts entirely
+// with "no supported Unicode subtable". HarfBuzz, go-text, and pdf.js
+// all accept this fallback; this test pins parity.
+func TestParseCmapAcceptsMicrosoftSymbol(t *testing.T) {
+	// Map 0xF041 (PUA equivalent of 'A' under the Symbol convention)
+	// to GID 100 via a single segment. idDelta is int16 with modular
+	// (mod 65536) arithmetic per the spec, so the wire delta is
+	// (100 - 0xF041) mod 65536 = 4131 — which fits in int16 unsigned-
+	// reinterpreted; addition of 0xF041 + 4131 wraps back to 100.
+	sub := buildFormat4Subtable([]struct {
+		start, end uint16
+		delta      int16
+	}{
+		{start: 0xF041, end: 0xF043, delta: int16((100 - int32(0xF041)) & 0xFFFF)}, // → GID 100..102
+	})
+	cmap := wrapCmap([]struct {
+		platformID, encodingID uint16
+		subtable               []byte
+	}{
+		{platformID: 3, encodingID: 0, subtable: sub}, // Microsoft Symbol
+	})
+	got, err := parseCmapTable(cmap)
+	if err != nil {
+		t.Fatalf("parseCmapTable on symbol-only font: %v (regression — Folio used to reject these)", err)
+	}
+	for r, want := range map[rune]uint16{0xF041: 100, 0xF042: 101, 0xF043: 102} {
+		if g := got[r]; g != want {
+			t.Errorf("PUA U+%04X: got GID %d, want %d", r, g, want)
+		}
+	}
+}
+
 func TestParseCmapTruncatedHeader(t *testing.T) {
 	_, err := parseCmapTable([]byte{0, 0, 0})
 	if !errors.Is(err, ErrTruncated) {

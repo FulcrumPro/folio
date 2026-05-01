@@ -109,6 +109,15 @@ func scoreSubtable(platformID, encodingID, format uint16) int {
 			return 40 // Windows Unicode BMP
 		case platformID == 0:
 			return 30
+		case platformID == 3 && encodingID == 0:
+			// Microsoft Symbol — used by Wingdings, Symbol, dingbat
+			// fonts that do not ship a Unicode subtable. The mapping
+			// uses PUA-style codepoints (0xF020..0xF0FF) per the
+			// OpenType spec; callers that target these fonts know to
+			// use the PUA codepoints. HarfBuzz, go-text, and pdf.js
+			// all accept this fallback. Without it Folio rejects the
+			// entire font with "no supported Unicode subtable".
+			return 20
 		}
 	}
 	return 0
@@ -171,12 +180,14 @@ func parseCmapFormat4(data []byte, subOff uint64) (cmapTable, error) {
 		if start > end {
 			continue
 		}
-		// The terminating sentinel segment maps 0xFFFF to GID 0 via
-		// idDelta=1 wrap. Skip it so the table doesn't pin GID 0 to
-		// a meaningless rune.
-		if start == 0xFFFF && end == 0xFFFF {
-			continue
-		}
+		// The terminating sentinel segment (0xFFFF, 0xFFFF, idDelta=1)
+		// processes naturally: the resulting glyph ID is 0 and the
+		// gid==0 filter at the end of the loop drops it without
+		// pinning U+FFFF to anything. Mirrors the approach taken by
+		// HarfBuzz, FreeType, fontTools, and pdf.js — and avoids
+		// masking the rare-but-legal case of a font that maps U+FFFF
+		// to a real glyph (which an explicit sentinel-skip would have
+		// silently dropped).
 		for c := uint32(start); c <= uint32(end); c++ {
 			var gid uint16
 			if idRangeOffset == 0 {

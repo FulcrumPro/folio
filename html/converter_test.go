@@ -7347,6 +7347,213 @@ func TestTransformNone(t *testing.T) {
 	}
 }
 
+// TestParseTransformWithCalc closes #264. Pre-fix `parseTransform` had
+// two paren-blind bugs that compounded:
+//
+//  1. The outer function-call extractor used
+//     `strings.Index(val[parenIdx:], ")")` which finds the FIRST close
+//     paren. For `translate(calc(50% - 10px), 10px)` it truncated the
+//     args at the calc's inner `)`, so argsStr became `"calc(50% - 10px"`
+//     (unbalanced) and the trailing `, 10px)` was mis-parsed as a
+//     separate (nameless) function call.
+//
+//  2. The inner split did `strings.ReplaceAll(args, ",", " ")` followed
+//     by `strings.Fields`. Even with the outer fix, the destructive
+//     comma replacement also stripped commas from nested function calls
+//     like `min(10px, 20px)`, breaking parseLength on the nested arg.
+//
+// Both are fixed by walking depth-aware: the outer loop finds the
+// matching close paren respecting nesting, and the inner split uses
+// splitTopLevelCommas (with a splitTopLevelFields fallback for the
+// legacy space-separated form like `translate(10px 20px)`).
+//
+// parseLengthPx already routes through parseLength (calc-aware), so
+// once the args are extracted intact, calc inside translate/translateX/
+// translateY resolves correctly. parseAngle and parseNumericVal don't
+// understand calc — calc inside rotate/scale/skew is therefore still
+// silently 0; that gap is separate from the structural #264 fix.
+func TestParseTransformWithCalc(t *testing.T) {
+	tests := []struct {
+		name    string
+		val     string
+		wantOps []layout.TransformOp
+	}{
+		{
+			name: "translate with calc x and plain y",
+			val:  "translate(calc(50% - 10px), 10px)",
+			// CSS px → pt: 10px = 7.5pt. calc(50% - 10px) at relativeTo=0
+			// resolves the % to 0, then - 7.5pt → -7.5pt. Y is negated
+			// (CSS y-axis is flipped vs PDF).
+			wantOps: []layout.TransformOp{
+				{Type: "translate", Values: [2]float64{-7.5, -7.5}},
+			},
+		},
+		{
+			name: "translate with calc on both axes",
+			val:  "translate(calc(20px + 10px), calc(40px - 10px))",
+			// 30px = 22.5pt; 30px = 22.5pt; y negated.
+			wantOps: []layout.TransformOp{
+				{Type: "translate", Values: [2]float64{22.5, -22.5}},
+			},
+		},
+		{
+			name: "translate with min() and max()",
+			val:  "translate(min(20px, 40px), max(10px, 20px))",
+			// min picks 20px = 15pt; max picks 20px = 15pt; y negated.
+			wantOps: []layout.TransformOp{
+				{Type: "translate", Values: [2]float64{15, -15}},
+			},
+		},
+		{
+			name: "translate with nested function (preserves inner commas)",
+			val:  "translate(min(10px, 20px), 0)",
+			// Pre-fix the destructive comma→space replacement would have
+			// turned this into `min(10px  20px)` and broken parseLength.
+			// Post-fix nested commas survive.
+			wantOps: []layout.TransformOp{
+				{Type: "translate", Values: [2]float64{7.5, 0}},
+			},
+		},
+		{
+			name: "translateX with calc",
+			val:  "translateX(calc(20px + 10px))",
+			wantOps: []layout.TransformOp{
+				{Type: "translate", Values: [2]float64{22.5, 0}},
+			},
+		},
+		{
+			name: "translateY with calc",
+			val:  "translateY(calc(20px + 10px))",
+			// Y is negated for CSS↔PDF axis flip.
+			wantOps: []layout.TransformOp{
+				{Type: "translate", Values: [2]float64{0, -22.5}},
+			},
+		},
+		{
+			name: "two functions in sequence: rotate + translate(calc)",
+			val:  "rotate(45deg) translate(calc(10px + 10px), 0)",
+			// Pre-fix the outer extractor would truncate the calc, leaving
+			// dangling `, 0)` mis-parsed. Post-fix both functions parse.
+			wantOps: []layout.TransformOp{
+				{Type: "rotate", Values: [2]float64{45, 0}},
+				{Type: "translate", Values: [2]float64{15, 0}},
+			},
+		},
+		{
+			name: "legacy space-separated args still work",
+			// Browsers accept this form; the splitTopLevelFields fallback
+			// kicks in when splitTopLevelCommas yields a single token.
+			val: "translate(10px 20px)",
+			wantOps: []layout.TransformOp{
+				{Type: "translate", Values: [2]float64{7.5, -15}},
+			},
+		},
+		{
+			name: "single-arg translate (Y defaults to 0)",
+			val:  "translate(calc(10px + 5px))",
+			wantOps: []layout.TransformOp{
+				{Type: "translate", Values: [2]float64{11.25, 0}},
+			},
+		},
+		{
+			name: "translate with clamp() — stresses splitTopLevelCommas",
+			// clamp() has TWO internal commas. Pre-fix the destructive
+			// `,` → ` ` replacement at the call site would have flattened
+			// these to spaces, breaking parseLength on the clamp arg.
+			// Post-fix splitTopLevelCommas keeps the whole clamp as a
+			// single top-level token.
+			val: "translate(clamp(5px, 10px, 20px), 0)",
+			// clamp middle = 10px = 7.5pt; second arg = 0.
+			wantOps: []layout.TransformOp{
+				{Type: "translate", Values: [2]float64{7.5, 0}},
+			},
+		},
+		{
+			name: "translateX with calc multiplication",
+			val:  "translateX(calc(10px * 2))",
+			// 20px = 15pt.
+			wantOps: []layout.TransformOp{
+				{Type: "translate", Values: [2]float64{15, 0}},
+			},
+		},
+		{
+			name: "translateY with calc division",
+			val:  "translateY(calc(40px / 2))",
+			// 20px = 15pt; y negated.
+			wantOps: []layout.TransformOp{
+				{Type: "translate", Values: [2]float64{0, -15}},
+			},
+		},
+		{
+			name: "deep nesting (3 levels): translate(min(calc(...), ...), ...)",
+			// Exercises the depth counter past 2 — outer translate paren,
+			// min paren, calc paren. All three must close at the right
+			// time for closeAbs to land on the outer translate's `)`.
+			val: "translate(min(calc(10px + 0px), 20px), 0)",
+			// min picks 10px = 7.5pt; second arg = 0.
+			wantOps: []layout.TransformOp{
+				{Type: "translate", Values: [2]float64{7.5, 0}},
+			},
+		},
+		{
+			name: "rotate(calc(...)) — known limitation: parseAngle is calc-blind",
+			// Documents the out-of-scope gap so future calc support in
+			// parseAngle flips this expectation deliberately. Pre-fix
+			// the outer extractor would have produced 0 anyway by
+			// truncating mid-calc; post-fix the calc survives but
+			// parseAngle's strconv.ParseFloat fails on the calc string
+			// and returns 0. End result identical for now: rotate by 0.
+			val: "rotate(calc(45deg + 45deg))",
+			wantOps: []layout.TransformOp{
+				{Type: "rotate", Values: [2]float64{0, 0}},
+			},
+		},
+		{
+			name: "unbalanced calc paren: function silently dropped, no crash",
+			// The outer extractor's depth tracking never returns to 0;
+			// closeAbs stays -1; the loop breaks. No ops produced.
+			val:     "translate(calc(10px + 5px, 0)",
+			wantOps: nil,
+		},
+		{
+			name: "whitespace-only argument: emits {0,0} translate",
+			// Documents current behavior: parts after splitTopLevelCommas
+			// are [""], fallback to splitTopLevelFields("   ") returns
+			// nil → len(parts)==0 → no branch taken → no op emitted.
+			val:     "translate(   )",
+			wantOps: nil,
+		},
+		{
+			name:    "empty input produces no ops",
+			val:     "",
+			wantOps: nil,
+		},
+		{
+			name:    "none keyword produces no ops",
+			val:     "none",
+			wantOps: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseTransform(tt.val)
+			if len(got) != len(tt.wantOps) {
+				t.Fatalf("parseTransform(%q): got %d ops, want %d (%+v vs %+v)",
+					tt.val, len(got), len(tt.wantOps), got, tt.wantOps)
+			}
+			for i, op := range got {
+				if op.Type != tt.wantOps[i].Type {
+					t.Errorf("ops[%d].Type = %q, want %q", i, op.Type, tt.wantOps[i].Type)
+				}
+				if math.Abs(op.Values[0]-tt.wantOps[i].Values[0]) > 0.01 ||
+					math.Abs(op.Values[1]-tt.wantOps[i].Values[1]) > 0.01 {
+					t.Errorf("ops[%d].Values = %v, want %v", i, op.Values, tt.wantOps[i].Values)
+				}
+			}
+		})
+	}
+}
+
 // --- CSS Grid tests ---
 
 func TestCSSGridBasic(t *testing.T) {

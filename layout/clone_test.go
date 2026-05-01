@@ -373,6 +373,45 @@ func TestMixedCJKLatinNoSpuriousSpacesAfterPageSplit(t *testing.T) {
 	}
 }
 
+// TestNoHyphenInPageSplitOverflow documents and locks in the assumption
+// that hyphenation does NOT run on the PlanLayout path. hyphenateWord
+// is invoked only inside Paragraph.Layout (paragraph.go line 390), not
+// in wrapWords (the helper PlanLayout uses). So the overflow paragraph
+// reconstructed by cloneWithWords never sees the hyphen-with-SpaceAfter=0
+// word pair that would otherwise need a hyphen-aware join fix.
+//
+// If this test ever fails, the hyphen-aware join logic in cloneWithWords
+// becomes a real bug, not a latent one — see the breakLongWords follow-up
+// issue and the wordToRun doc-comment.
+func TestNoHyphenInPageSplitOverflow(t *testing.T) {
+	// A paragraph with hyphens: auto and a long alpha word that would
+	// hyphenate under both the Liang-Knuth pattern path and the
+	// character-boundary fallback in hyphenateWord. Width 60pt at
+	// Helvetica 12pt is tight enough that no whole copy of the word
+	// fits on a line — so hyphenation would be the only way to break
+	// it if wrapWords ever called hyphenateWord. Source contains no "-",
+	// so any hyphen in the overflow text must have come from the
+	// hyphenator.
+	long := strings.Repeat("antidisestablishmentarianism ", 8)
+	p := NewParagraph(long, font.Helvetica, 12).SetHyphens("auto")
+
+	plan := p.PlanLayout(LayoutArea{Width: 60, Height: 30})
+	if plan.Status != LayoutPartial {
+		t.Fatalf("expected LayoutPartial, got %v", plan.Status)
+	}
+	overflow := plan.Overflow.(*Paragraph)
+	if len(overflow.Runs()) == 0 {
+		t.Fatalf("overflow has zero runs — assertion below would pass vacuously")
+	}
+
+	for i, run := range overflow.Runs() {
+		if strings.Contains(run.Text, "-") {
+			t.Errorf("run %d contains hyphen in overflow — wrapWords path now hyphenates, "+
+				"cloneWithWords needs hyphen-aware join: %q", i, run.Text)
+		}
+	}
+}
+
 // TestLineBreakResetsJoinStateAcrossPageSplit verifies that a forced
 // linebreak (\n) in the middle of a CJK paragraph splits cleanly
 // across a page boundary — the LineBreak branch must update

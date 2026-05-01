@@ -691,7 +691,9 @@ func (c *converter) applyProperty(prop, val string, style *computedStyle) {
 		}
 	case "border-spacing":
 		// Supports: "5px" (both) or "5px 10px" (horizontal vertical).
-		parts := strings.Fields(strings.TrimSpace(val))
+		// splitTopLevelFields keeps calc()/min()/max()/clamp() values as
+		// a single token even when they contain internal whitespace.
+		parts := splitTopLevelFields(strings.TrimSpace(val))
 		if len(parts) == 1 {
 			if l := parseLength(parts[0]); l != nil {
 				v := l.toPoints(0, style.FontSize)

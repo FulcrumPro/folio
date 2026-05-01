@@ -7632,6 +7632,137 @@ func TestConvertTableBorderSpacingTwoValues(t *testing.T) {
 	}
 }
 
+// TestBorderSpacingShorthandWithCalc is a regression test for the same
+// strings.Fields tokenization bug fixed for `flex:` (#236),
+// `margin:`/`padding:` (#237), `font:` (#240), `border:` (#242),
+// `background-size:` (#244), `@page size` (#247), `gap:` (#249),
+// `border-radius:` (#252), `box-shadow:` (#254), and
+// `transform-origin:` (#257) — applied here to `border-spacing`.
+// Pre-fix `border-spacing: calc(2px + 2px) 8px` became 4 tokens
+// ["calc(2px", "+", "2px)", "8px"]; parts[0] = "calc(2px" failed
+// parseLength → BorderSpacingH stayed 0; parts[1] = "+" failed too →
+// BorderSpacingV stayed 0; both axes silently lost.
+func TestBorderSpacingShorthandWithCalc(t *testing.T) {
+	tests := []struct {
+		name  string
+		val   string
+		wantH float64 // in pt
+		wantV float64
+	}{
+		{
+			name: "single calc applies to both axes",
+			val:  "calc(2px + 2px)",
+			// 4px = 3pt.
+			wantH: 3, wantV: 3,
+		},
+		{
+			name: "two values: calc h, plain v",
+			val:  "calc(2px + 2px) 8px",
+			// h = 3pt; v = 6pt.
+			wantH: 3, wantV: 6,
+		},
+		{
+			name: "two values: plain h, calc v",
+			val:  "8px calc(2px * 2)",
+			// h = 6pt; v = 4px = 3pt.
+			wantH: 6, wantV: 3,
+		},
+		{
+			name: "two calcs",
+			val:  "calc(4px - 2px) calc(8px / 2)",
+			// h = 2px = 1.5pt; v = 4px = 3pt.
+			wantH: 1.5, wantV: 3,
+		},
+		{
+			name: "calc with addition",
+			val:  "calc(4px + 2px) 8px",
+			// h = 6px = 4.5pt.
+			wantH: 4.5, wantV: 6,
+		},
+		{
+			name: "calc with subtraction",
+			val:  "calc(8px - 4px) 8px",
+			// h = 4px = 3pt.
+			wantH: 3, wantV: 6,
+		},
+		{
+			name: "calc with multiplication",
+			val:  "calc(2px * 2) 8px",
+			// h = 4px = 3pt.
+			wantH: 3, wantV: 6,
+		},
+		{
+			name: "calc with division",
+			val:  "calc(8px / 2) 8px",
+			// h = 4px = 3pt.
+			wantH: 3, wantV: 6,
+		},
+		{
+			name: "min() h, max() v",
+			val:  "min(4px, 8px) max(8px, 4px)",
+			// h = min = 4px = 3pt; v = max = 8px = 6pt.
+			wantH: 3, wantV: 6,
+		},
+		{
+			name: "clamp() single value",
+			val:  "clamp(2px, 4px, 8px)",
+			// middle wins: 4px = 3pt, applied to both axes.
+			wantH: 3, wantV: 3,
+		},
+		{
+			name:  "tab separator",
+			val:   "calc(2px + 2px)\t8px",
+			wantH: 3, wantV: 6,
+		},
+		{
+			name:  "newline separator",
+			val:   "calc(2px + 2px)\n8px",
+			wantH: 3, wantV: 6,
+		},
+		{
+			name: "3+ tokens: parser reads only first two",
+			val:  "5px 10px 15px",
+			// h = 5px = 3.75pt; v = 10px = 7.5pt; third ignored.
+			wantH: 3.75, wantV: 7.5,
+		},
+		{
+			name: "unbalanced calc paren: spacing stays 0",
+			// splitTopLevelFields keeps the unbalanced calc + trailing
+			// chars as one token (parts length 1) → single-value branch
+			// runs → parseLength fails → both H and V are assigned the
+			// same parsed-zero value.
+			val:   "calc(2px + 2px",
+			wantH: 0, wantV: 0,
+		},
+		{
+			name: "empty value: spacing stays 0",
+			// parts has length 0 → neither branch runs → defaults stay.
+			val:   "",
+			wantH: 0, wantV: 0,
+		},
+		{
+			name:  "whitespace-only value: spacing stays 0",
+			val:   "   \t\n   ",
+			wantH: 0, wantV: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &converter{}
+			style := &computedStyle{FontSize: 12}
+			c.applyProperty("border-spacing", tt.val, style)
+			if math.Abs(style.BorderSpacingH-tt.wantH) > 0.01 {
+				t.Errorf("applyProperty(%q): BorderSpacingH = %.4f, want %.4f",
+					tt.val, style.BorderSpacingH, tt.wantH)
+			}
+			if math.Abs(style.BorderSpacingV-tt.wantV) > 0.01 {
+				t.Errorf("applyProperty(%q): BorderSpacingV = %.4f, want %.4f",
+					tt.val, style.BorderSpacingV, tt.wantV)
+			}
+		})
+	}
+}
+
 func TestConvertCSSTableBorderSpacing(t *testing.T) {
 	// CSS display:table with border-spacing.
 	html := `<div style="display: table; border-spacing: 8px">

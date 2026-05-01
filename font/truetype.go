@@ -104,12 +104,18 @@ func (f *sfntFace) GlyphAdvance(glyphID uint16) int {
 
 // Ascent returns the typographic ascent in font design units.
 //
-// The OS/2 sTypoAscender takes precedence when an OS/2 table is present
-// because it represents the foundry's intended line-box top, matching
-// the behavior of golang.org/x/image/font/sfnt. Older TrueType fonts
-// without OS/2 fall back to the hhea ascender.
+// Selection follows the OpenType USE_TYPO_METRICS convention
+// (OS/2 fsSelection bit 7): when set, the foundry has explicitly
+// requested the typo metrics, so we use sTypoAscender; otherwise we
+// match golang.org/x/image/font/sfnt and use the hhea ascender.
+// Fonts without an OS/2 table fall back to hhea unconditionally.
+//
+// This preserves byte-identical FontDescriptor /Ascent values for
+// every font where USE_TYPO_METRICS is unset (the majority — and
+// every font sfnt v0.39.0 produced metrics for) while honoring the
+// foundry's explicit override on the small set of fonts that opt in.
 func (f *sfntFace) Ascent() int {
-	if f.pf.os2 != nil {
+	if f.pf.os2 != nil && f.pf.os2.useTypoMetrics() {
 		return int(f.pf.os2.sTypoAscender)
 	}
 	return int(f.pf.hhea.ascender)
@@ -120,8 +126,12 @@ func (f *sfntFace) Ascent() int {
 // ISO 32000 Table 122; both sTypoDescender (OS/2) and the hhea
 // descender are already stored as signed values, so a font that ships
 // a positive descent (rare but legal) round-trips that sign here.
+//
+// Selection mirrors [Ascent]: USE_TYPO_METRICS gates the choice
+// between sTypoDescender and hhea.descender, preserving sfnt parity
+// for fonts where the bit is unset.
 func (f *sfntFace) Descent() int {
-	if f.pf.os2 != nil {
+	if f.pf.os2 != nil && f.pf.os2.useTypoMetrics() {
 		return int(f.pf.os2.sTypoDescender)
 	}
 	return int(f.pf.hhea.descender)

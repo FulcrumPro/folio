@@ -125,6 +125,108 @@ func TestParseCmapFormat4Single(t *testing.T) {
 	}
 }
 
+// TestParseCmapFormat4IdRangeOffset exercises the format-4 indirect
+// path (idRangeOffset != 0), which routes glyph lookup through the
+// glyphIdArray appended after the parallel arrays. The "obscure
+// indexing trick" in parseCmapFormat4 (cmap.go around line 184) is
+// non-trivial pointer arithmetic — without this test the branch is
+// reached only by real fonts loaded opportunistically. The Latin
+// system fonts in loadAnySystemTTF often hit this path; this
+// synthetic fixture pins it so any host can exercise it.
+//
+// Layout: one segment maps codepoints 0x40..0x42 ('@','A','B') via
+// idRangeOffset → glyphIdArray. The trick: idRangeOffset[0] is a
+// byte offset from &idRangeOffset[0] to the glyphIdArray entry
+// holding the glyph ID for the segment's first codepoint. With one
+// segment + terminator, idRangeOffset starts at offset 28 in the
+// subtable (header 14 + endCode 4 + reservedPad 2 + startCode 4 +
+// idDelta 4 = 28). glyphIdArray follows at offset 32. So
+// idRangeOffset[0] = 32 - 28 = 4 selects glyphIdArray[0]; values
+// for codepoints 0x40, 0x41, 0x42 land at glyphIdArray[0,1,2]
+// respectively.
+func TestParseCmapFormat4IdRangeOffset(t *testing.T) {
+	// Hand-build the subtable rather than extending buildFormat4Subtable
+	// — the existing helper hard-codes idRangeOffset = 0 and changing
+	// it would couple all other tests to this one.
+	sub := buildFormat4WithIndirectSegment(
+		0x40, 0x42, // segment range
+		[]uint16{100, 101, 102}, // glyphIdArray entries
+	)
+	cmap := wrapCmap([]struct {
+		platformID, encodingID uint16
+		subtable               []byte
+	}{
+		{platformID: 3, encodingID: 1, subtable: sub},
+	})
+
+	got, err := parseCmapTable(cmap)
+	if err != nil {
+		t.Fatalf("parseCmapTable: %v", err)
+	}
+	for r, want := range map[rune]uint16{0x40: 100, 0x41: 101, 0x42: 102} {
+		if g := got[r]; g != want {
+			t.Errorf("rune U+%04X: got GID %d, want %d (idRangeOffset path)", r, g, want)
+		}
+	}
+	if g := got[0x43]; g != 0 {
+		t.Errorf("rune U+0043 (outside segment): got GID %d, want 0", g)
+	}
+}
+
+// buildFormat4WithIndirectSegment serialises a format-4 cmap subtable
+// with a single segment whose idRangeOffset is non-zero, pointing into
+// an appended glyphIdArray. Only used by TestParseCmapFormat4IdRangeOffset.
+func buildFormat4WithIndirectSegment(start, end uint16, glyphIDs []uint16) []byte {
+	if int(end-start)+1 != len(glyphIDs) {
+		panic("buildFormat4WithIndirectSegment: glyphIDs length must match segment range")
+	}
+	const segCount = 2 // requested segment + terminator
+	headerSize := 14
+	arraysSize := segCount * 2 * 4 // endCode, startCode, idDelta, idRangeOffset
+	pad := 2
+	glyphArrSize := len(glyphIDs) * 2
+	length := headerSize + arraysSize + pad + glyphArrSize
+	buf := make([]byte, length)
+
+	binary.BigEndian.PutUint16(buf[0:], 4)
+	binary.BigEndian.PutUint16(buf[2:], uint16(length))
+	binary.BigEndian.PutUint16(buf[4:], 0) // language
+	binary.BigEndian.PutUint16(buf[6:], uint16(segCount*2))
+
+	// endCode[]
+	off := 14
+	binary.BigEndian.PutUint16(buf[off:], end)
+	binary.BigEndian.PutUint16(buf[off+2:], 0xFFFF)
+	off += 4
+	// reservedPad
+	binary.BigEndian.PutUint16(buf[off:], 0)
+	off += 2
+	// startCode[]
+	binary.BigEndian.PutUint16(buf[off:], start)
+	binary.BigEndian.PutUint16(buf[off+2:], 0xFFFF)
+	off += 4
+	// idDelta[] — irrelevant when idRangeOffset != 0; set to 0
+	binary.BigEndian.PutUint16(buf[off:], 0)
+	binary.BigEndian.PutUint16(buf[off+2:], 1)
+	off += 4
+	// idRangeOffset[]: segment 0 points at glyphIdArray[0]; terminator = 0
+	idRangeOffsetBase := off
+	// Distance in bytes from &idRangeOffset[0] to glyphIdArray[0]:
+	// glyphIdArray starts immediately after the four parallel arrays
+	// (so right after idRangeOffset[segCount-1] + 2). For segCount=2,
+	// that's idRangeOffsetBase + 4 bytes from idRangeOffset[0].
+	rangeOffset := uint16(segCount * 2)
+	binary.BigEndian.PutUint16(buf[off:], rangeOffset)
+	binary.BigEndian.PutUint16(buf[off+2:], 0)
+	off += 4
+	_ = idRangeOffsetBase
+	// glyphIdArray
+	for i, gid := range glyphIDs {
+		binary.BigEndian.PutUint16(buf[off+i*2:], gid)
+	}
+	return buf
+}
+
 func TestParseCmapFormat12Single(t *testing.T) {
 	sub := buildFormat12Subtable([]struct{ startChar, endChar, startGID uint32 }{
 		{startChar: 0x4E00, endChar: 0x4E0F, startGID: 1000},

@@ -93,6 +93,9 @@ doc.Save("invoice.pdf")
 Supports 40+ HTML elements, inline and `<style>` block CSS, flexbox, CSS grid,
 SVG, named/hex/rgb colors, `@page` rules, and tables with colspan.
 
+For the full list of recognized CSS properties, accepted value forms, and
+known unsupported features, see [docs/CSS_SUPPORT.md](docs/CSS_SUPPORT.md).
+
 **[Try HTML to PDF live in your browser](https://playground.foliopdf.dev/)**
 
 ---

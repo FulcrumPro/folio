@@ -1,6 +1,6 @@
 # Folio CSS support
 
-> Auto-generated from `html/css_props.go`. Do not edit by hand.
+> Auto-generated from `html/css_props.go`, `html/css.go`, `html/css_selectors.go`, and the function parsers in `html/`. Do not edit by hand.
 > Run `go generate ./html/...` to regenerate after changing the registry.
 
 Folio's HTML-to-PDF converter recognizes the CSS properties listed below.
@@ -287,6 +287,193 @@ also takes effect on flex containers as the gap between items.
 | `counter-reset` | — | `<identifier> [<integer>]+` | — |
 | `string-set` | — | `<identifier> <content-list>` | Used by @page margin boxes for running headers/footers. |
 
+## Selectors
+
+CSS selectors recognized by Folio's stylesheet parser. Selectors not
+listed here are silently dropped at parse time — the rule's declarations
+never apply to any element.
+
+### Combinators
+
+| Combinator | Example | Meaning |
+|---|---|---|
+| descendant (space) | `article p` | `p` anywhere inside `article`. |
+| `>` | `ul > li` | Direct child only. |
+| `+` | `h2 + p` | Immediately-following sibling. |
+| `~` | `h2 ~ p` | Any later sibling. |
+
+### Simple selectors
+
+| Selector | Example | Notes |
+|---|---|---|
+| Type | `p`, `h1` | Element name match. |
+| Class | `.note` | Matches elements whose `class` attribute contains the name. Multiple classes can be chained: `.note.warning`. |
+| ID | `#title` | Matches the element with the given `id`. |
+| Universal | `*` | Matches every element. |
+| Attribute | `[lang]`, `[lang="en"]` | See attribute operators below. |
+
+Selectors compose: `article.featured > p.lead` matches a `p` with class `lead` that is a direct child of an `article` with class `featured`.
+
+### Attribute operators
+
+| Operator | Example | Matches when... |
+|---|---|---|
+| presence | `[hidden]` | Attribute is present (any value, including empty). |
+| `=` | `[type="submit"]` | Attribute value equals the operand exactly. |
+| `^=` | `[href^="https://"]` | Value starts with the operand. |
+| `$=` | `[src$=".pdf"]` | Value ends with the operand. |
+| `*=` | `[class*="btn"]` | Value contains the operand as a substring. |
+| `~=` | `[rel~="author"]` | Value, treated as a whitespace-separated list, contains the operand as a whole word. |
+| `|=` | `[lang|="en"]` | Value equals the operand or starts with `operand-`. |
+
+Case-sensitivity flags (`[lang="EN" i]`) are not parsed.
+
+### Pseudo-classes
+
+| Pseudo-class | Notes |
+|---|---|
+| `:root` | The document root (`<html>`). |
+| `:empty` | Element with no element children and no non-empty text nodes. |
+| `:first-child` | First child of its parent. |
+| `:last-child` | Last child of its parent. |
+| `:nth-child(<expr>)` | Position match. `<expr>` accepts `odd`, `even`, an integer, or `An+B` form (e.g. `2n+1`, `3n`, `-n+3`). |
+| `:nth-last-child(<expr>)` | Same as `:nth-child` but counted from the end. |
+| `:first-of-type` | First element of its tag type among siblings. |
+| `:last-of-type` | Last element of its tag type among siblings. |
+| `:nth-of-type(<expr>)` | Position match restricted to the element's tag type. |
+| `:nth-last-of-type(<expr>)` | Same, counted from the end. |
+| `:not(<simple>)` | Negation. Argument is a single simple selector — selector lists inside `:not()` are not parsed. |
+| `:is(<list>)` | Matches if any selector in the comma-separated list matches. Specificity follows the highest-specificity argument. |
+| `:where(<list>)` | Same matching as `:is()` but contributes zero specificity. |
+
+Interaction-state pseudo-classes (`:hover`, `:focus`, `:active`, `:visited`, `:target`, `:checked`, `:disabled`) are not supported — PDFs are static.
+
+### Pseudo-elements
+
+| Pseudo-element | Notes |
+|---|---|
+| `::before` | Inserts generated content before the element. Driven by the `content` declaration. |
+| `::after` | Inserts generated content after the element. |
+| `::marker` | Styles the list marker on `<li>` elements (`color`, `font-size`, etc.). |
+| `::placeholder` | Styles the placeholder text on form fields. |
+
+The double-colon form is required — single-colon legacy forms (`:before`, `:after`) are not recognized. `::first-letter`, `::first-line`, `::selection`, `::backdrop` are not supported.
+
+## At-rules
+
+CSS at-rules recognized by Folio's stylesheet parser. Anything not listed here
+is silently dropped during parsing — there is no warning.
+
+| Rule | Selectors / context | Notes |
+|---|---|---|
+| `@font-face` | — | Declares a custom font face. Recognized descriptors: `font-family`, `src`, `font-weight`, `font-style`. The `format()` annotation in `src` is advisory; Folio inspects the URL contents to determine format (WOFF1, TTF, TTC). WOFF2 is not supported. |
+| `@page` | `:first`, `:left`, `:right`, no selector | Page-level styling: page size, margins, and nested margin boxes. Pseudo-selectors target the first page or left/right pages in a duplex flow. |
+| `@page` margin boxes | `@top-left`, `@top-center`, `@top-right`, `@bottom-left`, `@bottom-center`, `@bottom-right` | Running headers/footers, declared inside an `@page` block. Populate via static `content`, `string()`, or `counter(page)`. The four corner boxes (`@top-left-corner`, etc.) and the `@left-*` / `@right-*` boxes are not interpreted. |
+| `@supports` | `(<property>: <value>)`, `not (...)`, `and`, `or` | Feature query. Inner rules are parsed only if the condition evaluates true against Folio's actual support — useful for shipping fallbacks alongside Folio-specific styling. |
+| `@media print` | — | Treated as unconditional (PDF is a print medium). Inner rules are parsed as if at the top level. Other `@media` queries are silently discarded; see below. |
+
+### Silently ignored at-rules
+
+Listed for evaluators migrating from a browser-based renderer. None of
+these produce a warning — the rule and its body are dropped during parsing.
+
+| Rule | Why |
+|---|---|
+| `@media screen`, `@media (max-width: ...)`, etc. | Only `@media print` is interpreted; PDF output has fixed page geometry, so viewport breakpoints have no analogue. |
+| `@import` | External stylesheet imports are not followed during CSS parsing. Use `<link rel="stylesheet">` in the HTML instead — those are loaded through the asset resolver. |
+| `@keyframes`, `@-webkit-keyframes` | PDF has no animation timeline. |
+| `@counter-style` | Custom list counter styles are not parsed; only the keywords listed under `list-style-type` are recognized. |
+| `@namespace`, `@charset` | Not interpreted. |
+| `@layer`, `@scope`, `@container`, `@property` | Newer CSS spec features; not interpreted. |
+
+## Functions
+
+CSS functional values recognized by Folio's parsers, grouped by category.
+Functions not listed here pass through as opaque text and almost always
+cause the containing declaration to be discarded.
+
+### Math
+
+Accepted everywhere a `<length>` or `<percentage>` is expected.
+Folio's parser preserves these as single tokens through shorthand splitting,
+so they survive inside `margin`, `padding`, `flex`, `transform()`, etc.
+
+| Function | Notes |
+|---|---|
+| `calc()` | Supports `+`, `-`, `*`, `/` with operator precedence and nested parentheses. Mixed units (e.g. `calc(100% - 20px)`) resolve at layout time. |
+| `min()` | Comma-separated argument list. Returns the smallest resolved value. |
+| `max()` | Comma-separated argument list. Returns the largest resolved value. |
+| `clamp()` | `clamp(<min>, <preferred>, <max>)`. |
+
+Known limitations: `calc()` does not yet expand inside `rotate()`, `scale()`, `skew()`, `background-position`, or `linear-gradient()` color stops — see issues #265, #266, #274, #275.
+
+### Color
+
+Accepted everywhere a `<color>` is expected. Output is sRGB regardless of input form.
+
+| Function | Notes |
+|---|---|
+| `rgb()` | `rgb(R, G, B)` or `rgb(R G B)`. Components are 0-255 integers or 0-100% percentages. |
+| `rgba()` | `rgba(R, G, B, A)`. Alpha is 0-1 or 0-100%. |
+| `hsl()` | `hsl(H, S%, L%)`. Hue in degrees. |
+| `hsla()` | `hsla(H, S%, L%, A)`. |
+| `cmyk()` / `device-cmyk()` | `cmyk(C, M, Y, K)` with components as 0-1 or 0-100%. Folio converts to sRGB for raster compositing; the original CMYK is preserved in the PDF color space for print pipelines. |
+
+Known unsupported color functions: `oklch()`, `oklab()`, `lch()`, `lab()`, `color-mix()`, `color()` — see [Known unsupported features](#known-unsupported-features) for workarounds.
+
+### Gradients
+
+Accepted as `background-image` values.
+
+| Function | Notes |
+|---|---|
+| `linear-gradient()` | Direction (`to right`, `45deg`, etc.) plus 2+ `<color>` stops. |
+| `repeating-linear-gradient()` | Same syntax; tiles the gradient pattern. |
+| `radial-gradient()` | Shape (`circle`, `ellipse`), size, and `<color>` stops. |
+| `repeating-radial-gradient()` | Same syntax; tiles the gradient pattern. |
+
+`conic-gradient()` is not supported.
+
+### Content and counters
+
+Used in `string-set`, `bookmark-label`, `content`, and `@page` margin boxes.
+
+| Function | Notes |
+|---|---|
+| `var()` | CSS custom property reference. Supports a fallback as the second argument: `var(--c, #000)`. Resolved BEFORE per-property dispatch, so functions and gradients receive resolved values. |
+| `attr()` | Reads an HTML attribute. Used in `bookmark-label`. |
+| `content()` | Substitutes the element's text content. Used in `string-set` and `bookmark-label`. |
+| `counter()` | `counter(<name>)` or `counter(<name>, <list-style>)`. Page counter `counter(page)` is supported in `@page` margin boxes. |
+| `counters()` | `counters(<name>, <separator>)` for nested counter chains. |
+| `string()` | Reads the latest value of a named string set via `string-set` (used in running headers). |
+
+Known unsupported: `target-counter()` for cross-references — tracked as #222.
+
+### Transform
+
+Used in `transform`. Multiple functions compose in the listed order.
+
+| Function | Notes |
+|---|---|
+| `translate()` | `translate(<tx>)` or `translate(<tx>, <ty>)`. Lengths in any supported unit; bare numbers treated as px. |
+| `translateX()` | Single `<length>` argument. |
+| `translateY()` | Single `<length>` argument. |
+| `rotate()` | Single `<angle>`: `deg`, `rad`, `grad`, `turn`, or bare number (degrees). |
+| `scale()` | `scale(<s>)` (uniform) or `scale(<sx>, <sy>)`. |
+| `scaleX()` | Single `<number>` argument. |
+| `scaleY()` | Single `<number>` argument. |
+| `skew()` | `skew(<ax>)` or `skew(<ax>, <ay>)`. |
+| `skewX()` | Single `<angle>` argument. |
+| `skewY()` | Single `<angle>` argument. |
+
+Known unsupported: `matrix()`, `matrix3d()`, `translate3d()`, `rotate3d()`, `scale3d()`, `perspective()` — Folio renders 2D only.
+
+### Other
+
+| Function | Notes |
+|---|---|
+| `url()` | Used in `background-image`, `@font-face` `src`, and asset references. Resolves through Folio's asset loader (BaseFS or HTTP via Client, subject to `Options.URLPolicy`). |
+
 ## Known unsupported features
 
 These properties / values are commonly requested but NOT recognized by Folio.
@@ -303,7 +490,6 @@ would have applied in a browser.
 | `filter`, `backdrop-filter`, `mix-blend-mode` | PDF lacks an analogue for screen-compositing. | Pre-bake effects into images. |
 | `:hover`, `:focus`, `:active` | PDF has no interaction state. | Style the static state directly. |
 | Custom HTML elements / Web Components | Folio's HTML parser handles a fixed element set. | Pre-render to a known element (`<div>` / `<span>`) before passing to Folio. |
-| `@media` queries | PDF output has fixed page geometry. | Use `@page` rules for page-size-specific styling. |
 | `position: sticky` | Has no analogue in paginated layout. | Use `@page` running headers/footers via margin boxes. |
 | ICC profiles for color management | Folio is sRGB-only. | Use sRGB-correct hex values; convert assets to sRGB before embedding. |
 

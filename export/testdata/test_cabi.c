@@ -1733,6 +1733,78 @@ int main(void) {
     ASSERT(rc != 0, "columns_set_balanced rejects bad handle");
     folio_columns_free(cBal);
 
+    /* Paragraph measurement and split (v0.8.0) */
+    uint64_t pMeasure = folio_paragraph_new(
+        "The quick brown fox jumps over the lazy dog. "
+        "The quick brown fox jumps over the lazy dog. "
+        "The quick brown fox jumps over the lazy dog. "
+        "The quick brown fox jumps over the lazy dog.",
+        helvDir, 12.0);
+    ASSERT(pMeasure != 0, "paragraph_new for measure/split tests");
+
+    int32_t lines = folio_paragraph_measure_lines(pMeasure, 200.0);
+    ASSERT(lines > 1, "paragraph_measure_lines returns >1 for narrow width");
+    int32_t linesWide = folio_paragraph_measure_lines(pMeasure, 800.0);
+    ASSERT(linesWide >= 1 && linesWide <= lines,
+           "paragraph_measure_lines returns fewer lines at wider width");
+    int32_t linesBad = folio_paragraph_measure_lines(99999, 200.0);
+    ASSERT(linesBad < 0, "paragraph_measure_lines rejects bad handle");
+
+    double height = folio_paragraph_measure_height(pMeasure, 200.0);
+    ASSERT(height > 0.0, "paragraph_measure_height returns positive height");
+    double heightBad = folio_paragraph_measure_height(99999, 200.0);
+    ASSERT(heightBad < 0.0, "paragraph_measure_height rejects bad handle");
+
+    /* Split after line 2: head should have 2 lines, tail should have rest */
+    uint64_t splitHead = 0, splitTail = 0;
+    rc = folio_paragraph_split_after_line(pMeasure, 2, 200.0, &splitHead, &splitTail);
+    ASSERT(rc == 0, "paragraph_split_after_line(n=2) succeeds");
+    ASSERT(splitHead != 0, "paragraph_split_after_line head handle is non-zero");
+    ASSERT(splitTail != 0, "paragraph_split_after_line tail handle is non-zero (paragraph wraps to >2 lines)");
+    int32_t headLines = folio_paragraph_measure_lines(splitHead, 200.0);
+    ASSERT(headLines == 2, "split head measures to exactly n lines");
+    int32_t tailLines = folio_paragraph_measure_lines(splitTail, 200.0);
+    ASSERT(tailLines > 0, "split tail measures to >0 lines");
+    folio_paragraph_free(splitHead);
+    folio_paragraph_free(splitTail);
+
+    /* n <= 0: head=0, tail=full clone */
+    splitHead = 999; splitTail = 999;
+    rc = folio_paragraph_split_after_line(pMeasure, 0, 200.0, &splitHead, &splitTail);
+    ASSERT(rc == 0, "paragraph_split_after_line(n=0) succeeds");
+    ASSERT(splitHead == 0, "paragraph_split_after_line(n=0) head is 0");
+    ASSERT(splitTail != 0, "paragraph_split_after_line(n=0) tail is full clone");
+    folio_paragraph_free(splitTail);
+
+    /* n >= total: head=full clone, tail=0 */
+    splitHead = 999; splitTail = 999;
+    rc = folio_paragraph_split_after_line(pMeasure, 1000, 200.0, &splitHead, &splitTail);
+    ASSERT(rc == 0, "paragraph_split_after_line(n=large) succeeds");
+    ASSERT(splitHead != 0, "paragraph_split_after_line(n=large) head is full clone");
+    ASSERT(splitTail == 0, "paragraph_split_after_line(n=large) tail is 0");
+    folio_paragraph_free(splitHead);
+
+    /* Bad handle */
+    splitHead = 999; splitTail = 999;
+    rc = folio_paragraph_split_after_line(99999, 1, 200.0, &splitHead, &splitTail);
+    ASSERT(rc != 0, "paragraph_split_after_line rejects bad handle");
+
+    /* NULL out pointer rejection */
+    rc = folio_paragraph_split_after_line(pMeasure, 1, 200.0, NULL, &splitTail);
+    ASSERT(rc != 0, "paragraph_split_after_line rejects NULL out_head");
+    rc = folio_paragraph_split_after_line(pMeasure, 1, 200.0, &splitHead, NULL);
+    ASSERT(rc != 0, "paragraph_split_after_line rejects NULL out_tail");
+
+    folio_paragraph_free(pMeasure);
+
+    /* font_parse_for_language: empty data rejected, empty lang accepted (face 0) */
+    uint64_t fontBad = folio_font_parse_for_language(NULL, 0, "ja");
+    ASSERT(fontBad == 0, "font_parse_for_language rejects NULL data");
+    /* Round-trip with a real TTF would require shipping a fixture; the
+     * Go-side tests in font/load_test.go already exercise the face-pick
+     * matrix against synthetic TTCs. Here we cover only the C-boundary
+     * argument handling. */
+
     /* Summary */
     printf("\n%d passed, %d failed\n", passes, failures);
     return failures > 0 ? 1 : 0;

@@ -159,6 +159,66 @@ func folio_paragraph_set_direction(pH C.uint64_t, dir C.int32_t) C.int32_t {
 	return errOK
 }
 
+// folio_paragraph_measure_lines reports how many wrapped lines the
+// paragraph produces at the given maxWidth (in points). Returns -1 on
+// invalid handle. Use this to make clamp/truncate decisions before
+// calling folio_paragraph_split_after_line.
+//
+//export folio_paragraph_measure_lines
+func folio_paragraph_measure_lines(pH C.uint64_t, maxWidth C.double) C.int32_t {
+	p, errCode := loadParagraph(pH)
+	if errCode != errOK {
+		return errCode
+	}
+	return C.int32_t(p.MeasureLines(float64(maxWidth)))
+}
+
+// folio_paragraph_measure_height reports the rendered height (in
+// points) of the paragraph wrapped at maxWidth. Excludes
+// SpaceBefore/SpaceAfter so callers compose with their own pagination
+// math. Returns a negative sentinel (NaN-like) on invalid handle:
+// callers should check the error via folio_last_error.
+//
+//export folio_paragraph_measure_height
+func folio_paragraph_measure_height(pH C.uint64_t, maxWidth C.double) C.double {
+	p, errCode := loadParagraph(pH)
+	if errCode != errOK {
+		return -1
+	}
+	return C.double(p.MeasureHeight(float64(maxWidth)))
+}
+
+// folio_paragraph_split_after_line splits the paragraph after the
+// first n rendered lines at maxWidth. On success, *outHead and *outTail
+// receive paragraph handles (either may be 0 for the no-op halves):
+// n <= 0 returns (0, full clone); n >= total lines returns (full clone, 0).
+// The receiver is unchanged. Returned handles must be freed via
+// folio_paragraph_free. outHead and outTail may not be NULL.
+//
+//export folio_paragraph_split_after_line
+func folio_paragraph_split_after_line(pH C.uint64_t, n C.int32_t, maxWidth C.double, outHead, outTail *C.uint64_t) C.int32_t {
+	if outHead == nil || outTail == nil {
+		setLastError("outHead and outTail must be non-NULL")
+		return errInvalidHandle
+	}
+	p, errCode := loadParagraph(pH)
+	if errCode != errOK {
+		return errCode
+	}
+	head, tail := p.SplitAfterLine(int(n), float64(maxWidth))
+	if head != nil {
+		*outHead = C.uint64_t(ht.store(head))
+	} else {
+		*outHead = 0
+	}
+	if tail != nil {
+		*outTail = C.uint64_t(ht.store(tail))
+	} else {
+		*outTail = 0
+	}
+	return errOK
+}
+
 // folio_paragraph_free removes a paragraph handle from the handle table.
 //
 //export folio_paragraph_free

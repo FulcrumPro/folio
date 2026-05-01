@@ -4,9 +4,10 @@
 // Package font handles font loading, parsing, subsetting, and PDF embedding.
 //
 // It supports the 14 standard PDF fonts (which require no embedding),
-// TrueType/OpenType fonts parsed via golang.org/x/image/font/sfnt,
-// and WOFF1 web fonts decoded to TTF. Embedded fonts are subset to
-// include only the glyphs actually used, reducing file size.
+// TrueType/OpenType fonts parsed in-tree (head, hhea, maxp, hmtx,
+// OS/2, name, cmap), and WOFF1 web fonts decoded to TTF. Embedded
+// fonts are subset to include only the glyphs actually used, reducing
+// file size.
 //
 // Text measurement and kerning are available for both standard and
 // embedded fonts through the [TextMeasurer] interface and the Kern

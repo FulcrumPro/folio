@@ -18,9 +18,11 @@ package font
 // data needed to embed a font in a PDF: glyph metrics, character
 // mapping, and the raw font bytes.
 //
-// The current implementation uses golang.org/x/image/font/sfnt under
-// the hood, but this interface is designed so we can replace sfnt
-// with our own parser later without changing any calling code.
+// The metric path is implemented in-tree (head, hhea, maxp, hmtx,
+// OS/2, name, cmap). GSUB/GPOS/kern/post are parsed lazily by their
+// respective callers from the raw table directory. The interface
+// remains small so a future replacement parser can swap in without
+// breaking callers.
 type Face interface {
 	// PostScriptName returns the font's PostScript name (used as /BaseFont).
 	PostScriptName() string

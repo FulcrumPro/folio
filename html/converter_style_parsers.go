@@ -161,7 +161,9 @@ func parseTransformOrigin(val string, width, height, fontSize float64) (float64,
 		return width / 2, height / 2
 	}
 
-	parts := strings.Fields(val)
+	// splitTopLevelFields keeps calc()/min()/max()/clamp() values as a
+	// single token even when they contain internal whitespace.
+	parts := splitTopLevelFields(val)
 	if len(parts) == 1 {
 		// Single value: applies to X, Y defaults to center.
 		x := resolveOriginComponent(parts[0], width, fontSize)

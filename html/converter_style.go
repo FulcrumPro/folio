@@ -441,8 +441,12 @@ func (c *converter) applyProperty(prop, val string, style *computedStyle) {
 	case "margin":
 		style.MarginTop, style.MarginRight, style.MarginBottom, style.MarginLeft =
 			parseMarginShorthand(val, style.FontSize)
-		// Detect auto keywords in margin shorthand.
-		parts := strings.Fields(val)
+		// Detect auto keywords in margin shorthand. Use the same paren-
+		// aware tokenizer as parseMarginShorthand (#237) so calc()/min()/
+		// max()/clamp() values survive as single tokens — otherwise the
+		// auto-flag positions could shift with respect to the parsed
+		// margin values, since "auto" cannot legally appear inside calc.
+		parts := splitTopLevelFields(val)
 		autoFlags := make([]bool, len(parts))
 		for i, p := range parts {
 			autoFlags[i] = strings.ToLower(p) == "auto"

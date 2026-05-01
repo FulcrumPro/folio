@@ -1,6 +1,6 @@
 # Folio CSS support
 
-> Auto-generated from `html/css_props.go`. Do not edit by hand.
+> Auto-generated from `html/css_props.go` and `html/css.go`. Do not edit by hand.
 > Run `go generate ./html/...` to regenerate after changing the registry.
 
 Folio's HTML-to-PDF converter recognizes the CSS properties listed below.
@@ -287,6 +287,33 @@ also takes effect on flex containers as the gap between items.
 | `counter-reset` | — | `<identifier> [<integer>]+` | — |
 | `string-set` | — | `<identifier> <content-list>` | Used by @page margin boxes for running headers/footers. |
 
+## At-rules
+
+CSS at-rules recognized by Folio's stylesheet parser. Anything not listed here
+is silently dropped during parsing — there is no warning.
+
+| Rule | Selectors / context | Notes |
+|---|---|---|
+| `@font-face` | — | Declares a custom font face. Recognized descriptors: `font-family`, `src`, `font-weight`, `font-style`. The `format()` annotation in `src` is advisory; Folio inspects the URL contents to determine format (WOFF1, TTF, TTC). WOFF2 is not supported. |
+| `@page` | `:first`, `:left`, `:right`, no selector | Page-level styling: page size, margins, and nested margin boxes. Pseudo-selectors target the first page or left/right pages in a duplex flow. |
+| `@page` margin boxes | `@top-left`, `@top-center`, `@top-right`, `@bottom-left`, `@bottom-center`, `@bottom-right` | Running headers/footers, declared inside an `@page` block. Populate via static `content`, `string()`, or `counter(page)`. The four corner boxes (`@top-left-corner`, etc.) and the `@left-*` / `@right-*` boxes are not interpreted. |
+| `@supports` | `(<property>: <value>)`, `not (...)`, `and`, `or` | Feature query. Inner rules are parsed only if the condition evaluates true against Folio's actual support — useful for shipping fallbacks alongside Folio-specific styling. |
+| `@media print` | — | Treated as unconditional (PDF is a print medium). Inner rules are parsed as if at the top level. Other `@media` queries are silently discarded; see below. |
+
+### Silently ignored at-rules
+
+Listed for evaluators migrating from a browser-based renderer. None of
+these produce a warning — the rule and its body are dropped during parsing.
+
+| Rule | Why |
+|---|---|
+| `@media screen`, `@media (max-width: ...)`, etc. | Only `@media print` is interpreted; PDF output has fixed page geometry, so viewport breakpoints have no analogue. |
+| `@import` | External stylesheet imports are not followed during CSS parsing. Use `<link rel="stylesheet">` in the HTML instead — those are loaded through the asset resolver. |
+| `@keyframes`, `@-webkit-keyframes` | PDF has no animation timeline. |
+| `@counter-style` | Custom list counter styles are not parsed; only the keywords listed under `list-style-type` are recognized. |
+| `@namespace`, `@charset` | Not interpreted. |
+| `@layer`, `@scope`, `@container`, `@property` | Newer CSS spec features; not interpreted. |
+
 ## Known unsupported features
 
 These properties / values are commonly requested but NOT recognized by Folio.
@@ -303,7 +330,6 @@ would have applied in a browser.
 | `filter`, `backdrop-filter`, `mix-blend-mode` | PDF lacks an analogue for screen-compositing. | Pre-bake effects into images. |
 | `:hover`, `:focus`, `:active` | PDF has no interaction state. | Style the static state directly. |
 | Custom HTML elements / Web Components | Folio's HTML parser handles a fixed element set. | Pre-render to a known element (`<div>` / `<span>`) before passing to Folio. |
-| `@media` queries | PDF output has fixed page geometry. | Use `@page` rules for page-size-specific styling. |
 | `position: sticky` | Has no analogue in paginated layout. | Use `@page` running headers/footers via margin boxes. |
 | ICC profiles for color management | Folio is sRGB-only. | Use sRGB-correct hex values; convert assets to sRGB before embedding. |
 

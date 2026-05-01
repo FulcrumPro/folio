@@ -1047,3 +1047,60 @@ func TestCSSPropertyParitySnapshot(t *testing.T) {
 		})
 	}
 }
+
+// TestAtRulesDocCoverage parses html/css.go and asserts that every
+// at-rule literal recognized by parseCSS appears as a code-fenced
+// reference in the rendered CSS_SUPPORT.md. The At-rules section is
+// hand-written (no parallel registry — see css_props_doc.go), so this
+// test is the drift guard: if a future contributor wires up a new
+// at-rule in parseCSS without documenting it, the test fails.
+//
+// Margin-box names (top-center, etc.) are NOT prefixed with "@" in
+// extractMarginBoxes — they're parsed as bare identifiers — so they're
+// not auto-discovered and must be hand-listed in the doc.
+func TestAtRulesDocCoverage(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "css.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse css.go: %v", err)
+	}
+
+	doc := RenderCSSPropertiesMarkdown()
+
+	seen := map[string]bool{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		lit, ok := n.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		val := lit.Value
+		if len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"' {
+			val = val[1 : len(val)-1]
+		}
+		if !strings.HasPrefix(val, "@") {
+			return true
+		}
+		// Normalize "@page ", "@page:", "@page" → "@page". Take the
+		// at-rule keyword up to the first space or ':'.
+		name := val
+		for i, c := range name {
+			if c == ' ' || c == ':' {
+				name = name[:i]
+				break
+			}
+		}
+		// Filter out empty "@" or anything that doesn't look like an
+		// at-rule keyword.
+		if len(name) < 2 {
+			return true
+		}
+		seen[name] = true
+		return true
+	})
+
+	for name := range seen {
+		if !strings.Contains(doc, "`"+name+"`") {
+			t.Errorf("at-rule %q is referenced in html/css.go but not documented in CSS_SUPPORT.md — add it to the At-rules section in html/css_props_doc.go", name)
+		}
+	}
+}

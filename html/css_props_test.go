@@ -275,6 +275,39 @@ func TestCSSPropertyDispatchInApplyProperty(t *testing.T) {
 	})
 }
 
+// TestCSSPropertyMetadataComplete is a hygiene guard: every entry in
+// cssProperties must have non-empty Name, Apply, Category, and Values
+// fields. Notes is optional. The generated docs/CSS_SUPPORT.md depends
+// on these fields being populated; an entry that ships with empty
+// Values would produce an "—" cell in the doc, hiding the property's
+// real accepted-values surface from readers.
+//
+// This test catches the case where a contributor adds a new property
+// to the registry but forgets the documentation fields.
+func TestCSSPropertyMetadataComplete(t *testing.T) {
+	for _, p := range cssProperties {
+		if p.Name == "" {
+			t.Errorf("cssProperty entry has empty Name: %+v", p)
+			continue
+		}
+		if p.Apply == nil {
+			t.Errorf("%q: Apply is nil", p.Name)
+		}
+		if p.Category == "" {
+			t.Errorf("%q: Category is empty", p.Name)
+		}
+		if len(p.Values) == 0 {
+			t.Errorf("%q: Values is empty (every property needs at least one accepted value form for the generated doc)", p.Name)
+		}
+		// Notes are rendered into a markdown table cell. An unescaped
+		// `|` would break the table; escape with `\|` if a pipe is
+		// truly needed in the prose (none of the current entries do).
+		if strings.ContainsRune(p.Notes, '|') {
+			t.Errorf("%q: Notes contains an unescaped `|` which would break the markdown table; use `\\|`", p.Name)
+		}
+	}
+}
+
 // TestCSSPropertyAliasIndexing verifies the cssPropByName map handles
 // the (currently zero) aliases correctly. Forward-protective: if an
 // alias is added later, this test forces an explicit assertion.

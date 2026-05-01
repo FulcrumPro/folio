@@ -321,6 +321,7 @@ uint64_t folio_font_zapf_dingbats(void);
 
 uint64_t folio_font_load_ttf(const char *path);
 uint64_t folio_font_parse_ttf(const void *data, int32_t length);
+uint64_t folio_font_parse_for_language(const void *data, int32_t length, const char *lang);
 void     folio_font_free(uint64_t font);
 
 /* ── Paragraph ─────────────────────────────────────────────────────── */
@@ -344,6 +345,10 @@ int32_t  folio_paragraph_set_hyphens(uint64_t para, const char *mode);
 int32_t  folio_paragraph_set_text_align_last(uint64_t para, int32_t align);
 
 int32_t  folio_paragraph_add_run(uint64_t para, const char *text, uint64_t font, double font_size, double r, double g, double b);
+
+int32_t  folio_paragraph_measure_lines(uint64_t para, double max_width);
+double   folio_paragraph_measure_height(uint64_t para, double max_width);
+int32_t  folio_paragraph_split_after_line(uint64_t para, int32_t n, double max_width, uint64_t *out_head, uint64_t *out_tail);
 
 /* ── Heading ───────────────────────────────────────────────────────── */
 

@@ -176,6 +176,34 @@ func folio_font_parse_ttf(data unsafe.Pointer, length C.int32_t) C.uint64_t {
 	return C.uint64_t(ht.store(ef))
 }
 
+// folio_font_parse_for_language parses a font (TTF or TTC) from
+// in-memory bytes and selects a face by BCP-47 language tag. For TTC
+// inputs, picks the face whose family name best matches the requested
+// language: "zh-CN"/"zh-Hans" → SC, "zh-TW"/"zh-Hant" → TC, "ja" → JP,
+// "ko" → KR. Empty or unrecognised lang falls back to face 0
+// (matching folio_font_parse_ttf). For non-TTC fonts the lang argument
+// is ignored.
+//
+//export folio_font_parse_for_language
+func folio_font_parse_for_language(data unsafe.Pointer, length C.int32_t, lang *C.char) C.uint64_t {
+	if data == nil || length <= 0 {
+		setLastError("invalid font data")
+		return 0
+	}
+	goData := C.GoBytes(data, C.int(length))
+	goLang := ""
+	if lang != nil {
+		goLang = C.GoString(lang)
+	}
+	face, err := font.ParseFontForLanguage(goData, goLang)
+	if err != nil {
+		setLastError(err.Error())
+		return 0
+	}
+	ef := font.NewEmbeddedFont(face)
+	return C.uint64_t(ht.store(ef))
+}
+
 // folio_font_free releases an embedded font handle. Standard fonts are singletons and are not freed.
 //
 //export folio_font_free

@@ -994,6 +994,92 @@ func (p *Paragraph) MeasureHeight(maxWidth float64) float64 {
 	return total
 }
 
+// SplitAfterLine wraps the paragraph at maxWidth and splits it after
+// the first n rendered lines. Returns:
+//   - head: a paragraph containing the first min(n, total) lines.
+//   - tail: a paragraph containing the remaining lines, or nil if no
+//     overflow (n >= total).
+//
+// If n <= 0, head is nil and tail is the entire paragraph.
+//
+// Both returned paragraphs are clones — the receiver is unchanged.
+// Styling (fonts, colors, links, decorations, inline elements, shaped
+// scripts) is preserved across the split via the same word-grouping
+// rules used for page-break splits.
+//
+// Spacing ownership: SpaceBefore stays with head only (the tail picks
+// up where the head left off mid-paragraph; spaceBefore would double).
+// SpaceAfter stays with tail only (symmetric reason). FirstLineIndent
+// is dropped from both halves — re-laying the head at a different
+// width re-applies indent to its first line, and the tail by definition
+// is not the start of a paragraph.
+//
+// Safe to call concurrently with other read methods on the receiver.
+//
+// Re-laying the returned head/tail at a different maxWidth than the
+// split is supported but may change line counts (the words are real
+// — not pre-wrapped). Callers that want stable line counts should
+// re-lay at the same width they passed to SplitAfterLine.
+func (p *Paragraph) SplitAfterLine(n int, maxWidth float64) (head, tail *Paragraph) {
+	lines := p.Layout(maxWidth)
+	if n <= 0 {
+		// Tail is the entire paragraph — preserves both spacings,
+		// since cloneWithWords already propagates spaceAfter and we
+		// restore spaceBefore explicitly here.
+		t := p.cloneWithWords(flattenLineWords(lines))
+		t.spaceBefore = p.spaceBefore
+		return nil, t
+	}
+	if n >= len(lines) {
+		// Head is the entire paragraph — preserve both spacings.
+		h := p.cloneWithWords(flattenLineWords(lines))
+		h.spaceBefore = p.spaceBefore
+		return h, nil
+	}
+
+	headWords := flattenLineWords(lines[:n])
+	tailWords := flattenLineWords(lines[n:])
+
+	head = p.cloneWithWords(headWords)
+	tail = p.cloneWithWords(tailWords)
+
+	// cloneWithWords does not propagate spaceBefore (it's used for
+	// page-split tails where spaceBefore is unwanted). For SplitAfterLine
+	// the head IS the same paragraph just with fewer lines, so propagate
+	// it explicitly. SpaceAfter belongs to tail; SpaceBefore belongs to
+	// head — never both.
+	head.spaceBefore = p.spaceBefore
+	head.spaceAfter = 0
+	tail.spaceBefore = 0
+	return head, tail
+}
+
+// flattenLineWords concatenates words across lines, marking the first
+// word of every line after the first with LineBreak=true so cloneWithWords
+// reconstructs explicit \n separators. This preserves the wrap exactly
+// as Layout produced it, even after a round-trip through cloneWithWords.
+//
+// Word fields (including pointer fields like *Color and *TextShadow)
+// are copied by value here; the cloned paragraph shares those pointers
+// with the source. Standard Go semantics — caller mutation of the
+// shared color/shadow would affect both halves.
+func flattenLineWords(lines []Line) []Word {
+	total := 0
+	for _, line := range lines {
+		total += len(line.Words)
+	}
+	words := make([]Word, 0, total)
+	for i, line := range lines {
+		for j, w := range line.Words {
+			if i > 0 && j == 0 {
+				w.LineBreak = true
+			}
+			words = append(words, w)
+		}
+	}
+	return words
+}
+
 // splitWords splits text into words, preserving \n as a lineBreakMarker
 // sentinel that forces a line break during word-wrapping. CJK character
 // splitting is NOT done here; it happens in breakCJKWords after word
@@ -1625,7 +1711,13 @@ func (p *Paragraph) cloneWithWords(words []Word) *Paragraph {
 			// Blank words (from consecutive \n\n) represent empty lines.
 			// Serialize as "\n" so splitWords regenerates lineBreakMarkers.
 			// Blank words have no visible text so style doesn't matter.
-			if w.Text == "" && w.LineBreak {
+			//
+			// Exclude inline elements: they also have Text="" but they
+			// are NOT blank-line markers. SplitAtLine's flattenLineWords
+			// sets LineBreak=true on the first word of every line after
+			// the first, which can land on an inline element — without
+			// this guard the inline would be silently dropped.
+			if w.Text == "" && w.LineBreak && w.InlineBlock == nil {
 				cur.Text += "\n"
 				// A blank line resets the join state — whatever
 				// follows starts a fresh visual line and should not

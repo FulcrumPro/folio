@@ -778,7 +778,9 @@ func (c *converter) applyProperty(prop, val string, style *computedStyle) {
 			style.FontFamily = ff
 		}
 	case "border-radius":
-		parts := strings.Fields(val)
+		// splitTopLevelFields keeps calc()/min()/max()/clamp() values as
+		// a single token even when they contain internal whitespace.
+		parts := splitTopLevelFields(val)
 		switch len(parts) {
 		case 1:
 			if l := parseLength(parts[0]); l != nil {

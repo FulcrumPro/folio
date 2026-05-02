@@ -245,13 +245,16 @@ type TextShadow struct {
 	Color   Color   // shadow color
 }
 
-// TextDecoration specifies text decoration (underline, strikethrough).
+// TextDecoration is a bitset of CSS text-decoration-line values.
+// Multiple decorations can apply to the same run simultaneously
+// (`text-decoration: underline overline`).
 type TextDecoration int
 
 const (
 	DecorationNone          TextDecoration = 0
 	DecorationUnderline     TextDecoration = 1 << 0
 	DecorationStrikethrough TextDecoration = 1 << 1
+	DecorationOverline      TextDecoration = 1 << 2
 )
 
 // Line is a single horizontal line produced by layout.

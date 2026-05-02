@@ -754,12 +754,20 @@ func resolveDirectionRelativeAlign(keyword string, fallback layout.Align, dir la
 	}
 }
 
-// parseTextDecoration parses CSS text-decoration into layout.TextDecoration.
+// parseTextDecoration parses CSS text-decoration (the
+// text-decoration-line subproperty in CSS Text Decoration L4) into
+// layout.TextDecoration. Multiple keywords combine — `underline
+// overline` produces a bitset with both flags set. The `blink`
+// keyword is recognised as a no-op (PDFs are static); `none`
+// returns DecorationNone.
 func parseTextDecoration(value string) layout.TextDecoration {
 	value = strings.TrimSpace(strings.ToLower(value))
 	var dec layout.TextDecoration
 	if strings.Contains(value, "underline") {
 		dec |= layout.DecorationUnderline
+	}
+	if strings.Contains(value, "overline") {
+		dec |= layout.DecorationOverline
 	}
 	if strings.Contains(value, "line-through") {
 		dec |= layout.DecorationStrikethrough

@@ -648,9 +648,11 @@ func drawWordEmbeddedWithMarks(stream *content.Stream, word Word) {
 	}
 }
 
-// drawDecorations draws underline and/or strikethrough for a word.
-// Supports DecorationColor (separate from text color) and DecorationStyle
-// ("solid", "dashed", "dotted", "double", "wavy").
+// drawDecorations draws underline, strikethrough, and/or overline for
+// a word. Multiple decorations on the same run are emitted in
+// underline → strikethrough → overline order. Supports DecorationColor
+// (separate from text color) and DecorationStyle ("solid", "dashed",
+// "dotted", "double", "wavy").
 func drawDecorations(stream *content.Stream, word Word, x, baselineY float64) {
 	stream.SaveState()
 
@@ -718,6 +720,36 @@ func drawDecorations(stream *content.Stream, word Word, x, baselineY float64) {
 		default:
 			stream.MoveTo(x, sy)
 			stream.LineTo(x+word.Width, sy)
+			stream.Stroke()
+		}
+	}
+	if word.Decoration&DecorationOverline != 0 {
+		// Overline position: just inside the cap height so the stroke
+		// stays within the line box. Mirrors the underline branch with
+		// the offset taken from the ascent rather than the descent.
+		// CSS Text Decoration L4 §3.1 places overline "above the
+		// element's text content"; user agents pick a position inside
+		// the em box. Using ascent * 0.95 keeps the line visible and
+		// avoids clipping at very tight leading.
+		var oy float64
+		if word.Font != nil {
+			oy = baselineY + word.Font.Ascent(word.FontSize)*0.95
+		} else {
+			oy = baselineY + word.FontSize*0.75
+		}
+		switch word.DecorationStyle {
+		case "double":
+			stream.MoveTo(x, oy)
+			stream.LineTo(x+word.Width, oy)
+			stream.Stroke()
+			stream.MoveTo(x, oy+lw*2)
+			stream.LineTo(x+word.Width, oy+lw*2)
+			stream.Stroke()
+		case "wavy":
+			drawWavyLine(stream, x, oy, word.Width, lw)
+		default:
+			stream.MoveTo(x, oy)
+			stream.LineTo(x+word.Width, oy)
 			stream.Stroke()
 		}
 	}

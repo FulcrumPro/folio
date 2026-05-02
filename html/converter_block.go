@@ -429,18 +429,39 @@ func (c *converter) buildColumnsSegment(children []layout.Element, style compute
 	return cols
 }
 
+// borderSide identifies which side of a four-sided border is being
+// rendered. Used by buildBorderForSide to pick the light vs dark
+// color modulation for the 3D bevel styles (groove/ridge/inset/outset).
+type borderSide int
+
+const (
+	borderTop borderSide = iota
+	borderRight
+	borderBottom
+	borderLeft
+)
+
 // buildCellBorders creates layout.CellBorders from a computed style.
 func buildCellBorders(style computedStyle) layout.CellBorders {
 	return layout.CellBorders{
-		Top:    buildBorder(style.BorderTopWidth, style.BorderTopStyle, style.BorderTopColor),
-		Right:  buildBorder(style.BorderRightWidth, style.BorderRightStyle, style.BorderRightColor),
-		Bottom: buildBorder(style.BorderBottomWidth, style.BorderBottomStyle, style.BorderBottomColor),
-		Left:   buildBorder(style.BorderLeftWidth, style.BorderLeftStyle, style.BorderLeftColor),
+		Top:    buildBorderForSide(borderTop, style.BorderTopWidth, style.BorderTopStyle, style.BorderTopColor),
+		Right:  buildBorderForSide(borderRight, style.BorderRightWidth, style.BorderRightStyle, style.BorderRightColor),
+		Bottom: buildBorderForSide(borderBottom, style.BorderBottomWidth, style.BorderBottomStyle, style.BorderBottomColor),
+		Left:   buildBorderForSide(borderLeft, style.BorderLeftWidth, style.BorderLeftStyle, style.BorderLeftColor),
 	}
 }
 
-// buildBorder creates a single layout.Border from width, style, and color.
-func buildBorder(width float64, style string, color layout.Color) layout.Border {
+// buildBorderForSide creates a single layout.Border from width, style,
+// and color, with side awareness for the CSS Backgrounds L3 §4.1 3D
+// border styles (groove / ridge / inset / outset). Those styles
+// modulate the border color per-side to simulate a beveled or carved
+// edge — top/left vs bottom/right get opposite modulation. Folio
+// approximates each as a single solid stroke in the modulated color
+// (rather than the spec's strict two-half-width split-line bevel) —
+// this matches what most PDF and browser-print pipelines do, and is
+// visually indistinguishable for thin borders. For wider borders the
+// bevel is less pronounced than a real browser would draw.
+func buildBorderForSide(side borderSide, width float64, style string, color layout.Color) layout.Border {
 	if width <= 0 {
 		return layout.Border{}
 	}
@@ -451,9 +472,79 @@ func buildBorder(width float64, style string, color layout.Color) layout.Border 
 		return layout.DottedBorder(width, color)
 	case "double":
 		return layout.DoubleBorder(width, color)
+	case "groove", "inset":
+		return layout.SolidBorder(width, beveledColor(side, color, true))
+	case "ridge", "outset":
+		return layout.SolidBorder(width, beveledColor(side, color, false))
 	default:
 		return layout.SolidBorder(width, color)
 	}
+}
+
+// beveledColor picks the per-side color for a 3D border style.
+//
+// The `sunken` flag distinguishes the carved-into-surface look
+// (groove / inset) from the raised look (ridge / outset). Per CSS
+// Backgrounds L3 §4.1:
+//
+//   - groove / inset: top + left appear dark, bottom + right appear
+//     light (light source from bottom-right).
+//   - ridge / outset: top + left appear light, bottom + right appear
+//     dark (light source from top-left).
+//
+// Modulation is a fixed 30% lighten / darken from the source color in
+// linear sRGB; close enough to the spec's "based on the foreground
+// color" guidance and matches the visual weight of typical legacy
+// CSS that uses these styles.
+func beveledColor(side borderSide, base layout.Color, sunken bool) layout.Color {
+	topLeft := sunken
+	if side == borderTop || side == borderLeft {
+		if topLeft {
+			return darkenColor(base)
+		}
+		return lightenColor(base)
+	}
+	if topLeft {
+		return lightenColor(base)
+	}
+	return darkenColor(base)
+}
+
+// lightenColor returns the source color shifted toward white by 30%.
+// Operates in sRGB space (not linear) — adequate for UI bevels
+// where strict colorimetric correctness isn't expected.
+func lightenColor(c layout.Color) layout.Color {
+	if c.Space == layout.ColorSpaceCMYK {
+		// Approximate by reducing K (lightness inverse) by 30%.
+		return layout.CMYK(c.C, c.M, c.Y, clamp01(c.K*0.7))
+	}
+	return layout.RGB(
+		clamp01(c.R+(1-c.R)*0.3),
+		clamp01(c.G+(1-c.G)*0.3),
+		clamp01(c.B+(1-c.B)*0.3),
+	)
+}
+
+// darkenColor returns the source color shifted toward black by 30%.
+func darkenColor(c layout.Color) layout.Color {
+	if c.Space == layout.ColorSpaceCMYK {
+		return layout.CMYK(c.C, c.M, c.Y, clamp01(c.K+(1-c.K)*0.3))
+	}
+	return layout.RGB(
+		clamp01(c.R*0.7),
+		clamp01(c.G*0.7),
+		clamp01(c.B*0.7),
+	)
+}
+
+func clamp01(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
 }
 
 // convertBlockquote renders a <blockquote> as an indented block with a left border.

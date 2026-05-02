@@ -210,20 +210,34 @@ func drawTextLine(ctx DrawContext, words []Word, x, baselineY, maxWidth float64,
 
 		if word.Decoration != DecorationNone {
 			decoWord := word
-			// Extend the decoration through the trailing space when the next
-			// word carries the same decoration and belongs to the same visual
-			// phrase (same LinkURI and decoration color). This produces a
-			// continuous underline for multi-word links while keeping a gap
-			// between adjacent links with different URIs.
+			// Extend the decoration through the trailing space when the
+			// next word carries the same decoration and belongs to the
+			// same visual phrase (same LinkURI and decoration color).
+			// This produces a continuous underline for multi-word links
+			// while keeping a gap between adjacent links with different
+			// URIs.
+			//
+			// When the two words share SOME but not ALL decoration
+			// flags, only the shared subset extends. Without the mask,
+			// "underline overline" followed by "underline" would extend
+			// the overline through the trailing space too — drawing it
+			// past the run that doesn't carry overline.
 			if i < len(words)-1 {
 				next := words[i+1]
-				sameDecoration := next.Decoration&word.Decoration != 0
+				sharedDecoration := next.Decoration & word.Decoration
 				sameLink := word.LinkURI == next.LinkURI
 				sameColor := word.Color == next.Color
 				if word.DecorationColor != nil && next.DecorationColor != nil {
 					sameColor = *word.DecorationColor == *next.DecorationColor
 				}
-				if sameDecoration && sameLink && sameColor {
+				if sharedDecoration != 0 && sameLink && sameColor {
+					// Draw the per-word portion (full decoration set) at
+					// natural width first, then draw the shared subset
+					// extended through the trailing space.
+					if sharedDecoration != word.Decoration {
+						drawDecorations(ctx.Stream, word, curX, baselineY)
+						decoWord.Decoration = sharedDecoration
+					}
 					decoWord.Width = advance
 				}
 			}
@@ -648,9 +662,11 @@ func drawWordEmbeddedWithMarks(stream *content.Stream, word Word) {
 	}
 }
 
-// drawDecorations draws underline and/or strikethrough for a word.
-// Supports DecorationColor (separate from text color) and DecorationStyle
-// ("solid", "dashed", "dotted", "double", "wavy").
+// drawDecorations draws underline, strikethrough, and/or overline for
+// a word. Multiple decorations on the same run are emitted in
+// underline → strikethrough → overline order. Supports DecorationColor
+// (separate from text color) and DecorationStyle ("solid", "dashed",
+// "dotted", "double", "wavy").
 func drawDecorations(stream *content.Stream, word Word, x, baselineY float64) {
 	stream.SaveState()
 
@@ -718,6 +734,41 @@ func drawDecorations(stream *content.Stream, word Word, x, baselineY float64) {
 		default:
 			stream.MoveTo(x, sy)
 			stream.LineTo(x+word.Width, sy)
+			stream.Stroke()
+		}
+	}
+	if word.Decoration&DecorationOverline != 0 {
+		// Overline position: just inside the cap height so the stroke
+		// stays within the line box. CSS Text Decoration L4 §3.1
+		// places overline "above the element's text content"; user
+		// agents pick a position inside the em box. Using ascent *
+		// 0.95 keeps the line visible and avoids clipping at typical
+		// leading. For `double`, the secondary stroke is offset
+		// DOWNWARD (toward the text) rather than upward — going up
+		// would push it outside the line box at tight leading
+		// (`line-height: 1` puts the box top at +ascent, leaving no
+		// room for `oy + lw*2`). The two-stroke gap reads correctly
+		// either way; downward keeps both strokes within the cap
+		// region.
+		var oy float64
+		if word.Font != nil {
+			oy = baselineY + word.Font.Ascent(word.FontSize)*0.95
+		} else {
+			oy = baselineY + word.FontSize*0.75
+		}
+		switch word.DecorationStyle {
+		case "double":
+			stream.MoveTo(x, oy)
+			stream.LineTo(x+word.Width, oy)
+			stream.Stroke()
+			stream.MoveTo(x, oy-lw*2)
+			stream.LineTo(x+word.Width, oy-lw*2)
+			stream.Stroke()
+		case "wavy":
+			drawWavyLine(stream, x, oy, word.Width, lw)
+		default:
+			stream.MoveTo(x, oy)
+			stream.LineTo(x+word.Width, oy)
 			stream.Stroke()
 		}
 	}

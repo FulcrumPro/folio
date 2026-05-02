@@ -187,6 +187,29 @@ Review these before regression-diffing PDFs against a v0.7.x baseline:
   weights at 400/500/600/700 and writing `font-weight: 600`
   previously silently picked Inter-Regular and now correctly picks
   Inter-SemiBold (#286).
+- **`<th>` honours explicit `text-align: left` instead of silently
+  re-centering** — pre-fix, the table-cell default-center heuristic
+  gated on `cellStyle.TextAlign == AlignLeft`, so `th { text-align:
+  left }` got the explicit choice overridden because the resolved
+  alignment matched the re-center sentinel. Post-fix, the gate
+  also requires `!cellStyle.TextAlignSet`, so explicit author
+  choice (left, or `start` / `end` resolving to left under the
+  current direction) is preserved. Default `<th>` still centers.
+  Documents that wrote `th { text-align: left }` and expected the
+  silent override will see headers shift from center to left (#288).
+- **CSS `border: ... ridge|groove|inset|outset` now renders the 3D
+  bevel instead of a flat solid line** — pre-fix the four bevel
+  keywords parsed and stored on the computed style but the renderer
+  fell through to `solid`, dropping the modulation entirely. Post-fix
+  each side renders with a per-side dark/light color shift (groove/
+  inset → top+left dark, bottom+right light; ridge/outset → opposite)
+  per CSS Backgrounds L3 §4.1. Documents that used these styles will
+  see the bevel they originally intended; documents that relied on
+  the silent flatten will see colored modulation. The renderer uses
+  a single solid stroke per side with side-uniform modulation rather
+  than the strict spec's two-half-width split bevel — visually
+  indistinguishable for thin borders, less pronounced for thick
+  ones (#290).
 
 ### Asset resolution side-effects
 

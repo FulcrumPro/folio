@@ -1211,7 +1211,8 @@ var cssProperties = []cssProperty{
 	},
 	{
 		Name: "border-style", Category: "Borders",
-		Values: []string{"solid", "dashed", "dotted", "double", "none"},
+		Values: []string{"solid", "dashed", "dotted", "double", "none", "hidden", "groove", "ridge", "inset", "outset"},
+		Notes:  "groove/ridge/inset/outset are rendered as a single solid stroke per side with the spec's per-side dark/light color modulation, rather than the strict two-half-width split bevel.",
 		Apply: func(s *computedStyle, value string) {
 			s.BorderTopStyle = value
 			s.BorderRightStyle = value

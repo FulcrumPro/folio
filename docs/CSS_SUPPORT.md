@@ -161,7 +161,7 @@ also takes effect on flex containers as the gap between items.
 | `border-radius` | — | `<length>`, `<percentage>`, `<1-4 of these>` | splitTopLevelFields preserves calc()/min()/max()/clamp() as single tokens. |
 | `border-right` | — | `<line-width> <line-style> <color>` | — |
 | `border-right-width` | — | `<length>`, `thin`, `medium`, `thick` | — |
-| `border-style` | — | `solid`, `dashed`, `dotted`, `double`, `none` | — |
+| `border-style` | — | `solid`, `dashed`, `dotted`, `double`, `none`, `hidden`, `groove`, `ridge`, `inset`, `outset` | groove/ridge/inset/outset are rendered as a single solid stroke per side with the spec's per-side dark/light color modulation, rather than the strict two-half-width split bevel. |
 | `border-top` | — | `<line-width> <line-style> <color>` | — |
 | `border-top-left-radius` | — | `<length>`, `<percentage>` | — |
 | `border-top-right-radius` | — | `<length>`, `<percentage>` | — |

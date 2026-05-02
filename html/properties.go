@@ -303,7 +303,8 @@ func parseColumnRule(val string, fontSize float64) (float64, string, layout.Colo
 	color := layout.ColorBlack
 	for _, p := range parts {
 		switch p {
-		case "solid", "dashed", "dotted", "double", "none", "hidden":
+		case "solid", "dashed", "dotted", "double", "none", "hidden",
+			"groove", "ridge", "inset", "outset":
 			style = p
 		default:
 			if c, ok := parseColor(p); ok {
@@ -849,9 +850,13 @@ func parseBorderFull(value string, fontSize float64) (float64, string, layout.Co
 
 	for _, p := range parts {
 		pl := strings.ToLower(p)
-		// Check for style keywords.
+		// Check for style keywords. groove/ridge/inset/outset are
+		// per-side beveled styles handled in buildBorderForSide; the
+		// shorthand parser stores the keyword verbatim and the
+		// per-side renderer dispatches to lighten/darken modulation.
 		switch pl {
-		case "solid", "dashed", "dotted", "double", "none", "hidden":
+		case "solid", "dashed", "dotted", "double", "none", "hidden",
+			"groove", "ridge", "inset", "outset":
 			style = pl
 			continue
 		case "thin":

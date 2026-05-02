@@ -621,7 +621,7 @@ func TestCSSPropertyParitySnapshot(t *testing.T) {
 			name:     "font/full-shorthand",
 			property: "font", value: "italic bold 16px/1.5 serif", fontSize: 12,
 			expectField: func(s *computedStyle) bool {
-				return s.FontStyle == "italic" && s.FontWeight == "bold" &&
+				return s.FontStyle == "italic" && s.FontWeight == 700 &&
 					s.FontSize == 12 && s.LineHeight == 1.5 && s.FontFamily == "serif"
 			},
 		},
@@ -986,10 +986,10 @@ func TestCSSPropertyParitySnapshot(t *testing.T) {
 
 		// Typography extras
 		{
-			// "700" normalizes to "bold" per parseFontWeight.
+			// "700" passes through to the 700 rung on the numeric ladder.
 			name:     "font-weight/700",
 			property: "font-weight", value: "700", fontSize: 12,
-			expectField: func(s *computedStyle) bool { return s.FontWeight == "bold" },
+			expectField: func(s *computedStyle) bool { return s.FontWeight == 700 },
 		},
 		{
 			name:     "font-style/italic",

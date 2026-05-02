@@ -317,10 +317,17 @@ func (c *converter) convertTableRowKind(n *html.Node, tbl *layout.Table, parentS
 
 		cellStyle := c.computeElementStyle(child, rowStyle)
 
-		// For <th>, default to bold.
+		// For <th>, default to bold when the cascaded weight is at
+		// or below normal (400). This matches the historical browser
+		// rendering of <th> (User-Agent stylesheet sets font-weight:
+		// bold) and the pre-fix Folio behaviour. Limitation: a weight
+		// of 0 (unset) and an explicit `font-weight: 100` are both
+		// treated as "needs bolding"; distinguishing "author chose
+		// light" from "default normal" would require a FontWeightSet
+		// sentinel on computedStyle, tracked separately.
 		if child.DataAtom == atom.Th {
-			if cellStyle.FontWeight == "normal" {
-				cellStyle.FontWeight = "bold"
+			if cellStyle.FontWeight <= 400 {
+				cellStyle.FontWeight = 700
 			}
 			if cellStyle.TextAlign == layout.AlignLeft {
 				cellStyle.TextAlign = layout.AlignCenter

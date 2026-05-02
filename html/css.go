@@ -14,7 +14,7 @@ import (
 type fontFaceRule struct {
 	family string
 	src    string
-	weight string
+	weight int // CSS Fonts L4 numeric ladder; default 400 (normal).
 	style  string
 	// origin is the href of the stylesheet this rule was parsed from. "" for
 	// inline <style> blocks (or any rule with no enclosing stylesheet origin),
@@ -174,7 +174,7 @@ func (ss *styleSheet) parseCSS(css string, origin string) {
 		// Parse @font-face rules.
 		if selectorStr == "@font-face" {
 			decls := parseDeclarations(declStr)
-			ff := fontFaceRule{weight: "normal", style: "normal", origin: origin}
+			ff := fontFaceRule{weight: 400, style: "normal", origin: origin}
 			for _, d := range decls {
 				switch d.property {
 				case "font-family":
@@ -182,7 +182,9 @@ func (ss *styleSheet) parseCSS(css string, origin string) {
 				case "src":
 					ff.src = parseFontFaceSrc(d.value)
 				case "font-weight":
-					ff.weight = strings.TrimSpace(strings.ToLower(d.value))
+					// @font-face descriptors don't inherit, so the
+					// "inherited" arg is unused; pass 400.
+					ff.weight = parseFontWeight(d.value, 400)
 				case "font-style":
 					ff.style = strings.TrimSpace(strings.ToLower(d.value))
 				}

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/carlos7ags/folio/font"
@@ -591,7 +592,11 @@ func (c *converter) loadFontFaces(faces []fontFaceRule) {
 			continue
 		}
 		ef := font.NewEmbeddedFont(face)
-		key := ff.family + "|" + ff.weight + "|" + ff.style
+		// Key shape: family|<numeric weight>|style. The numeric weight
+		// matches what computedStyle.FontWeight stores after
+		// parseFontWeight, which lets resolveFontPair walk the available
+		// weights for nearest-match selection.
+		key := ff.family + "|" + strconv.Itoa(ff.weight) + "|" + ff.style
 		c.embeddedFonts[key] = ef
 	}
 }

@@ -599,16 +599,71 @@ func parseFontSize(value string, parentSize float64) float64 {
 	return l.toPoints(parentSize, parentSize)
 }
 
-// parseFontWeight normalizes a CSS font-weight to "normal" or "bold".
-func parseFontWeight(value string) string {
+// parseFontWeight resolves a CSS font-weight value to a position on the
+// CSS Fonts L4 numeric ladder (100, 200, ..., 900). The keyword `normal`
+// maps to 400, `bold` to 700. Numeric values are clamped to [100, 900].
+// `bolder` and `lighter` resolve relative to the inherited weight per
+// CSS Fonts L4 §3.1 — pass the parent's resolved weight as `inherited`
+// (or 400 if there is no parent / it isn't yet computed). Unknown
+// values fall back to `inherited`, matching the CSS spec's
+// preserve-cascade semantics.
+func parseFontWeight(value string, inherited int) int {
 	value = strings.TrimSpace(strings.ToLower(value))
+	if inherited == 0 {
+		inherited = 400
+	}
 	switch value {
-	case "bold", "bolder":
-		return "bold"
-	case "700", "800", "900":
-		return "bold"
+	case "normal":
+		return 400
+	case "bold":
+		return 700
+	case "bolder":
+		return bolderWeight(inherited)
+	case "lighter":
+		return lighterWeight(inherited)
+	}
+	if n, err := strconv.Atoi(value); err == nil {
+		if n < 1 {
+			return inherited
+		}
+		if n < 100 {
+			return 100
+		}
+		if n > 900 {
+			return 900
+		}
+		return n
+	}
+	return inherited
+}
+
+// bolderWeight returns the resolved weight for `font-weight: bolder` per
+// CSS Fonts L4 §3.1's bolder/lighter table.
+func bolderWeight(inherited int) int {
+	switch {
+	case inherited < 350:
+		return 400
+	case inherited < 550:
+		return 700
+	case inherited < 750:
+		return 900
 	default:
-		return "normal"
+		return 900
+	}
+}
+
+// lighterWeight returns the resolved weight for `font-weight: lighter`
+// per the same table.
+func lighterWeight(inherited int) int {
+	switch {
+	case inherited < 350:
+		return 100
+	case inherited < 550:
+		return 100
+	case inherited < 750:
+		return 400
+	default:
+		return 700
 	}
 }
 
@@ -797,11 +852,13 @@ func mapToStandardFamily(family string) string {
 
 // parseFontShorthand parses the CSS font shorthand property.
 // Format: [style] [weight] size[/line-height] family
-// Returns style, weight, size, lineHeight, family. Unset values return "".
-func parseFontShorthand(value string, parentSize float64) (style, weight string, size, lineHeight float64, family string) {
+// Returns style, weight, size, lineHeight, family. weight=0 means
+// "unset" (caller keeps the inherited value). Other unset values return
+// the zero value of their type (empty string or 0 float).
+func parseFontShorthand(value string, parentSize float64) (style string, weight int, size, lineHeight float64, family string) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return "", "", parentSize, 0, ""
+		return "", 0, parentSize, 0, ""
 	}
 
 	// splitTopLevelFields keeps calc()/min()/max()/clamp() values as a
@@ -810,7 +867,7 @@ func parseFontShorthand(value string, parentSize float64) (style, weight string,
 	// families like "Helvetica Neue" survive.
 	parts := splitTopLevelFields(value)
 	if len(parts) == 0 {
-		return "", "", parentSize, 0, ""
+		return "", 0, parentSize, 0, ""
 	}
 
 	idx := 0
@@ -826,11 +883,15 @@ func parseFontShorthand(value string, parentSize float64) (style, weight string,
 		}
 	}
 
-	// Optional font-weight.
+	// Optional font-weight. parseFontWeight needs an inherited weight
+	// to resolve bolder/lighter; the shorthand parser doesn't have
+	// access to the cascade context, so it passes 400. Inside the
+	// `font:` shorthand bolder/lighter relative to 400 yield 700/100,
+	// which matches what most callers want.
 	if idx < len(parts) {
 		switch strings.ToLower(parts[idx]) {
 		case "bold", "bolder", "lighter", "100", "200", "300", "400", "500", "600", "700", "800", "900":
-			weight = parseFontWeight(parts[idx])
+			weight = parseFontWeight(parts[idx], 400)
 			idx++
 		case "normal":
 			idx++ // could be weight or style; skip

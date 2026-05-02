@@ -161,7 +161,10 @@ var cssProperties = []cssProperty{
 		Name: "font-weight", Category: "Typography",
 		Values: []string{"normal", "bold", "bolder", "lighter", "<integer 100..900>"},
 		Apply: func(s *computedStyle, value string) {
-			s.FontWeight = parseFontWeight(value)
+			// At property-application time s.FontWeight already holds
+			// the inherited value (parent's resolved weight, or the
+			// default 400). bolder/lighter resolve against it.
+			s.FontWeight = parseFontWeight(value, s.FontWeight)
 		},
 	},
 	{
@@ -1406,7 +1409,7 @@ var cssProperties = []cssProperty{
 			if fs != "" {
 				s.FontStyle = fs
 			}
-			if fw != "" {
+			if fw != 0 {
 				s.FontWeight = fw
 			}
 			if sz > 0 {

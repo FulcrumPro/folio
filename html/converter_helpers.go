@@ -5,6 +5,7 @@ package html
 
 import (
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -17,8 +18,19 @@ import (
 )
 
 // resolveFont maps a computedStyle's family/weight/style to a standard PDF font.
+//
+// Standard PDF-14 families ship Regular and Bold variants only — there
+// is no SemiBold or Light. Per CSS Fonts L4 §5.2's synthetic-bolding
+// guidance for missing weights, weights ≥ 600 round to Bold and
+// weights < 600 round to Regular. Documents that need finer granularity
+// must declare an `@font-face` for the desired weight; that path uses
+// nearest-weight matching in resolveFontPair.
 func resolveFont(style computedStyle) *font.Standard {
-	bold := style.FontWeight == "bold"
+	weight := style.FontWeight
+	if weight == 0 {
+		weight = 400
+	}
+	bold := weight >= 600
 	italic := style.FontStyle == "italic"
 
 	switch mapToStandardFamily(style.FontFamily) {
@@ -58,23 +70,150 @@ func resolveFont(style computedStyle) *font.Standard {
 	}
 }
 
-// resolveFontPair returns either a standard font or an embedded font for the
-// given style. If the font family matches an @font-face rule, the embedded
-// font is returned; otherwise the standard font is returned.
+// resolveFontPair returns either a standard font or an embedded font for
+// the given style. When the requested family has one or more matching
+// @font-face declarations, the closest face is selected per CSS Fonts L4
+// §5.2's nearest-weight algorithm; otherwise resolveFont returns the
+// standard PDF-14 fallback.
 func (c *converter) resolveFontPair(style computedStyle) (*font.Standard, *font.EmbeddedFont) {
 	if len(c.embeddedFonts) > 0 {
 		family := strings.ToLower(style.FontFamily)
-		key := family + "|" + style.FontWeight + "|" + style.FontStyle
-		if ef, ok := c.embeddedFonts[key]; ok {
+		fontStyle := style.FontStyle
+		if fontStyle == "" {
+			fontStyle = "normal"
+		}
+		desired := style.FontWeight
+		if desired == 0 {
+			desired = 400
+		}
+		if ef := c.matchEmbeddedFont(family, fontStyle, desired); ef != nil {
 			return nil, ef
 		}
-		// Try without specific weight/style.
-		keyBase := family + "|normal|normal"
-		if ef, ok := c.embeddedFonts[keyBase]; ok {
+		// Style mismatch fallback: try the same family at the requested
+		// weight but with the opposite style. Better to render in
+		// regular Inter than fall through to Helvetica when the author
+		// asked for italic Inter.
+		altStyle := "normal"
+		if fontStyle == "normal" {
+			altStyle = "italic"
+		}
+		if ef := c.matchEmbeddedFont(family, altStyle, desired); ef != nil {
 			return nil, ef
 		}
 	}
 	return resolveFont(style), nil
+}
+
+// matchEmbeddedFont returns the @font-face whose declared weight is the
+// nearest match for `desired` within the given family + style, per
+// CSS Fonts L4 §5.2:
+//
+//   - exact match wins;
+//   - desired = 400: try 500 first, then walk down (300 → 200 → 100),
+//     then walk up (600 → 700 → 800 → 900);
+//   - desired = 500: try 400 first, then walk down (300 → 200 → 100),
+//     then walk up (600 → 700 → 800 → 900);
+//   - desired ≤ 500 (and not 400/500): walk down first, then up;
+//   - desired ≥ 500 (and not 500): walk up first, then down.
+//
+// Returns nil if no face for (family, style) is registered.
+func (c *converter) matchEmbeddedFont(family, fontStyle string, desired int) *font.EmbeddedFont {
+	if ef, ok := c.embeddedFonts[family+"|"+strconv.Itoa(desired)+"|"+fontStyle]; ok {
+		return ef
+	}
+	// Collect every weight registered for this (family, style).
+	prefix := family + "|"
+	suffix := "|" + fontStyle
+	weights := make([]int, 0, 9)
+	for k := range c.embeddedFonts {
+		if !strings.HasPrefix(k, prefix) || !strings.HasSuffix(k, suffix) {
+			continue
+		}
+		w, err := strconv.Atoi(k[len(prefix) : len(k)-len(suffix)])
+		if err != nil {
+			continue
+		}
+		weights = append(weights, w)
+	}
+	if len(weights) == 0 {
+		return nil
+	}
+	sort.Ints(weights)
+	picked := pickNearestWeight(desired, weights)
+	if picked == 0 {
+		return nil
+	}
+	return c.embeddedFonts[family+"|"+strconv.Itoa(picked)+"|"+fontStyle]
+}
+
+// pickNearestWeight implements the CSS Fonts L4 §5.2 ladder walk
+// against a sorted ascending slice of available weights:
+//
+//   - exact match always wins;
+//   - desired in [400, 500]: scan available weights in (desired, 500]
+//     ascending, then below desired descending, then above 500 ascending;
+//   - desired < 400: scan below desired descending, then above ascending;
+//   - desired > 500: scan above desired ascending, then below descending.
+//
+// The [400, 500] arm is the spec's only non-symmetric window — it
+// reflects the historical convention that 500 is "Medium, treated as
+// Regular" so authors writing 400 should prefer 500 over jumping up
+// to 700 when 400 isn't shipped, and vice versa for 500.
+func pickNearestWeight(desired int, weights []int) int {
+	for _, w := range weights {
+		if w == desired {
+			return w
+		}
+	}
+	if desired >= 400 && desired <= 500 {
+		// Ascending in (desired, 500].
+		for _, w := range weights {
+			if w > desired && w <= 500 {
+				return w
+			}
+		}
+		// Descending below desired.
+		if w := highestBelow(desired, weights); w != 0 {
+			return w
+		}
+		// Ascending above 500.
+		for _, w := range weights {
+			if w > 500 {
+				return w
+			}
+		}
+		return 0
+	}
+	if desired < 400 {
+		if w := highestBelow(desired, weights); w != 0 {
+			return w
+		}
+		return lowestAbove(desired, weights)
+	}
+	// desired > 500
+	if w := lowestAbove(desired, weights); w != 0 {
+		return w
+	}
+	return highestBelow(desired, weights)
+}
+
+func highestBelow(desired int, weights []int) int {
+	out := 0
+	for _, w := range weights {
+		if w < desired {
+			out = w
+		}
+	}
+	return out
+}
+
+func lowestAbove(desired int, weights []int) int {
+	for _, w := range weights {
+		if w > desired {
+			return w
+		}
+	}
+	return 0
 }
 
 // collectText recursively collects all text content from a node.

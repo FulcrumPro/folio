@@ -94,7 +94,7 @@ func (c *converter) applyPlaceholderStyle(n *html.Node, style *computedStyle) {
 		case "font-style":
 			style.FontStyle = parseFontStyle(d.value)
 		case "font-weight":
-			style.FontWeight = parseFontWeight(d.value)
+			style.FontWeight = parseFontWeight(d.value, style.FontWeight)
 		case "font-size":
 			fs := parseFontSize(d.value, style.FontSize)
 			if fs > 0 {

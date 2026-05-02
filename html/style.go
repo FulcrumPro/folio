@@ -10,7 +10,7 @@ type computedStyle struct {
 	// Text
 	FontFamily       string // "helvetica", "courier", "times"
 	FontSize         float64
-	FontWeight       string // "normal", "bold"
+	FontWeight       int    // CSS Fonts L4 numeric ladder (100..900). 400 = normal, 700 = bold. 0 means "not set" (treated as 400).
 	FontStyle        string // "normal", "italic"
 	Color            layout.Color
 	TextAlign        layout.Align
@@ -431,7 +431,7 @@ func defaultStyle() computedStyle {
 	return computedStyle{
 		FontFamily:     "helvetica",
 		FontSize:       12, // 16px * 0.75 = 12pt
-		FontWeight:     "normal",
+		FontWeight:     400,
 		FontStyle:      "normal",
 		Color:          layout.ColorBlack,
 		TextAlign:      layout.AlignLeft,

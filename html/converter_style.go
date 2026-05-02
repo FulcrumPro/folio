@@ -133,32 +133,32 @@ func (c *converter) applyTagDefaults(n *html.Node, style *computedStyle) {
 	switch n.DataAtom {
 	case atom.H1:
 		style.FontSize = 24 // 32px * 0.75
-		style.FontWeight = "bold"
+		style.FontWeight = 700
 		style.MarginTop = 16.08 // 0.67em at 32px → 32*0.67*0.75
 		style.MarginBottom = 16.08
 	case atom.H2:
 		style.FontSize = 18 // 24px * 0.75
-		style.FontWeight = "bold"
+		style.FontWeight = 700
 		style.MarginTop = 14.94 // 0.83em at 24px → 24*0.83*0.75
 		style.MarginBottom = 14.94
 	case atom.H3:
 		style.FontSize = 14.04 // 18.72px * 0.75
-		style.FontWeight = "bold"
+		style.FontWeight = 700
 		style.MarginTop = 14.04 // 1em at 18.72px → 18.72*0.75
 		style.MarginBottom = 14.04
 	case atom.H4:
 		style.FontSize = 12 // 16px * 0.75
-		style.FontWeight = "bold"
+		style.FontWeight = 700
 		style.MarginTop = 16.02 // 1.33em at 16px → 16*1.33*0.75
 		style.MarginBottom = 16.02
 	case atom.H5:
 		style.FontSize = 9.96 // 13.28px * 0.75
-		style.FontWeight = "bold"
+		style.FontWeight = 700
 		style.MarginTop = 16.60 // 1.67em at 13.28px → 13.28*1.67*0.75
 		style.MarginBottom = 16.60
 	case atom.H6:
 		style.FontSize = 8.01 // 10.72px * 0.75
-		style.FontWeight = "bold"
+		style.FontWeight = 700
 		style.MarginTop = 18.62 // 2.33em at 10.72px → 10.72*2.33*0.75
 		style.MarginBottom = 18.62
 	case atom.P:
@@ -172,7 +172,7 @@ func (c *converter) applyTagDefaults(n *html.Node, style *computedStyle) {
 		// into a single anonymous block box.
 		style.Display = "inline"
 	case atom.Strong, atom.B:
-		style.FontWeight = "bold"
+		style.FontWeight = 700
 		style.Display = "inline"
 	case atom.Em, atom.I:
 		style.FontStyle = "italic"
@@ -229,7 +229,7 @@ func (c *converter) applyTagDefaults(n *html.Node, style *computedStyle) {
 		style.MarginTop = 12
 		style.MarginBottom = 12
 	case atom.Dt:
-		style.FontWeight = "bold"
+		style.FontWeight = 700
 	case atom.Dd:
 		style.MarginLeft = 30 // browser default ~40px → 30pt
 	case atom.Figure:
@@ -243,7 +243,7 @@ func (c *converter) applyTagDefaults(n *html.Node, style *computedStyle) {
 		style.MarginBottom = 9
 		style.Display = "block"
 	case atom.Legend:
-		style.FontWeight = "bold"
+		style.FontWeight = 700
 	case atom.Button:
 		style.Display = "inline"
 	case atom.Input, atom.Select, atom.Textarea:

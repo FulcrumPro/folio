@@ -1095,17 +1095,17 @@ func TestParseLength(t *testing.T) {
 }
 
 func TestParseFontWeight(t *testing.T) {
-	if parseFontWeight("bold") != "bold" {
-		t.Error("expected bold")
+	if got := parseFontWeight("bold", 400); got != 700 {
+		t.Errorf("parseFontWeight(bold) = %d, want 700", got)
 	}
-	if parseFontWeight("700") != "bold" {
-		t.Error("expected bold for 700")
+	if got := parseFontWeight("700", 400); got != 700 {
+		t.Errorf("parseFontWeight(700) = %d, want 700", got)
 	}
-	if parseFontWeight("normal") != "normal" {
-		t.Error("expected normal")
+	if got := parseFontWeight("normal", 400); got != 400 {
+		t.Errorf("parseFontWeight(normal) = %d, want 400", got)
 	}
-	if parseFontWeight("400") != "normal" {
-		t.Error("expected normal for 400")
+	if got := parseFontWeight("400", 400); got != 400 {
+		t.Errorf("parseFontWeight(400) = %d, want 400", got)
 	}
 }
 
@@ -5685,12 +5685,12 @@ func TestConvertFontFaceParsing(t *testing.T) {
 // regression test for https://github.com/carlos7ags/folio/issues/16.
 func TestCustomFontFamilyResolution(t *testing.T) {
 	// Construct a converter with a mock embedded font entry keyed as
-	// "noto|normal|normal" — simulating a loaded @font-face with
-	// font-family: "Noto".
+	// "noto|400|normal" — simulating a loaded @font-face with
+	// font-family: "Noto" and the default font-weight: normal (400).
 	mockEF := font.NewEmbeddedFont(nil)
 	c := &converter{
 		embeddedFonts: map[string]*font.EmbeddedFont{
-			"noto|normal|normal": mockEF,
+			"noto|400|normal": mockEF,
 		},
 	}
 
@@ -5767,7 +5767,7 @@ func TestParseFontShorthandWithCalc(t *testing.T) {
 		name           string
 		input          string
 		wantStyle      string
-		wantWeight     string
+		wantWeight     int
 		wantSize       float64 // in pt
 		wantLineHeight float64
 		wantFamily     string
@@ -5818,7 +5818,7 @@ func TestParseFontShorthandWithCalc(t *testing.T) {
 		{
 			name:       "bold + calc + multi-word family",
 			input:      "bold calc(1em + 2px) Helvetica Neue",
-			wantWeight: "bold",
+			wantWeight: 700,
 			wantSize:   13.5,
 			wantFamily: "helvetica neue",
 		},
@@ -5917,7 +5917,7 @@ func TestParseFontShorthandWithCalc(t *testing.T) {
 				t.Errorf("style = %q, want %q", style, tt.wantStyle)
 			}
 			if weight != tt.wantWeight {
-				t.Errorf("weight = %q, want %q", weight, tt.wantWeight)
+				t.Errorf("weight = %d, want %d", weight, tt.wantWeight)
 			}
 			if math.Abs(size-tt.wantSize) > 0.01 {
 				t.Errorf("size = %.4f, want %.4f", size, tt.wantSize)

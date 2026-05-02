@@ -78,13 +78,13 @@ func (c *converter) buildParagraphFromRuns(runs []layout.TextRun, style computed
 	p := layout.NewStyledParagraph(runs...)
 
 	if style.TextAlignSet {
-		p.SetAlign(style.TextAlign)
+		p.SetAlign(resolveTextAlign(style))
 	}
 	if style.Direction != layout.DirectionAuto {
 		p.SetDirection(style.Direction)
 	}
 	if style.TextAlignLastSet {
-		p.SetTextAlignLast(style.TextAlignLast)
+		p.SetTextAlignLast(resolveTextAlignLast(style))
 	}
 	p.SetLeading(style.LineHeight)
 	if style.StringSetName != "" {
@@ -153,7 +153,7 @@ func (c *converter) convertText(n *html.Node, style computedStyle) []layout.Elem
 	}
 	p := layout.NewStyledParagraph(run)
 	if style.TextAlignSet {
-		p.SetAlign(style.TextAlign)
+		p.SetAlign(resolveTextAlign(style))
 	}
 	if style.Direction != layout.DirectionAuto {
 		p.SetDirection(style.Direction)

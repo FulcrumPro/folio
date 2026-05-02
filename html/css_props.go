@@ -90,8 +90,9 @@ var cssProperties = []cssProperty{
 		Category: "Typography",
 		Values:   []string{"left", "right", "center", "justify", "start", "end"},
 		Apply: func(s *computedStyle, value string) {
-			if a, ok := parseTextAlign(value); ok {
+			if a, kw, ok := parseTextAlign(value); ok {
 				s.TextAlign = a
+				s.TextAlignKeyword = kw
 				s.TextAlignSet = true
 			}
 		},
@@ -259,8 +260,9 @@ var cssProperties = []cssProperty{
 		Name: "text-align-last", Category: "Typography",
 		Values: []string{"left", "right", "center", "justify", "start", "end"},
 		Apply: func(s *computedStyle, value string) {
-			if a, ok := parseTextAlign(value); ok {
+			if a, kw, ok := parseTextAlign(value); ok {
 				s.TextAlignLast = a
+				s.TextAlignLastKeyword = kw
 				s.TextAlignLastSet = true
 			}
 		},

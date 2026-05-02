@@ -174,7 +174,7 @@ func (c *converter) convertCSSTable(n *html.Node, style computedStyle) []layout.
 					}
 					layoutCell = row.AddCellElement(div)
 				}
-				layoutCell.SetAlign(cellStyle.TextAlign)
+				layoutCell.SetAlign(resolveTextAlign(cellStyle))
 				if cellStyle.hasPadding() {
 					layoutCell.SetPaddingSides(layout.Padding{
 						Top:    cellStyle.PaddingTop,
@@ -329,8 +329,15 @@ func (c *converter) convertTableRowKind(n *html.Node, tbl *layout.Table, parentS
 			if cellStyle.FontWeight <= 400 {
 				cellStyle.FontWeight = 700
 			}
-			if cellStyle.TextAlign == layout.AlignLeft {
+			// Default <th> alignment is center when the author hasn't
+			// explicitly chosen left. Use resolveTextAlign so the
+			// direction-relative `start`/`end` keywords are honoured
+			// before the equality check (otherwise an RTL document
+			// with `text-align: start` would resolve to AlignLeft and
+			// then get unexpectedly re-aligned to center).
+			if !cellStyle.TextAlignSet && resolveTextAlign(cellStyle) == layout.AlignLeft {
 				cellStyle.TextAlign = layout.AlignCenter
+				cellStyle.TextAlignKeyword = ""
 			}
 		}
 
@@ -351,7 +358,7 @@ func (c *converter) convertTableRowKind(n *html.Node, tbl *layout.Table, parentS
 			cell = row.AddCellElement(div)
 		}
 
-		cell.SetAlign(cellStyle.TextAlign)
+		cell.SetAlign(resolveTextAlign(cellStyle))
 
 		// Per-side cell padding (default 4pt uniform).
 		if cellStyle.hasPadding() {

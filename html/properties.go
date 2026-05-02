@@ -679,18 +679,78 @@ func parseFontStyle(value string) string {
 }
 
 // parseTextAlign parses CSS text-align into layout.Align.
-func parseTextAlign(value string) (layout.Align, bool) {
+//
+// `start` and `end` are direction-relative keywords (CSS Text L4 §7.1)
+// — they resolve to `left`/`right` based on the cascaded `direction`
+// property. Direction may not yet be applied at the time text-align is
+// parsed (CSS declarations are processed in source order within a
+// block), so this function returns an LTR-correct best guess
+// (`start` → AlignLeft, `end` → AlignRight) and a non-empty `keyword`
+// string. Consumers must call resolveTextAlign(style) at draw time
+// to get the spec-correct value once `style.Direction` is known.
+//
+// For `left`/`right`/`center`/`justify` the returned `keyword` is
+// empty and the returned Align is the final value — no late binding
+// needed.
+//
+// Returns (align, keyword, ok). `ok` is false for unrecognized
+// values, leaving the caller's TextAlign unchanged per the CSS
+// invalid-value cascade rule.
+func parseTextAlign(value string) (align layout.Align, keyword string, ok bool) {
 	switch strings.TrimSpace(strings.ToLower(value)) {
 	case "left":
-		return layout.AlignLeft, true
+		return layout.AlignLeft, "", true
 	case "center":
-		return layout.AlignCenter, true
+		return layout.AlignCenter, "", true
 	case "right":
-		return layout.AlignRight, true
+		return layout.AlignRight, "", true
 	case "justify":
-		return layout.AlignJustify, true
+		return layout.AlignJustify, "", true
+	case "start":
+		return layout.AlignLeft, "start", true
+	case "end":
+		return layout.AlignRight, "end", true
 	default:
-		return layout.AlignLeft, false
+		return layout.AlignLeft, "", false
+	}
+}
+
+// resolveTextAlign returns the spec-correct text-align value for a
+// computed style, late-binding the direction-relative keywords
+// `start` and `end` against `style.Direction`. Other keywords pass
+// through `style.TextAlign` unchanged.
+//
+// `start` resolves to AlignLeft under LTR / Auto and AlignRight under
+// RTL. `end` resolves to AlignRight under LTR / Auto and AlignLeft
+// under RTL.
+func resolveTextAlign(style computedStyle) layout.Align {
+	return resolveDirectionRelativeAlign(style.TextAlignKeyword, style.TextAlign, style.Direction)
+}
+
+// resolveTextAlignLast does the same late binding for
+// `text-align-last`, which has the same direction-relative keywords.
+func resolveTextAlignLast(style computedStyle) layout.Align {
+	return resolveDirectionRelativeAlign(style.TextAlignLastKeyword, style.TextAlignLast, style.Direction)
+}
+
+// resolveDirectionRelativeAlign maps the CSS direction-relative
+// keywords (`start`/`end`) to a concrete left/right alignment given
+// the computed direction. Any other keyword (including the empty
+// string) returns `fallback` unchanged.
+func resolveDirectionRelativeAlign(keyword string, fallback layout.Align, dir layout.Direction) layout.Align {
+	switch keyword {
+	case "start":
+		if dir == layout.DirectionRTL {
+			return layout.AlignRight
+		}
+		return layout.AlignLeft
+	case "end":
+		if dir == layout.DirectionRTL {
+			return layout.AlignLeft
+		}
+		return layout.AlignRight
+	default:
+		return fallback
 	}
 }
 

@@ -361,7 +361,7 @@ func (c *converter) generatePseudoElement(text string, style computedStyle) layo
 		TextShadow:      textShadowFromStyle(style),
 	}
 	p := layout.NewStyledParagraph(run)
-	p.SetAlign(style.TextAlign)
+	p.SetAlign(resolveTextAlign(style))
 	p.SetLeading(style.LineHeight)
 	return p
 }

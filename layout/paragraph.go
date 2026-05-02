@@ -128,6 +128,11 @@ func (p *Paragraph) SetAlign(a Align) *Paragraph {
 	return p
 }
 
+// Align reports the paragraph's text alignment. Returns the value
+// most recently set via SetAlign, or the zero-value AlignLeft if
+// SetAlign has never been called.
+func (p *Paragraph) Align() Align { return p.align }
+
 // SetDirection sets the base text direction for bidi layout. The default
 // is DirectionAuto, which auto-detects from the first strong directional
 // character in the paragraph text. When direction resolves to RTL and no

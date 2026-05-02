@@ -8,24 +8,26 @@ import "github.com/carlos7ags/folio/layout"
 // computedStyle holds the resolved CSS properties for a single HTML node.
 type computedStyle struct {
 	// Text
-	FontFamily       string // "helvetica", "courier", "times"
-	FontSize         float64
-	FontWeight       int    // CSS Fonts L4 numeric ladder (100..900). 400 = normal, 700 = bold. 0 means "not set" (treated as 400).
-	FontStyle        string // "normal", "italic"
-	Color            layout.Color
-	TextAlign        layout.Align
-	TextAlignSet     bool         // true if text-align was explicitly declared
-	TextAlignLast    layout.Align // text-align-last override for the last line
-	TextAlignLastSet bool         // true if text-align-last was explicitly set
-	TextDecoration   layout.TextDecoration
-	TextTransform    string // "none", "uppercase", "lowercase", "capitalize"
-	WhiteSpace       string // "normal", "nowrap", "pre", "pre-wrap", "pre-line"
-	LineHeight       float64
-	LetterSpacing    float64 // extra space between characters (points)
-	WordSpacing      float64 // extra space between words (points)
-	TextIndent       float64 // first-line indent (points)
-	WordBreak        string  // "normal", "break-all"
-	Hyphens          string  // "none", "manual", "auto"
+	FontFamily           string // "helvetica", "courier", "times"
+	FontSize             float64
+	FontWeight           int    // CSS Fonts L4 numeric ladder (100..900). 400 = normal, 700 = bold. 0 means "not set" (treated as 400).
+	FontStyle            string // "normal", "italic"
+	Color                layout.Color
+	TextAlign            layout.Align
+	TextAlignSet         bool         // true if text-align was explicitly declared
+	TextAlignKeyword     string       // "start" or "end" when the author used the direction-relative keyword; otherwise "". Resolved at consumer time via resolveTextAlign(style).
+	TextAlignLast        layout.Align // text-align-last override for the last line
+	TextAlignLastSet     bool         // true if text-align-last was explicitly set
+	TextAlignLastKeyword string       // "start"/"end" for direction-relative text-align-last; resolve via resolveTextAlignLast(style)
+	TextDecoration       layout.TextDecoration
+	TextTransform        string // "none", "uppercase", "lowercase", "capitalize"
+	WhiteSpace           string // "normal", "nowrap", "pre", "pre-wrap", "pre-line"
+	LineHeight           float64
+	LetterSpacing        float64 // extra space between characters (points)
+	WordSpacing          float64 // extra space between words (points)
+	TextIndent           float64 // first-line indent (points)
+	WordBreak            string  // "normal", "break-all"
+	Hyphens              string  // "none", "manual", "auto"
 
 	// Box model
 	MarginTopAuto   bool // true if margin-top: auto (for flex layout)
@@ -450,32 +452,34 @@ func defaultStyle() computedStyle {
 // inherit creates a child style that inherits text properties from the parent.
 func (s *computedStyle) inherit() computedStyle {
 	child := computedStyle{
-		FontFamily:       s.FontFamily,
-		FontSize:         s.FontSize,
-		FontWeight:       s.FontWeight,
-		FontStyle:        s.FontStyle,
-		Color:            s.Color,
-		TextAlign:        s.TextAlign,
-		TextAlignLast:    s.TextAlignLast,
-		TextAlignLastSet: s.TextAlignLastSet,
-		TextDecoration:   s.TextDecoration,
-		TextTransform:    s.TextTransform,
-		WhiteSpace:       s.WhiteSpace,
-		LineHeight:       s.LineHeight,
-		LetterSpacing:    s.LetterSpacing,
-		WordSpacing:      s.WordSpacing,
-		TextIndent:       s.TextIndent,
-		Direction:        s.Direction, // CSS direction is inherited
-		Display:          "block",
-		FlexDirection:    "row",
-		JustifyContent:   "flex-start",
-		AlignItems:       "stretch",
-		FlexWrap:         "nowrap",
-		FlexShrink:       1,
-		ListStyleType:    s.ListStyleType,
-		Visibility:       s.Visibility,
-		WordBreak:        s.WordBreak,
-		Hyphens:          s.Hyphens,
+		FontFamily:           s.FontFamily,
+		FontSize:             s.FontSize,
+		FontWeight:           s.FontWeight,
+		FontStyle:            s.FontStyle,
+		Color:                s.Color,
+		TextAlign:            s.TextAlign,
+		TextAlignKeyword:     s.TextAlignKeyword,
+		TextAlignLast:        s.TextAlignLast,
+		TextAlignLastSet:     s.TextAlignLastSet,
+		TextAlignLastKeyword: s.TextAlignLastKeyword,
+		TextDecoration:       s.TextDecoration,
+		TextTransform:        s.TextTransform,
+		WhiteSpace:           s.WhiteSpace,
+		LineHeight:           s.LineHeight,
+		LetterSpacing:        s.LetterSpacing,
+		WordSpacing:          s.WordSpacing,
+		TextIndent:           s.TextIndent,
+		Direction:            s.Direction, // CSS direction is inherited
+		Display:              "block",
+		FlexDirection:        "row",
+		JustifyContent:       "flex-start",
+		AlignItems:           "stretch",
+		FlexWrap:             "nowrap",
+		FlexShrink:           1,
+		ListStyleType:        s.ListStyleType,
+		Visibility:           s.Visibility,
+		WordBreak:            s.WordBreak,
+		Hyphens:              s.Hyphens,
 	}
 	// CSS custom properties inherit: deep-copy the map.
 	if len(s.CustomProperties) > 0 {

@@ -94,7 +94,104 @@ next to itself resolves without extra wiring. Callers that already pass a
 The signature of `folio_document_add_html_with_options` is unchanged —
 it still takes a `basePath` C string and wraps it as
 `os.DirFS(basePath)` internally at the boundary. C consumers see no
-breaking change.
+breaking change to existing exports.
+
+The C ABI surface grows from 388 to 393 (+5):
+
+- **`folio_document_set_language(doc, lang)`** — BCP-47 / RFC 3066 tag.
+  Required for any PDF/A Level A variant per ISO 19005-2/3 §6.7.2.
+- **`FOLIO_PDFA_3A`, `FOLIO_PDFA_4`, `FOLIO_PDFA_4F`, `FOLIO_PDFA_4E`** —
+  new PDF/A profile constants. Existing `FOLIO_PDFA_*` numeric values
+  are preserved.
+- **`folio_paragraph_measure_lines(p, max_width)`** /
+  **`folio_paragraph_measure_height(p, max_width)`** — wrap the new
+  `Paragraph.MeasureLines` / `MeasureHeight` helpers. Useful for
+  clamp/truncate decisions before rendering.
+- **`folio_paragraph_split_after_line(p, n, max_width, *head, *tail)`** —
+  splits a paragraph after the first `n` lines at `max_width`. Returns
+  two handles via out-pointers; either may be `0` (no-op halves at
+  `n <= 0` or `n >= total`). Receiver is unchanged. Caller frees the
+  non-zero halves via `folio_paragraph_free`.
+- **`folio_font_parse_for_language(data, length, lang)`** — TTC face
+  selection by BCP-47 tag for pan-CJK font collections (NotoSansCJK,
+  Source Han Sans, msgothic, etc.). NULL `lang` falls back to face 0,
+  matching `folio_font_parse_ttf` semantics.
+
+`scripts/audit-cabi.sh` reports Go `//export` directives, header
+declarations, and built dylib symbols all in sync at 393.
+
+### `layout.UnitValue` is no longer comparable with `==`
+
+`UnitValue` now holds a func field for the new `UnitCalc` variant —
+the closure that resolves CSS `calc()` lengths against the actual
+layout area at render time. As a consequence the struct is no longer
+comparable with `==`. Out-of-tree code that compared `UnitValue`
+values directly will see a compile error.
+
+```go
+// before
+if a == b { ... }
+
+// after — compare the variant tag and the resolved value separately
+if a.Type == b.Type && a.Pt(width) == b.Pt(width) { ... }
+```
+
+No in-tree consumer compared `UnitValue` for equality, so the change
+is contained to consumers that did so deliberately.
+
+### Visual changes
+
+Several v0.8.0 fixes change the visible output of affected documents.
+Review these before regression-diffing PDFs against a v0.7.x baseline:
+
+- **GPOS cursive horizontal placement** — Fonts with cursive joining
+  (Arabic and several Indic scripts) tighten in horizontal direction.
+  The previous draw path applied the entry/exit X delta as a `Td`
+  shift on top of the glyph's natural advance, landing each joined
+  glyph one extra advance past its predecessor. Per OpenType §6.3,
+  in horizontal text the X component of the cursive join is already
+  encoded by hmtx; the feature only aligns the join in Y. Cursive
+  remains LTR-only (#220).
+- **CJK paragraphs across page breaks** — Continuation pages of a
+  CJK paragraph that paginated in v0.7.x rendered every ideograph
+  with a spurious ASCII space (`"中文文本"` → `"中 文 文 本"`) and
+  re-wrapped to MORE lines than the original. v0.8.0 honours the
+  `SpaceAfter=0` boundary that `breakCJKWords` emits, so the
+  continuation matches the source. Affected documents will reflow
+  on the continuation pages (#246).
+- **GPOS Type 5 mark-to-ligature fallback** — Ligatures with three
+  or more components now fall back to Type 4 mark-to-base instead of
+  applying middle-component anchors blindly. Without per-cluster
+  component attribution from the shaper, the middle-component path
+  silently misplaced marks. Two-component ligatures (the common case
+  for Arabic lam-alef and Latin "fi" / "ffl") are unaffected (#220).
+- **Unicode NFC normalization** — Strings that arrived in canonically
+  decomposed form (e.g. `e` + combining acute `U+0301` instead of
+  `é`) are now normalised to NFC at every `layout` entry point.
+  Most input is already NFC, so the majority of documents are
+  byte-identical. Affected documents see corrected widths and
+  shaping — font cmap tables that only cover precomposed codepoints
+  stop falling through to `.notdef` (#217).
+
+### Asset resolution side-effects
+
+`<img src="https://...svg">` and inline-SVG `<img>` URLs now flow
+through `Options.URLPolicy` enforcement uniformly with all other HTTP
+asset fetches (#229). If you have a `URLPolicy` set, double-check that
+it permits the SVG hosts your documents reference; previously these
+two routes bypassed the policy.
+
+`@font-face url('/abs/system/font.ttf')` now succeeds with `BaseFS:
+nil` through the centralised `resolveLocalAsset` contract. Documents
+that rely on absolute system font paths no longer need a `BaseFS`
+mount around `/`.
+
+`Options.FallbackFontPath` retains a documented programmatic-only
+carve-out: an absolute path always bypasses `BaseFS` to the OS, and a
+relative path that misses `BaseFS` retries against the OS. Neither
+extends to document-supplied references, since the trust boundary is
+different — only programmatic, caller-supplied paths get the OS
+retry.
 
 ---
 

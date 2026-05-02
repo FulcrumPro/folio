@@ -35,7 +35,7 @@ func (c *converter) convertHeading(n *html.Node, style computedStyle, level layo
 	}
 	// Replace the default run with the fully styled runs from collectRuns.
 	h.SetRuns(runs)
-	h.SetAlign(style.TextAlign)
+	h.SetAlign(resolveTextAlign(style))
 	if style.BookmarkLevelSet {
 		h.SetBookmarkLevel(style.BookmarkLevel)
 	}

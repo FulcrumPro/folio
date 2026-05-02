@@ -531,7 +531,7 @@ func (c *converter) convertDefinitionList(n *html.Node, style computedStyle) []l
 			text = applyTextTransform(text, childStyle.TextTransform)
 			f := resolveFont(childStyle)
 			p := layout.NewParagraph(text, f, childStyle.FontSize)
-			p.SetAlign(childStyle.TextAlign)
+			p.SetAlign(resolveTextAlign(childStyle))
 			p.SetLeading(childStyle.LineHeight)
 			div.Add(p)
 

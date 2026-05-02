@@ -172,6 +172,21 @@ Review these before regression-diffing PDFs against a v0.7.x baseline:
   byte-identical. Affected documents see corrected widths and
   shaping — font cmap tables that only cover precomposed codepoints
   stop falling through to `.notdef` (#217).
+- **`font-weight: 600` against PDF-14 standard fonts now picks Bold** —
+  pre-fix, the binary-string parser collapsed every numeric weight
+  to `"normal"` or `"bold"` with the boundary at 700, so
+  `font-weight: 600` against Helvetica rendered as Helvetica
+  (Regular). Post-fix, weights ≥ 600 round to the Bold variant per
+  CSS Fonts L4 §5.2's synthetic-bolding guidance; standard fonts
+  ship Regular and Bold variants only, so 600 → Bold is the only
+  reasonable rounding. Documents that wrote `font-weight: 600`
+  against the standard families and expected Regular weight will
+  see headings tighten visually. The fix also unblocks proper
+  SemiBold/Medium rendering when the family has matching
+  `@font-face` declarations — a document declaring four Inter
+  weights at 400/500/600/700 and writing `font-weight: 600`
+  previously silently picked Inter-Regular and now correctly picks
+  Inter-SemiBold (#286).
 
 ### Asset resolution side-effects
 

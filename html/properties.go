@@ -863,6 +863,22 @@ func parseFontShorthand(value string, parentSize float64) (style, weight string,
 }
 
 // parseLineHeight parses CSS line-height into a multiplier.
+//
+// Per CSS Inline Layout Module Level 3 §4.3, line-height accepts:
+//   - `normal` keyword (multiplier 1.2)
+//   - a unitless `<number>` used directly as a multiplier
+//   - a `<length>` whose multiplier is length/fontSize
+//   - a `<percentage>` resolved against fontSize (so 150% → 1.5)
+//
+// calc() can produce either a length OR a unitless multiplier depending
+// on its leaves; the two compose differently. A calc whose leaves are
+// all dimensionless (e.g. `calc(1.2 * 1.5)`) is itself dimensionless and
+// is used as a direct multiplier. A calc with a length leaf
+// (e.g. `calc(1em + 4px)`) resolves to a length and is divided by
+// fontSize. Without this distinction `calc(1.2 * 1.5)` would
+// pass through `parseLength` as a dimensionless cssLength, and
+// dividing the resolved value (1.8) by fontSize would produce
+// a 9× compression of line spacing.
 func parseLineHeight(value string, fontSize float64) float64 {
 	value = strings.TrimSpace(strings.ToLower(value))
 	if value == "normal" || value == "" {
@@ -874,9 +890,15 @@ func parseLineHeight(value string, fontSize float64) float64 {
 		return num
 	}
 
-	// Length value.
+	// Length or calc value.
 	l := parseLength(value)
 	if l != nil {
+		if l.isDimensionless() {
+			// A dimensionless calc result is the multiplier directly;
+			// fontSize/relativeTo are unused by Unit "num" leaves so
+			// any positive value works.
+			return l.toPoints(0, 0)
+		}
 		pts := l.toPoints(fontSize, fontSize)
 		if fontSize > 0 {
 			return pts / fontSize

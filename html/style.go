@@ -305,6 +305,53 @@ func (e *calcExpr) dependsOnPercent() bool {
 	return e.left.dependsOnPercent() || e.right.dependsOnPercent()
 }
 
+// isDimensionless reports whether the resolved value carries no length
+// dimension — i.e. every leaf is a bare number stored with Unit "num".
+// Used by parseLineHeight to distinguish a dimensionless calc
+// (e.g. `calc(1.2 * 1.5)` → multiplier 1.8) from a length-typed calc
+// (e.g. `calc(1em + 4px)` → length, divide by fontSize for the
+// multiplier). A dimensionless cssLength can be resolved with
+// toPoints(0, 0) since the only leaf branch consulted is the "num"
+// case, which returns Value as-is.
+func (l *cssLength) isDimensionless() bool {
+	if l == nil {
+		return false
+	}
+	if l.calc != nil {
+		return l.calc.isDimensionless()
+	}
+	if len(l.minArgs) > 0 {
+		for _, a := range l.minArgs {
+			if !a.isDimensionless() {
+				return false
+			}
+		}
+		return true
+	}
+	if len(l.maxArgs) > 0 {
+		for _, a := range l.maxArgs {
+			if !a.isDimensionless() {
+				return false
+			}
+		}
+		return true
+	}
+	return l.Unit == "num"
+}
+
+func (e *calcExpr) isDimensionless() bool {
+	if e == nil {
+		return false
+	}
+	if e.leaf != nil {
+		return e.leaf.isDimensionless()
+	}
+	if e.left == nil || e.right == nil {
+		return false
+	}
+	return e.left.isDimensionless() && e.right.isDimensionless()
+}
+
 // resolve evaluates a calcExpr to points.
 func (e *calcExpr) resolve(relativeTo, fontSize float64) float64 {
 	if e.leaf != nil {

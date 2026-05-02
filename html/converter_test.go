@@ -5863,15 +5863,27 @@ func TestParseFontShorthandWithCalc(t *testing.T) {
 			wantFamily:     "sans-serif",
 		},
 		{
-			name: "line-height as calc with em",
+			name: "line-height as calc with em (length-form)",
 			// parseLineHeight resolves a length-form calc by dividing
 			// the resulting points by fontSize. calc(1.5em) at fontSize
-			// 9pt = 13.5pt → multiplier = 13.5/9 = 1.5. (Note: a
-			// dimensionless calc like `calc(1.2 * 1.5)` is mishandled by
-			// parseLineHeight in a separate bug — out of scope here.)
+			// 9pt = 13.5pt → multiplier = 13.5/9 = 1.5.
 			input:          "12px/calc(1.5em) sans-serif",
 			wantSize:       9,
 			wantLineHeight: 1.5,
+			wantFamily:     "sans-serif",
+		},
+		{
+			name: "line-height as dimensionless calc (#275)",
+			// Closes #275. A calc whose leaves are all dimensionless
+			// numbers is itself a multiplier, not a length. Pre-fix
+			// parseLineHeight passed `calc(1.2 * 1.5) = 1.8` through
+			// `pts := l.toPoints(fontSize, fontSize)` (returning 1.8 for
+			// the dimensionless case) and then divided by fontSize=9pt,
+			// yielding 0.2 — a 9× compression. Post-fix
+			// `cssLength.isDimensionless()` short-circuits the divide.
+			input:          "12px/calc(1.2 * 1.5) sans-serif",
+			wantSize:       9,
+			wantLineHeight: 1.8,
 			wantFamily:     "sans-serif",
 		},
 		{
@@ -7496,16 +7508,13 @@ func TestParseTransformWithCalc(t *testing.T) {
 			},
 		},
 		{
-			name: "rotate(calc(...)) — known limitation: parseAngle is calc-blind",
-			// Documents the out-of-scope gap so future calc support in
-			// parseAngle flips this expectation deliberately. Pre-fix
-			// the outer extractor would have produced 0 anyway by
-			// truncating mid-calc; post-fix the calc survives but
-			// parseAngle's strconv.ParseFloat fails on the calc string
-			// and returns 0. End result identical for now: rotate by 0.
+			name: "rotate(calc(45deg + 45deg)) resolves to 90deg",
+			// Closes #274. Pre-fix parseAngle was calc-blind and this
+			// resolved to 0; the new calc-aware parser walks the
+			// expression tree with angle-native leaves.
 			val: "rotate(calc(45deg + 45deg))",
 			wantOps: []layout.TransformOp{
-				{Type: "rotate", Values: [2]float64{0, 0}},
+				{Type: "rotate", Values: [2]float64{90, 0}},
 			},
 		},
 		{

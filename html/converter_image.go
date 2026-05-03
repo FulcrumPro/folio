@@ -65,6 +65,33 @@ func (c *converter) convertImage(n *html.Node, style computedStyle) []layout.Ele
 	if w > 0 || h > 0 {
 		ie.SetSize(w, h)
 	}
+	// CSS max-width / max-height / min-width / min-height apply to
+	// replaced elements like <img> per CSS 2.1 §10.7. Pre-fix the
+	// converter only consulted style.Width/Height, so a high-res
+	// source image with `max-width: 180px` ignored the cap and bled
+	// the full container width. Threading these into ImageElement
+	// lets layout/image.go::resolveSize clamp post-resolution while
+	// preserving aspect ratio.
+	var maxW, maxH float64
+	if style.MaxWidth != nil {
+		maxW = style.MaxWidth.toPoints(0, style.FontSize)
+	}
+	if style.MaxHeight != nil {
+		maxH = style.MaxHeight.toPoints(0, style.FontSize)
+	}
+	if maxW > 0 || maxH > 0 {
+		ie.SetMaxSize(maxW, maxH)
+	}
+	var minW, minH float64
+	if style.MinWidth != nil {
+		minW = style.MinWidth.toPoints(0, style.FontSize)
+	}
+	if style.MinHeight != nil {
+		minH = style.MinHeight.toPoints(0, style.FontSize)
+	}
+	if minW > 0 || minH > 0 {
+		ie.SetMinSize(minW, minH)
+	}
 	if style.ObjectFit != "" {
 		ie.SetObjectFit(style.ObjectFit)
 	}

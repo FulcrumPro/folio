@@ -14,6 +14,10 @@ type ImageElement struct {
 	img            *folioimage.Image
 	width          float64 // explicit width (0 = auto)
 	height         float64 // explicit height (0 = auto)
+	cssMaxWidth    float64 // CSS max-width upper bound (0 = unbounded)
+	cssMaxHeight   float64 // CSS max-height upper bound (0 = unbounded)
+	cssMinWidth    float64 // CSS min-width lower bound (0 = no minimum)
+	cssMinHeight   float64 // CSS min-height lower bound (0 = no minimum)
 	align          Align
 	altText        string // alternative text for accessibility (PDF/UA)
 	objectFit      string // "contain", "cover", "fill", "none", "scale-down"
@@ -35,6 +39,32 @@ func NewImageElement(img *folioimage.Image) *ImageElement {
 func (ie *ImageElement) SetSize(width, height float64) *ImageElement {
 	ie.width = width
 	ie.height = height
+	return ie
+}
+
+// SetMaxSize sets CSS-style max-width and max-height upper bounds in
+// PDF points. A value of 0 means "unbounded" on that axis. Bounds
+// apply after the explicit / natural / aspect-ratio size is resolved
+// — they shrink the rendered image while preserving aspect ratio.
+// Pass 0/0 to clear any previous bound.
+//
+// Per CSS 2.1 §10.7, max-width / max-height apply to replaced
+// elements like <img>: they cap the rendered size without forcing
+// a specific dimension. They never upscale a smaller intrinsic image.
+func (ie *ImageElement) SetMaxSize(maxWidth, maxHeight float64) *ImageElement {
+	ie.cssMaxWidth = maxWidth
+	ie.cssMaxHeight = maxHeight
+	return ie
+}
+
+// SetMinSize sets CSS-style min-width and min-height lower bounds in
+// PDF points. A value of 0 means "no minimum" on that axis. Bounds
+// apply after the explicit / natural / aspect-ratio size is resolved
+// and after max-* clamps — min-* wins over max-* when they conflict,
+// per CSS 2.1 §10.7.
+func (ie *ImageElement) SetMinSize(minWidth, minHeight float64) *ImageElement {
+	ie.cssMinWidth = minWidth
+	ie.cssMinHeight = minHeight
 	return ie
 }
 
@@ -93,6 +123,16 @@ func (ie *ImageElement) resolveSize(maxWidth float64) (float64, float64) {
 	if ar <= 0 {
 		ar = 1
 	}
+
+	// Apply CSS max-* / min-* clamps to the explicit (w, h) BEFORE the
+	// object-fit branch dispatches. Per CSS Images L3 §3.2 + CSS 2.1
+	// §10.7, max-width / max-height constrain the content box first,
+	// then object-fit fits the image inside the clamped box. Without
+	// this early clamp, `<img width=200 height=200 style="max-width:
+	// 50px; object-fit: cover">` would keep the 200×200 box because
+	// the object-fit branch returns before the post-resolution clamps
+	// at the bottom of this function fire.
+	w, h = ie.applyMaxMinClamps(w, h, ar)
 
 	// When both width and height are explicitly set and object-fit is specified,
 	// compute the rendered image dimensions according to the fit mode.
@@ -156,12 +196,55 @@ func (ie *ImageElement) resolveSize(maxWidth float64) (float64, float64) {
 		h = w / ar
 	}
 
-	// Clamp to available width.
+	// Apply max/min clamps again after the auto-resolution. The
+	// earlier call (before the object-fit branch) only mattered when
+	// w and h were already set on entry; the auto-auto branch above
+	// produced new values that need their own clamping.
+	w, h = ie.applyMaxMinClamps(w, h, ar)
+
+	// Clamp to available width — the container is the absolute outer
+	// bound for replaced elements per CSS 2.1 §10.4. This wins even
+	// over min-width / min-height: a min-height that would push the
+	// image past the container width is silently dropped (the
+	// width-aspect recompute resets the height accordingly). This
+	// matches browser behaviour: a replaced element does not extend
+	// past its containing block on the width axis.
 	if w > maxWidth {
 		w = maxWidth
 		h = w / ar
 	}
 
+	return w, h
+}
+
+// applyMaxMinClamps applies the CSS max-* / min-* constraints to a
+// (w, h) pair while preserving aspect ratio. Order matters: max
+// clamps run first (shrink) so that a subsequent min clamp can
+// upscale past them when the spec's "min wins over max" conflict
+// rule kicks in. CSS 2.1 §10.7 specifies the combined rule as
+// `min(max-width, max(min-width, used))` — equivalent to applying
+// max then min in order on a value already in [min, max].
+//
+// Each axis clamp aspect-preserves: clamping w recomputes h via
+// ar, and vice versa. A subsequent clamp on the other axis may
+// fire if the recompute violates that axis's bound.
+func (ie *ImageElement) applyMaxMinClamps(w, h, ar float64) (float64, float64) {
+	if ie.cssMaxWidth > 0 && w > ie.cssMaxWidth {
+		w = ie.cssMaxWidth
+		h = w / ar
+	}
+	if ie.cssMaxHeight > 0 && h > ie.cssMaxHeight {
+		h = ie.cssMaxHeight
+		w = h * ar
+	}
+	if ie.cssMinWidth > 0 && w < ie.cssMinWidth {
+		w = ie.cssMinWidth
+		h = w / ar
+	}
+	if ie.cssMinHeight > 0 && h < ie.cssMinHeight {
+		h = ie.cssMinHeight
+		w = h * ar
+	}
 	return w, h
 }
 

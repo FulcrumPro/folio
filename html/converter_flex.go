@@ -140,6 +140,22 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 			continue
 		}
 
+		// Per CSS Flexbox §3, the `float` property has no effect on
+		// flex items — a direct flex child with `float: left` lays
+		// out as if no float were declared. convertElement
+		// unconditionally wraps floated elements in a layout.Float
+		// box; unwrap any such wrapping here so the flex item sees
+		// the underlying element directly. (Without this unwrap,
+		// folio's flex width calculation mis-shrinks the column,
+		// turning .NET DocGen's `.three-columns { float: left }`
+		// inside a flex `.data-container` into aggressively
+		// text-wrapped narrow columns.)
+		for i, e := range childElems {
+			if f, ok := e.(*layout.Float); ok {
+				childElems[i] = f.Content()
+			}
+		}
+
 		// Wrap multiple elements from a single HTML child into a Div
 		// so they form one flex item (matching CSS flex behavior).
 		var elem layout.Element

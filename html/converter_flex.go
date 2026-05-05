@@ -27,9 +27,15 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 		flex.SetDirection(layout.FlexRow)
 	}
 
-	// Map justify-content.
+	// Map justify-content. CSS Box Alignment Level 3 lets `start` /
+	// `end` stand in for `flex-start` / `flex-end` on this property —
+	// align-items and align-content below already accept the shorthand,
+	// and consistency matters: a page authored with `justify-content:
+	// end` shouldn't silently fall through to `flex-start`.
 	switch style.JustifyContent {
-	case "flex-end":
+	case "flex-start", "start":
+		flex.SetJustifyContent(layout.JustifyFlexStart)
+	case "flex-end", "end":
 		flex.SetJustifyContent(layout.JustifyFlexEnd)
 	case "center":
 		flex.SetJustifyContent(layout.JustifyCenter)

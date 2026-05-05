@@ -596,7 +596,15 @@ func parseFontWeight(value string) string {
 	switch value {
 	case "bold", "bolder":
 		return "bold"
-	case "700", "800", "900":
+	// CSS Fonts §6.4: when the available font family ships only
+	// Regular + Bold (the common case for PDF base14 and embedded
+	// @font-face Liberation Sans), numeric weights 500 and above
+	// should resolve to bold; only 100-400 (Thin through Regular)
+	// stay normal. Without 500/600 in the bold branch,
+	// `font-weight: 600` — used by .NET DocGen v3 for section
+	// labels like VENDOR / BILLING / PAYMENT TERMS — silently
+	// rendered Regular.
+	case "500", "600", "700", "800", "900":
 		return "bold"
 	default:
 		return "normal"

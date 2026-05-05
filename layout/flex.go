@@ -961,8 +961,26 @@ func (f *Flex) planColumn(area LayoutArea) LayoutPlan {
 	}
 
 	// --- Phase 2: Distribute remaining space to flex-grow items. ---
-
-	if allFit && remaining > 0.01 {
+	//
+	// CSS Flexbox §9.7: flex-grow on the main axis only applies when the
+	// container has definite main-axis size. For a flex-direction:column
+	// container the main axis is vertical, so "definite main size" means
+	// the container has an explicit height.
+	//
+	// Without this guard, a column flex with `flex-grow: 1` children
+	// inside a row that handed it the available page height would
+	// stretch the children to fill the rest of the page — even though
+	// the column's own height is auto. That makes `<div class="ordered"
+	// style="flex-grow: 1">` (which appears throughout the v3 sales /
+	// purchasing templates) extend its border to nearly the bottom of
+	// the page on folio while jsreport keeps it content-sized.
+	//
+	// hasDefiniteCrossSize covers the case where a row-direction parent
+	// stretched us to a specific cross-size — when that happens, our
+	// main-axis (vertical) size IS definite from CSS's perspective,
+	// even though we don't have heightUnit set ourselves.
+	canGrow := f.heightUnit != nil || f.hasDefiniteCrossSize
+	if canGrow && allFit && remaining > 0.01 {
 		totalGrow := 0.0
 		for _, item := range f.items {
 			totalGrow += item.grow

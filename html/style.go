@@ -362,12 +362,22 @@ func defaultStyle() computedStyle {
 // inherit creates a child style that inherits text properties from the parent.
 func (s *computedStyle) inherit() computedStyle {
 	child := computedStyle{
-		FontFamily:       s.FontFamily,
-		FontSize:         s.FontSize,
-		FontWeight:       s.FontWeight,
-		FontStyle:        s.FontStyle,
-		Color:            s.Color,
-		TextAlign:        s.TextAlign,
+		FontFamily: s.FontFamily,
+		FontSize:   s.FontSize,
+		FontWeight: s.FontWeight,
+		FontStyle:  s.FontStyle,
+		Color:      s.Color,
+		TextAlign:  s.TextAlign,
+		// Propagate the "was-set" flag alongside the value so the
+		// conditional in buildParagraphFromRuns applies the inherited
+		// alignment. Without this, a child block whose ancestor set
+		// `text-align: right` would have the value but no apply
+		// (TextAlignSet stayed false), and child paragraphs silently
+		// fell back to AlignLeft. text-align IS inherited per CSS spec
+		// (https://www.w3.org/TR/css-text-3/#text-align-property);
+		// the parallel TextAlignLastSet field below was already
+		// propagated correctly.
+		TextAlignSet:     s.TextAlignSet,
 		TextAlignLast:    s.TextAlignLast,
 		TextAlignLastSet: s.TextAlignLastSet,
 		TextDecoration:   s.TextDecoration,

@@ -72,8 +72,7 @@ this table in the same commit.
 
 | Tag | Patch | Folio file(s) | Fulcrum-side workaround removed |
 |---|---|---|---|
-
-(Empty until the first patch lands.)
+| `v0.7.1-fulcrum.1` | Keep inline whitespace between adjacent inline siblings | `html/converter.go` (`isInlineFlowChild`, plus new `isInlineFlowElement` and `participatesInInlineFlow` helpers) | `fulcrum/internal/pdfrender/inline_ws.go` (HTML pre-rewrite) |
 
 ### Conventions for patch commits
 

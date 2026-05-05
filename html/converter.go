@@ -1294,12 +1294,17 @@ func (c *converter) walkChildren(n *html.Node, parentStyle computedStyle) []layo
 // grouped with its inline siblings into an anonymous block box) rather
 // than be converted as a standalone block element.
 //
-// Text nodes are always inline. Whitespace-only text nodes between block
-// siblings are deliberately NOT inline — they would cause spurious
-// anonymous paragraphs containing nothing but a space between, say, two
-// <div>s. Known text-level inline HTML tags (<span>, <strong>, <em>,
-// <a>, etc.) are inline unless their computed style overrides display
-// to block, flex, grid, or none.
+// Non-whitespace text nodes are always inline. Whitespace-only text nodes
+// are inline only when both their previous and next siblings themselves
+// participate in inline flow — CSS Text Module Level 3 §4.1.1: whitespace
+// between adjacent inline siblings collapses to a single inter-word space
+// and must not split the surrounding inline content into separate
+// anonymous block boxes. Whitespace-only text adjacent to a block sibling
+// (or at the start/end of a parent) is correctly treated as a block-level
+// separator that gets dropped, not promoted to a paragraph. Known
+// text-level inline HTML tags (<span>, <strong>, <em>, <a>, etc.) are
+// inline unless their computed style overrides display to block, flex,
+// grid, or none.
 //
 // Replaced inline elements (<img>, <svg>) and form controls (<input>,
 // <button>, <select>, <textarea>, <label>), and <br>, are intentionally
@@ -1318,29 +1323,57 @@ func (c *converter) walkChildren(n *html.Node, parentStyle computedStyle) []layo
 func (c *converter) isInlineFlowChild(child *html.Node, parentStyle computedStyle) bool {
 	switch child.Type {
 	case html.TextNode:
-		// Whitespace-only text between block siblings must not be
-		// promoted to an anonymous paragraph.
 		if strings.TrimSpace(child.Data) == "" {
-			return false
+			return c.participatesInInlineFlow(child.PrevSibling, parentStyle) &&
+				c.participatesInInlineFlow(child.NextSibling, parentStyle)
 		}
 		return true
 	case html.ElementNode:
-		switch child.DataAtom {
-		case atom.Span, atom.Em, atom.Strong, atom.B, atom.I, atom.U, atom.S,
-			atom.Del, atom.Mark, atom.Small, atom.Sub, atom.Sup, atom.Code,
-			atom.A:
-			// Honor CSS display overrides — a <span style="display:block">
-			// should still be treated as a block.
-			style := c.computeElementStyle(child, parentStyle)
-			if style.Display == "block" || style.Display == "flex" ||
-				style.Display == "grid" || style.Display == "none" {
-				return false
-			}
-			return true
-		}
-		return false
+		return c.isInlineFlowElement(child, parentStyle)
 	}
 	return false
+}
+
+// isInlineFlowElement reports whether an element node is one of the
+// text-level inline HTML elements that participate in inline flow by
+// default (subject to CSS display overrides).
+func (c *converter) isInlineFlowElement(n *html.Node, parentStyle computedStyle) bool {
+	if n.Type != html.ElementNode {
+		return false
+	}
+	switch n.DataAtom {
+	case atom.Span, atom.Em, atom.Strong, atom.B, atom.I, atom.U, atom.S,
+		atom.Del, atom.Mark, atom.Small, atom.Sub, atom.Sup, atom.Code,
+		atom.A:
+		// Honor CSS display overrides — a <span style="display:block">
+		// should still be treated as a block.
+		style := c.computeElementStyle(n, parentStyle)
+		if style.Display == "block" || style.Display == "flex" ||
+			style.Display == "grid" || style.Display == "none" {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// participatesInInlineFlow reports whether n contributes to an inline
+// formatting context. Used by isInlineFlowChild to decide whether a
+// whitespace-only text node should stay in inline flow (true when both
+// neighbors participate) or flush surrounding inline content into
+// separate anonymous block boxes (true when at least one neighbor is a
+// block).
+//
+// nil neighbors return false (parent boundary — leading or trailing
+// whitespace-only text drops, matching browser behavior).
+func (c *converter) participatesInInlineFlow(n *html.Node, parentStyle computedStyle) bool {
+	if n == nil {
+		return false
+	}
+	if n.Type == html.TextNode {
+		return strings.TrimSpace(n.Data) != ""
+	}
+	return c.isInlineFlowElement(n, parentStyle)
 }
 
 // collapseMargins implements adjacent-sibling margin collapsing for

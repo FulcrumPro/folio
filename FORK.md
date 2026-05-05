@@ -73,6 +73,7 @@ this table in the same commit.
 | Tag | Patch | Folio file(s) | Fulcrum-side workaround removed |
 |---|---|---|---|
 | `v0.7.1-fulcrum.1` | Keep inline whitespace between adjacent inline siblings | `html/converter.go` (`isInlineFlowChild`, plus new `isInlineFlowElement` and `participatesInInlineFlow` helpers) | `fulcrum/internal/pdfrender/inline_ws.go` (HTML pre-rewrite) |
+| `v0.7.1-fulcrum.2` | Accept `start` / `end` shorthand on `justify-content` (CSS Box Alignment Level 3) | `html/converter_flex.go` (justify-content switch, lines 30-44) | Lets `justify-content: end` from .NET source render correctly without rewriting templates to use `flex-end` |
 
 ### Conventions for patch commits
 

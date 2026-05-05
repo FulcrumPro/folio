@@ -72,13 +72,14 @@ type FontEntry struct {
 
 // absoluteItem is an element placed at fixed coordinates, outside normal flow.
 type absoluteItem struct {
-	elem         Element
-	x, y         float64
-	width        float64 // layout width; 0 means use full page content width
-	pageIndex    int     // -1 means "current page at time of rendering"
-	rightAligned bool    // x is a right-edge offset; final X = pageWidth - x - elementWidth
-	zIndex       int     // negative = render behind normal flow content
-	fixed        bool    // position: fixed — draw on every page
+	elem           Element
+	x, y           float64
+	width          float64 // layout width; 0 means use full page content width
+	pageIndex      int     // -1 means "current page at time of rendering"
+	rightAligned   bool    // x is a right-edge offset; final X = pageWidth - x - elementWidth
+	zIndex         int     // negative = render behind normal flow content
+	fixed          bool    // position: fixed — draw on every page
+	bottomAnchored bool    // y is the desired BOTTOM edge of the element; final Y = item.y + elementHeight (CSS `bottom:` positioning)
 }
 
 // StructTagInfo records a structure tag emitted during rendering.
@@ -444,10 +445,11 @@ func (r *Renderer) Add(e Element) {
 
 // AbsoluteOpts configures an absolutely positioned element.
 type AbsoluteOpts struct {
-	RightAligned bool // x is a right-edge offset
-	ZIndex       int  // negative = render behind normal flow
-	PageIndex    int  // -1 = last page
-	Fixed        bool // position: fixed — draw on every page
+	RightAligned   bool // x is a right-edge offset
+	ZIndex         int  // negative = render behind normal flow
+	PageIndex      int  // -1 = last page
+	Fixed          bool // position: fixed — draw on every page
+	BottomAnchored bool // y is the desired bottom edge of the element (CSS `bottom:` positioning); the renderer adds the element's measured height before drawing so the bottom edge lands at y, not the top
 }
 
 // AddAbsolute places an element at the given (x, y) coordinates on the
@@ -467,6 +469,7 @@ func (r *Renderer) AddAbsoluteWithOpts(e Element, x, y, width float64, opts Abso
 	r.absolutes = append(r.absolutes, absoluteItem{
 		elem: e, x: x, y: y, width: width,
 		pageIndex: opts.PageIndex, rightAligned: opts.RightAligned, zIndex: opts.ZIndex, fixed: opts.Fixed,
+		bottomAnchored: opts.BottomAnchored,
 	})
 }
 

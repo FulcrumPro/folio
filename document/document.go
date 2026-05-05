@@ -56,13 +56,14 @@ type NamedDest struct {
 
 // absoluteElement is a layout element placed at fixed coordinates.
 type absoluteElement struct {
-	elem         layout.Element
-	x, y         float64
-	width        float64
-	pageIndex    int // -1 = last page
-	rightAligned bool
-	zIndex       int
-	fixed        bool // render on every page (position: fixed)
+	elem           layout.Element
+	x, y           float64
+	width          float64
+	pageIndex      int // -1 = last page
+	rightAligned   bool
+	zIndex         int
+	fixed          bool // render on every page (position: fixed)
+	bottomAnchored bool
 }
 
 // Document is the top-level API for building a PDF.
@@ -310,7 +311,8 @@ func (d *Document) AddAbsoluteWithOpts(e layout.Element, x, y, width float64, op
 	d.absolutes = append(d.absolutes, absoluteElement{
 		elem: e, x: x, y: y, width: width,
 		pageIndex: opts.PageIndex, rightAligned: opts.RightAligned, zIndex: opts.ZIndex,
-		fixed: opts.Fixed,
+		fixed:          opts.Fixed,
+		bottomAnchored: opts.BottomAnchored,
 	})
 }
 
@@ -408,10 +410,11 @@ func (d *Document) buildAllPages(ctx context.Context) (all []*Page, structTags [
 		}
 		for _, a := range d.absolutes {
 			r.AddAbsoluteWithOpts(a.elem, a.x, a.y, a.width, layout.AbsoluteOpts{
-				RightAligned: a.rightAligned,
-				ZIndex:       a.zIndex,
-				PageIndex:    a.pageIndex,
-				Fixed:        a.fixed,
+				RightAligned:   a.rightAligned,
+				ZIndex:         a.zIndex,
+				PageIndex:      a.pageIndex,
+				Fixed:          a.fixed,
+				BottomAnchored: a.bottomAnchored,
 			})
 		}
 		results, rerr := r.RenderContext(ctx)

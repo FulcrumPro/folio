@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/carlos7ags/folio/html"
+	"github.com/carlos7ags/folio/layout"
 )
 
 // TestJustifyContentShorthand pins the v0.7.1-fulcrum.2 patch:
@@ -82,6 +83,17 @@ func renderHTMLToPDF(src string) ([]byte, error) {
 	doc := newDoc()
 	for _, e := range res.Elements {
 		doc.Add(e)
+	}
+	// Mirror tmpl.RenderDocument's absolute handling — propagate the
+	// BottomAnchored / RightAligned flags so tests of `position:
+	// fixed; bottom: 0` and `right: 0` see the production rendering.
+	for _, abs := range res.Absolutes {
+		doc.AddAbsoluteWithOpts(abs.Element, abs.X, abs.Y, abs.Width, layout.AbsoluteOpts{
+			RightAligned:   abs.RightAligned,
+			BottomAnchored: abs.BottomAnchored,
+			ZIndex:         abs.ZIndex,
+			PageIndex:      -1,
+		})
 	}
 	return doc.ToBytes()
 }

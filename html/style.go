@@ -487,6 +487,16 @@ func (s *computedStyle) inherit() computedStyle {
 		FontStyle:            s.FontStyle,
 		Color:                s.Color,
 		TextAlign:            s.TextAlign,
+		// Propagate the "was-set" flag alongside the value so the
+		// conditional in buildParagraphFromRuns applies the inherited
+		// alignment. Without this, a child block whose ancestor set
+		// `text-align: right` would have the value but no apply
+		// (TextAlignSet stayed false), and child paragraphs silently
+		// fell back to AlignLeft. text-align IS inherited per CSS spec
+		// (https://www.w3.org/TR/css-text-3/#text-align-property).
+		// upstream v0.9.x propagates TextAlignKeyword/TextAlignLast* but
+		// still omits TextAlignSet, so this patch remains necessary.
+		TextAlignSet:         s.TextAlignSet,
 		TextAlignKeyword:     s.TextAlignKeyword,
 		TextAlignLast:        s.TextAlignLast,
 		TextAlignLastSet:     s.TextAlignLastSet,

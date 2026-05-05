@@ -6,6 +6,7 @@ import (
 	"io"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/carlos7ags/folio/document"
 )
@@ -33,15 +34,25 @@ func (d *docWrap) ToBytes() ([]byte, error) {
 }
 
 // findTextY scans every FlateDecode'd content stream in a PDF for a
-// `(<text>) Tj` operator whose preceding `Td` set Y to some value,
-// and returns that Y. Used by tests that want to assert relative
-// positions of two pieces of text without brittle absolute coordinates.
+// text-show operator (`Tj` or `TJ`) whose preceding `Td` set Y to
+// some value, and returns that Y. Handles both:
+//
+//   X Y Td (text) Tj                — single string show
+//   X Y Td [(a) -10 (b) ...] TJ     — kerning-array show; we
+//                                     concatenate the parenthesized
+//                                     strings ignoring spacing values
 //
 // Returns -1 when the text isn't found. Conservative — finds the
 // FIRST occurrence; tests that need every-occurrence behavior should
 // extend this rather than reuse it.
 func findTextY(pdf []byte, text string) float64 {
-	tdAndTj := regexp.MustCompile(`([\d.]+) ([\d.]+) Td\s*\(([^)]+)\)\s*Tj`)
+	// Match `X Y Td` followed (after optional whitespace and font /
+	// color setup operations) by either `(...) Tj` or `[...] TJ`.
+	// Use two separate regexes so the .* non-greedy windows stay tight.
+	tjRe := regexp.MustCompile(`([\d.]+) ([\d.]+) Td\s*\(([^)]+)\)\s*Tj`)
+	tjArrayRe := regexp.MustCompile(`([\d.]+) ([\d.]+) Td\s*\[([^\]]+)\]\s*TJ`)
+	innerStrRe := regexp.MustCompile(`\(([^)]*)\)`)
+
 	rest := pdf
 	for {
 		i := bytes.Index(rest, []byte("\nstream\n"))
@@ -57,10 +68,22 @@ func findTextY(pdf []byte, text string) float64 {
 		if err == nil {
 			decoded, _ := io.ReadAll(zr)
 			zr.Close()
-			for _, m := range tdAndTj.FindAllStringSubmatch(string(decoded), -1) {
+			s := string(decoded)
+
+			for _, m := range tjRe.FindAllStringSubmatch(s, -1) {
 				if m[3] == text {
-					y, perr := strconv.ParseFloat(m[2], 64)
-					if perr == nil {
+					if y, perr := strconv.ParseFloat(m[2], 64); perr == nil {
+						return y
+					}
+				}
+			}
+			for _, m := range tjArrayRe.FindAllStringSubmatch(s, -1) {
+				var sb strings.Builder
+				for _, sm := range innerStrRe.FindAllStringSubmatch(m[3], -1) {
+					sb.WriteString(sm[1])
+				}
+				if sb.String() == text {
+					if y, perr := strconv.ParseFloat(m[2], 64); perr == nil {
 						return y
 					}
 				}

@@ -442,18 +442,28 @@ func (r *Renderer) renderAbsolutes(pages []PageResult, defaultWidth float64) {
 			x = r.pageWidth - item.x - elemWidth
 		}
 
+		// drawBlock interprets the offset Y as the position of the
+		// element's TOP. CSS `bottom: …` positioning instead says
+		// "place the element's BOTTOM at this Y". Translate by adding
+		// the element's measured height to item.y. plan.Consumed is
+		// the total laid-out height; that's what we want here.
+		drawY := item.y
+		if item.bottomAnchored {
+			drawY = item.y + plan.Consumed
+		}
+
 		if item.zIndex < 0 {
 			// Render into a temporary stream and prepend to draw behind flow content.
 			bgStream := content.NewStream()
 			bgCtx := DrawContext{Stream: bgStream, Page: page, ActualText: r.actualText}
 			for _, block := range plan.Blocks {
-				drawBlock(block, x, item.y, &bgCtx, r.tagged, &r.structTags, pageIdx)
+				drawBlock(block, x, drawY, &bgCtx, r.tagged, &r.structTags, pageIdx)
 			}
 			page.Stream.PrependBytes(bgStream.Bytes())
 		} else {
 			ctx := DrawContext{Stream: page.Stream, Page: page, ActualText: r.actualText}
 			for _, block := range plan.Blocks {
-				drawBlock(block, x, item.y, &ctx, r.tagged, &r.structTags, pageIdx)
+				drawBlock(block, x, drawY, &ctx, r.tagged, &r.structTags, pageIdx)
 			}
 		}
 	}

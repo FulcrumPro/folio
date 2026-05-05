@@ -358,13 +358,19 @@ func buildDocumentFromResult(result *foliohtml.ConvertResult, opts *Options) *do
 		doc.Add(e)
 	}
 
-	// Add absolutely positioned elements.
+	// Add absolutely positioned elements. Use AddAbsoluteWithOpts so
+	// the BottomAnchored / RightAligned flags survive the html→tmpl→
+	// document→layout chain. Without BottomAnchored, an element
+	// declared with CSS `bottom: 0` would be drawn with its TOP at
+	// page Y=0 — i.e. completely below the page bottom — instead of
+	// having its BOTTOM at Y=0.
 	for _, abs := range result.Absolutes {
-		if abs.RightAligned {
-			doc.AddAbsoluteRight(abs.Element, abs.X, abs.Y, abs.Width)
-		} else {
-			doc.AddAbsolute(abs.Element, abs.X, abs.Y, abs.Width)
-		}
+		doc.AddAbsoluteWithOpts(abs.Element, abs.X, abs.Y, abs.Width, layout.AbsoluteOpts{
+			RightAligned:   abs.RightAligned,
+			BottomAnchored: abs.BottomAnchored,
+			ZIndex:         abs.ZIndex,
+			PageIndex:      -1,
+		})
 	}
 
 	return doc

@@ -148,12 +148,13 @@ func convertMarginBoxes(src map[string]MarginBoxContent) map[string]layout.Margi
 // AbsoluteItem represents an element removed from normal flow via
 // position:absolute or position:fixed.
 type AbsoluteItem struct {
-	Element      layout.Element
-	X, Y         float64 // X from left edge, Y from top in PDF coordinates (bottom-left origin)
-	Width        float64
-	Fixed        bool // position:fixed (render on every page)
-	RightAligned bool // true when positioned with CSS right (X is right-edge offset)
-	ZIndex       int  // z-index: negative = render behind normal flow
+	Element        layout.Element
+	X, Y           float64 // X from left edge, Y in PDF coordinates (bottom-left origin); see BottomAnchored for whether Y is the top or bottom edge
+	Width          float64
+	Fixed          bool // position:fixed (render on every page)
+	RightAligned   bool // true when positioned with CSS right (X is right-edge offset)
+	BottomAnchored bool // true when CSS used `bottom:` to position the element — Y refers to the BOTTOM edge of the laid-out element, not the top
+	ZIndex         int  // z-index: negative = render behind normal flow
 }
 
 // ConvertFull parses an HTML string and returns both normal-flow elements
@@ -924,7 +925,14 @@ func (c *converter) convertElement(n *html.Node, parentStyle computedStyle) []la
 					// CSS top → PDF y: page_height - top
 					item.Y = cbHeight - style.Top.toPoints(cbHeight, style.FontSize)
 				} else if style.Bottom != nil {
+					// CSS `bottom:` says the BOTTOM edge of the element
+					// sits this far above the page bottom. PDF Y origin
+					// is bottom-left, so Y = bottomVal — but drawBlock
+					// interprets the offset Y as the element's TOP, not
+					// bottom. Mark BottomAnchored so the renderer adds
+					// the laid-out height before drawing.
 					item.Y = style.Bottom.toPoints(cbHeight, style.FontSize)
+					item.BottomAnchored = true
 				}
 				if style.Width != nil {
 					item.Width = style.Width.toPoints(cbWidth, style.FontSize)

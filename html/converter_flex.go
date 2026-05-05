@@ -202,9 +202,42 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 		hasMargins := childStyle.MarginTop != 0 || childStyle.MarginBottom != 0 ||
 			childStyle.MarginLeft != 0 || childStyle.MarginRight != 0
 
+		// Resolve CSS min-width / max-width to points using the
+		// containerWidth that was active when this row was being
+		// converted. We pass the resolved values into FlexItem so
+		// resolveGrowShrink can clamp the item's main-axis size after
+		// the basis-and-grow distribution. Without this, .NET DocGen
+		// v3's `.contain-left { flex: 1; min-width: 50%; max-width:
+		// 55% }` was being silently grown to its 1/3 share of the row
+		// instead of being held to its 50% floor.
+		var minMain, maxMain float64
+		if childStyle.MinWidth != nil {
+			minMain = childStyle.MinWidth.toPoints(c.containerWidth, childStyle.FontSize)
+		}
+		if childStyle.MaxWidth != nil {
+			maxMain = childStyle.MaxWidth.toPoints(c.containerWidth, childStyle.FontSize)
+		}
+		// Clear min-width/max-width on the inner Div so the constraint
+		// isn't applied twice — once by the FlexItem's main-axis clamp
+		// (against the row's container width) and again by the Div
+		// re-resolving the percentage against its FlexItem-allocated
+		// width. The double-resolution on a 300pt row → 150pt allocation
+		// would re-clamp `max-width: 55%` to 0.55 * 150 = 82.5pt.
+		if minMain > 0 || maxMain > 0 {
+			if d, ok := elem.(*layout.Div); ok {
+				if minMain > 0 {
+					d.ClearMinWidthUnit()
+				}
+				if maxMain > 0 {
+					d.ClearMaxWidthUnit()
+				}
+			}
+		}
+
 		needsItem := childStyle.FlexGrow > 0 || childStyle.FlexShrink != 1 ||
 			effectiveBasis != nil || (childStyle.AlignSelf != "" && childStyle.AlignSelf != "auto") ||
-			childStyle.MarginTopAuto || childStyle.MarginLeftAuto || hasMargins
+			childStyle.MarginTopAuto || childStyle.MarginLeftAuto || hasMargins ||
+			minMain > 0 || maxMain > 0
 		if needsItem {
 			item := layout.NewFlexItem(elem)
 			if childStyle.FlexGrow > 0 {
@@ -215,6 +248,12 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 			}
 			if effectiveBasis != nil {
 				item.SetBasisUnit(cssLengthToUnitValue(effectiveBasis, c.containerWidth, childStyle.FontSize))
+			}
+			if minMain > 0 {
+				item.SetMinMainSize(minMain)
+			}
+			if maxMain > 0 {
+				item.SetMaxMainSize(maxMain)
 			}
 			switch childStyle.AlignSelf {
 			case "flex-start", "start":

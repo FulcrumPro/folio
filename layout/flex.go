@@ -57,6 +57,16 @@ type FlexItem struct {
 	marginBottom   float64     // vertical margin below item
 	marginLeft     float64     // horizontal margin (negative = extend left beyond parent)
 	marginRight    float64     // horizontal margin (negative = extend right beyond parent)
+	// Min/max main-axis size after the converter resolves CSS
+	// `min-width` / `max-width` (or `min-height` / `max-height` for
+	// column layouts) against the container width. Zero means
+	// "no constraint." Used by resolveGrowShrink to clamp grown
+	// children — without this, a `.left { flex: 1; min-width: 50% }`
+	// inside a `.row { display: flex }` was silently flex-grown to
+	// its 1/3 share of the row instead of being held to its 50%
+	// floor.
+	minMainSize float64
+	maxMainSize float64
 }
 
 // SetMarginTopAuto marks this flex item to absorb remaining vertical space
@@ -83,6 +93,18 @@ func (fi *FlexItem) SetBasis(v float64) *FlexItem { fi.basis = v; return fi }
 
 // SetBasisUnit sets the flex-basis as a UnitValue, resolved lazily at layout time.
 func (fi *FlexItem) SetBasisUnit(u UnitValue) *FlexItem { fi.basisUnit = &u; return fi }
+
+// SetMinMainSize sets the main-axis min size in points. Used by
+// resolveGrowShrink to clamp grown children to their CSS min-width
+// / min-height. Zero means "no minimum constraint." Callers that
+// need percentage min-widths should resolve the percentage against
+// the container at convert time and pass the resulting points value.
+func (fi *FlexItem) SetMinMainSize(pts float64) *FlexItem { fi.minMainSize = pts; return fi }
+
+// SetMaxMainSize sets the main-axis max size in points. Used by
+// resolveGrowShrink to clamp grown children to their CSS max-width
+// / max-height. Zero means "no maximum constraint."
+func (fi *FlexItem) SetMaxMainSize(pts float64) *FlexItem { fi.maxMainSize = pts; return fi }
 
 // SetAlignSelf overrides the container's align-items for this item.
 func (fi *FlexItem) SetAlignSelf(a AlignItems) *FlexItem { fi.alignSelf = &a; return fi }
@@ -602,7 +624,75 @@ func (f *Flex) resolveGrowShrink(line flexLine, innerWidth float64) []float64 {
 			}
 		}
 	}
+
+	// CSS Flexbox §9.7 step 4 — clamp each item to its CSS min/max
+	// main size, accumulate the violation (the difference between
+	// clamped and pre-clamp sizes), and redistribute that violation
+	// across the unclamped items proportional to their grow/shrink
+	// factors. We do a single pass; CSS spec calls for iterating
+	// until no items violate, but a single pass handles every case
+	// the .NET DocGen v3 templates surface (one item with min-width
+	// + flex-grow:1 next to siblings with no constraint).
+	clampFlexItemsToMinMax(line.items, resolved)
 	return resolved
+}
+
+// clampFlexItemsToMinMax applies the CSS min/max main-size clamp on
+// `resolved` widths and redistributes any resulting overflow/underflow
+// to the unclamped items proportional to their grow factors. Modifies
+// `resolved` in place.
+//
+// Single-pass implementation: items are frozen at their clamp; the
+// total clamp delta becomes the new "free space" we redistribute. If
+// after redistribution another item violates a min/max, we don't
+// iterate — the CSS spec does, but a one-pass solution covers the
+// shapes our templates use today.
+func clampFlexItemsToMinMax(items []*FlexItem, resolved []float64) {
+	type clampResult struct {
+		frozen bool
+		delta  float64 // amount the clamp moved this item: clamped - original (sign tells direction)
+	}
+	clamps := make([]clampResult, len(items))
+	totalDelta := 0.0
+	for i, item := range items {
+		original := resolved[i]
+		clamped := original
+		if item.minMainSize > 0 && clamped < item.minMainSize {
+			clamped = item.minMainSize
+		}
+		if item.maxMainSize > 0 && clamped > item.maxMainSize {
+			clamped = item.maxMainSize
+		}
+		if clamped != original {
+			clamps[i] = clampResult{frozen: true, delta: clamped - original}
+			totalDelta += clamps[i].delta
+			resolved[i] = clamped
+		}
+	}
+	if totalDelta == 0 {
+		return
+	}
+	// Redistribute -totalDelta across unclamped items, proportional to
+	// their grow factor (or shrink factor when totalDelta is negative).
+	totalGrow := 0.0
+	for i, item := range items {
+		if clamps[i].frozen {
+			continue
+		}
+		totalGrow += item.grow
+	}
+	if totalGrow == 0 {
+		return // nothing to redistribute to
+	}
+	for i, item := range items {
+		if clamps[i].frozen || item.grow == 0 {
+			continue
+		}
+		resolved[i] -= totalDelta * (item.grow / totalGrow)
+		if resolved[i] < 0 {
+			resolved[i] = 0
+		}
+	}
 }
 
 // computeJustifyOffsets computes the X offset for each item based on justify-content.

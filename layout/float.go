@@ -44,6 +44,15 @@ func (f *Float) SetMargin(m float64) *Float {
 	return f
 }
 
+// Content returns the wrapped element. Used by callers that need to
+// inspect or unwrap the float — e.g. flex layout, where direct flex
+// children with `float: left/right` must be treated as if the float
+// declaration weren't present (CSS Flexbox §3 — floats are ignored
+// on flex items).
+func (f *Float) Content() Element {
+	return f.content
+}
+
 // Layout returns a single line representing the float's dimensions.
 func (f *Float) Layout(maxWidth float64) []Line {
 	plan := f.content.PlanLayout(LayoutArea{Width: maxWidth, Height: 1e9})

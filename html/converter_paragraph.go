@@ -337,6 +337,42 @@ func (c *converter) collectRunsFromNode(child *html.Node, parentStyle computedSt
 				}
 			}
 		}
+
+		// Honor horizontal margin on inline elements. CSS spec: margin
+		// applies to inline elements horizontally (left and right only;
+		// vertical margins are ignored on inline boxes). Emit a single
+		// whitespace TextRun on each side that has positive margin so
+		// downstream paragraph layout reserves visible separation.
+		// LetterSpacing on the run pads the advance past one
+		// space-glyph width to approximate the requested margin in
+		// points — exact font-metric measurement happens at layout
+		// time and we don't have it here, so the rendered gap is
+		// approximate but >= the margin (better than the prior
+		// behavior of zero gap).
+		// upstream v0.9.x migrated margins to lazy *cssLength; resolve the
+		// horizontal margins to points against the current container width
+		// via the MarginLeftAt/MarginRightAt accessors (was childStyle.MarginLeft).
+		marginLeft := childStyle.MarginLeftAt(c.containerWidth)
+		marginRight := childStyle.MarginRightAt(c.containerWidth)
+		if (marginLeft > 0 || marginRight > 0) && len(childRuns) > 0 {
+			parentFont, parentEmbedded := c.resolveFontPair(parentStyle)
+			pad := func(margin float64) layout.TextRun {
+				return layout.TextRun{
+					Text:          " ",
+					Font:          parentFont,
+					Embedded:      parentEmbedded,
+					FontSize:      parentStyle.FontSize,
+					Color:         parentStyle.Color,
+					LetterSpacing: margin,
+				}
+			}
+			if marginLeft > 0 {
+				childRuns = append([]layout.TextRun{pad(marginLeft)}, childRuns...)
+			}
+			if marginRight > 0 {
+				childRuns = append(childRuns, pad(marginRight))
+			}
+		}
 		return childRuns
 	}
 	return nil

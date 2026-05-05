@@ -1336,7 +1336,7 @@ func (c *converter) isInlineFlowChild(child *html.Node, parentStyle computedStyl
 
 // isInlineFlowElement reports whether an element node is one of the
 // text-level inline HTML elements that participate in inline flow by
-// default (subject to CSS display overrides).
+// default (subject to CSS display overrides and float promotion).
 func (c *converter) isInlineFlowElement(n *html.Node, parentStyle computedStyle) bool {
 	if n.Type != html.ElementNode {
 		return false
@@ -1350,6 +1350,17 @@ func (c *converter) isInlineFlowElement(n *html.Node, parentStyle computedStyle)
 		style := c.computeElementStyle(n, parentStyle)
 		if style.Display == "block" || style.Display == "flex" ||
 			style.Display == "grid" || style.Display == "none" {
+			return false
+		}
+		// CSS 2.1 §9.7: setting `float` to a non-`none` value promotes
+		// the element to block-level (the "computed display" becomes
+		// `block`). Treat floated inline elements as block here so they
+		// route through convertElement, which already wraps the result
+		// in layout.Float at the block-level path. Without this, an
+		// inline `<span style="float:right">` stayed in the parent's
+		// inline buffer, was rendered as a normal text run, and the
+		// float declaration silently dropped on the floor.
+		if style.Float == "left" || style.Float == "right" {
 			return false
 		}
 		return true

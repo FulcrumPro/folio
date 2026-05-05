@@ -281,10 +281,22 @@ func (d *Div) SetMaxWidthUnit(u UnitValue) *Div {
 	return d
 }
 
+// ClearMaxWidthUnit removes the explicit max-width, used when the constraint
+// has been consumed by an outer layout (e.g. a FlexItem's main-axis clamp).
+func (d *Div) ClearMaxWidthUnit() {
+	d.maxWidthUnit = nil
+}
+
 // SetMinWidthUnit sets the min-width as a UnitValue, resolved at layout time.
 func (d *Div) SetMinWidthUnit(u UnitValue) *Div {
 	d.minWidthUnit = &u
 	return d
+}
+
+// ClearMinWidthUnit removes the explicit min-width, used when the constraint
+// has been consumed by an outer layout (e.g. a FlexItem's main-axis clamp).
+func (d *Div) ClearMinWidthUnit() {
+	d.minWidthUnit = nil
 }
 
 // SetMinHeightUnit sets the min-height as a UnitValue, resolved at layout time.

@@ -194,10 +194,22 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 			elem = wrapper
 		}
 
-		// CSS width on a flex child acts as flex-basis (when flex-basis is not set).
+		// CSS width on a flex child acts as flex-basis only when the
+		// container's main axis is horizontal (row / row-reverse). In a
+		// column flex container, `width` is the cross axis (per the CSS
+		// Flexbox spec — `width`/`height` always refer to physical
+		// dimensions, while flex-basis tracks the main axis), and using
+		// it as basis would silently confuse the main-size distribution
+		// with a cross-axis constraint. Without this gate, .NET DocGen
+		// v3's `.v3-pdf-details-left { flex-grow: 1; width: 250px }`
+		// inside `.v3-info-contain1 { flex-direction: column }` had its
+		// 250px width swallowed as a vertical basis, and the Div's own
+		// width unit was cleared — so the BILLING box stretched to the
+		// full cross-axis instead of being held to 250px.
+		isRowDirection := style.FlexDirection != "column" && style.FlexDirection != "column-reverse"
 		effectiveBasis := childStyle.FlexBasis
 		widthUsedAsBasis := false
-		if effectiveBasis == nil && childStyle.Width != nil {
+		if effectiveBasis == nil && childStyle.Width != nil && isRowDirection {
 			effectiveBasis = childStyle.Width
 			widthUsedAsBasis = true
 		}

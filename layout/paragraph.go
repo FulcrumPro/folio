@@ -1449,7 +1449,16 @@ func (p *Paragraph) measureWords(maxWidth float64) ([]Word, float64) {
 	if p.wordBreak != "keep-all" {
 		measured = breakCJKWords(measured)
 	}
-	measured = breakLongWords(measured, maxWidth)
+	// Mirror the dispatch in measureWords (above): word-break:break-all
+	// requires every word be split at character boundaries, not just the
+	// over-long ones. Calling only breakLongWords here let break-all
+	// silently degrade to default break behavior whenever re-measurement
+	// was performed by this code path.
+	if p.wordBreak == "break-all" {
+		measured = breakAllWords(measured, maxWidth)
+	} else {
+		measured = breakLongWords(measured, maxWidth)
+	}
 	return measured, maxFontSize
 }
 

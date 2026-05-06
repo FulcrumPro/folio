@@ -1215,11 +1215,17 @@ func (p *Paragraph) PlanLayout(area LayoutArea) LayoutPlan {
 			curY += info.spaceBefore
 		}
 
-		x := 0.0
+		// bgX is the line box's left edge (first-line indent applied,
+		// no alignment offset). The text rendering origin adds the
+		// alignment offset on top of bgX. Separating these keeps the
+		// paragraph background pinned to the content-box width
+		// instead of riding along with center/right-aligned text —
+		// otherwise the background leaks past the line's right edge
+		// by the alignment offset (CSS Backgrounds & Borders L3 §2.1).
+		bgX := 0.0
 		lineMaxW := area.Width
-		// Apply first-line indent to the first line only.
 		if i == 0 && p.firstIndent != 0 {
-			x += p.firstIndent
+			bgX += p.firstIndent
 			lineMaxW -= p.firstIndent
 		}
 		effectiveAlign := p.align
@@ -1232,12 +1238,14 @@ func (p *Paragraph) PlanLayout(area LayoutArea) LayoutPlan {
 		if p.textAlignLastSet && (info.isLast || i == splitIdx-1) {
 			effectiveAlign = p.textAlignLast
 		}
+		alignOffset := 0.0
 		switch effectiveAlign {
 		case AlignCenter:
-			x += (lineMaxW - info.width) / 2
+			alignOffset = (lineMaxW - info.width) / 2
 		case AlignRight:
-			x += lineMaxW - info.width
+			alignOffset = lineMaxW - info.width
 		}
+		x := bgX + alignOffset
 
 		// Capture for closure.
 		capturedWords := slices.Clone(info.words)
@@ -1246,6 +1254,7 @@ func (p *Paragraph) PlanLayout(area LayoutArea) LayoutPlan {
 		capturedAlign := effectiveAlign
 		capturedBg := p.background
 		capturedLineH := lineHeights[i]
+		capturedAlignOffset := alignOffset
 
 		// Build child blocks for inline-block words. Positions are
 		// line-relative (starting at 0); the parent PlacedBlock's X
@@ -1275,7 +1284,7 @@ func (p *Paragraph) PlanLayout(area LayoutArea) LayoutPlan {
 			Tag:    "P",
 			Draw: func(ctx DrawContext, absX, absTopY float64) {
 				if capturedBg != nil {
-					drawBackground(ctx, *capturedBg, absX, absTopY, capturedWidth, capturedLineH)
+					drawBackground(ctx, *capturedBg, absX-capturedAlignOffset, absTopY, capturedWidth, capturedLineH)
 				}
 				baseline := computeBaseline(capturedWords, capturedLineH)
 				drawTextLine(ctx, capturedWords, absX, absTopY-baseline, capturedWidth, capturedAlign, capturedIsLast)

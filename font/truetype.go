@@ -279,6 +279,23 @@ func (f *sfntFace) NumGlyphs() int {
 	return int(f.pf.maxp.numGlyphs)
 }
 
+// IsCFF reports whether this face uses CFF outlines (a `CFF ` table)
+// rather than TrueType outlines (glyf/loca). CFF fonts require a
+// different PDF embedding path: /FontFile3 + /CIDFontType0C instead
+// of /FontFile2 + /CIDFontType2.
+func (f *sfntFace) IsCFF() bool {
+	_, ok := f.pf.rawTables["CFF "]
+	return ok
+}
+
+// CFFData returns the raw bytes of the `CFF ` table when present.
+// The PDF FontFile3 stream expects raw CFF bytes — not the surrounding
+// sfnt wrapper — so this is the input both to CFF subsetting and to
+// the unmodified-embed fallback. Returns nil for non-CFF faces.
+func (f *sfntFace) CFFData() []byte {
+	return f.pf.rawTables["CFF "]
+}
+
 // GSUB returns the parsed GSUB substitution tables. The result is cached
 // after the first call; a nil return means the font has no GSUB tables
 // for any of the recognized features.

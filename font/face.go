@@ -104,3 +104,26 @@ type GSUBProvider interface {
 type GPOSProvider interface {
 	GPOS() *GPOSAdjustments
 }
+
+// cffFace is a package-private interface for accessing CFF table data
+// on faces whose underlying implementation parses sfnt tables. CFF
+// embedding takes a different PDF object-graph path from TrueType, so
+// the embedder needs to detect CFF and pull out the raw `CFF ` table
+// bytes; this interface keeps that coupling out of the public Face
+// surface during v0.x.
+type cffFace interface {
+	IsCFF() bool
+	CFFData() []byte
+}
+
+// faceCFFData returns (cffBytes, true) if the face carries a `CFF `
+// table, otherwise (nil, false). Used by the embed path to decide
+// between the TrueType (/FontFile2, /CIDFontType2) and CFF
+// (/FontFile3, /CIDFontType0) object graphs.
+func faceCFFData(f Face) ([]byte, bool) {
+	cf, ok := f.(cffFace)
+	if !ok || !cf.IsCFF() {
+		return nil, false
+	}
+	return cf.CFFData(), true
+}

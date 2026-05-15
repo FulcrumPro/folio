@@ -165,6 +165,53 @@ func TestAddTextMultiplePages(t *testing.T) {
 	}
 }
 
+// TestFontDedupAcrossPages pins the document-level font-sharing fix:
+// the same *font.EmbeddedFont (and *font.Standard) referenced by
+// multiple pages must register exactly one font object in the PDF,
+// not one per page. Pre-fix, a 20-page document with one shared CJK
+// embedded font produced 20 /FontFile2 streams; post-fix it produces
+// one. The reporter of issue #295 specifically noticed this — "each
+// page contains one copy of CJK fonts" — and the multi-MB blowup
+// from per-page embedding was the visible symptom.
+func TestFontDedupAcrossPages(t *testing.T) {
+	face, err := font.LoadTTF(testFontPath(t))
+	if err != nil {
+		t.Fatalf("LoadTTF: %v", err)
+	}
+
+	doc := NewDocument(PageSizeLetter)
+	ef := font.NewEmbeddedFont(face)
+	for i := range 5 {
+		p := doc.AddPage()
+		// Both standard (Helvetica) and embedded fonts go on every
+		// page so we test both dedup paths in one assertion.
+		p.AddText("Std", font.Helvetica, 12, 72, 720)
+		_ = i
+		p.AddTextEmbedded("a", ef, 12, 72, 700)
+	}
+
+	var buf bytes.Buffer
+	if _, err := doc.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+	pdf := buf.String()
+
+	// The embedded TrueType path emits exactly one /FontFile2
+	// reference per unique embedded font; with five pages sharing
+	// one EmbeddedFont we want exactly one.
+	if got := strings.Count(pdf, "/FontFile2"); got != 1 {
+		t.Errorf("/FontFile2 occurrences = %d, want 1 (per-document share)", got)
+	}
+	// Helvetica is a Standard font: its dict is small but should
+	// still be emitted once, not five times.
+	if got := strings.Count(pdf, "/BaseFont /Helvetica"); got != 1 {
+		t.Errorf("/BaseFont /Helvetica occurrences = %d, want 1", got)
+	}
+	if got := strings.Count(pdf, "/Subtype /CIDFontType2"); got != 1 {
+		t.Errorf("/Subtype /CIDFontType2 occurrences = %d, want 1", got)
+	}
+}
+
 func TestBlankPageStillWorks(t *testing.T) {
 	// A page with no text should have no /Contents but should
 	// have an empty /Resources (required by spec, qpdf warns otherwise).

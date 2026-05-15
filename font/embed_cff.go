@@ -3,11 +3,7 @@
 
 package font
 
-import (
-	"maps"
-
-	"github.com/carlos7ags/folio/core"
-)
+import "github.com/carlos7ags/folio/core"
 
 // buildObjectsCFF builds the PDF object graph for a CFF-flavored
 // embedded font. The structure mirrors the TrueType path in
@@ -37,15 +33,11 @@ func (ef *EmbeddedFont) buildObjectsCFF(cffData []byte, addObject func(core.PdfO
 	psName := sanitizePSName(face.PostScriptName())
 	upem := face.UnitsPerEm()
 
-	// Always include .notdef (GID 0) in the used-glyph set; the
-	// subset tag in the PostScript name is derived from this set.
-	glyphs := make(map[uint16]rune, len(ef.usedGlyphs)+1)
-	glyphs[0] = 0
-	maps.Copy(glyphs, ef.usedGlyphs)
-
-	// Phase 1: embed CFF bytes unchanged. Phase 3+ will replace this
-	// call with SubsetCFF(cffData, glyphs) and apply the subset tag
-	// prefix to psName on success.
+	// Phase 1: embed CFF bytes unchanged. Phase 3+ will replace cffData
+	// with a SubsetCFF result and apply the six-letter "XXXXXX+"
+	// subset tag prefix to psName. The same prefix must be set on
+	// /BaseFont in the Type0 dict, /BaseFont in the CIDFont, and
+	// /FontName in the descriptor — derive once at that point.
 	fontStream := core.NewPdfStreamCompressed(cffData)
 	fontStream.Dict.Set("Subtype", core.NewPdfName("CIDFontType0C"))
 	fontStreamRef := addObject(fontStream)

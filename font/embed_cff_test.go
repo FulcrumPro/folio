@@ -4,35 +4,55 @@
 package font
 
 import (
-	"bytes"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/carlos7ags/folio/core"
 )
 
-// testCFFFontPath returns a path to an OTF (CFF-flavored) font that
-// exists on the test system, or skips the test. Real CFF outlines are
-// needed because the dispatch is gated on the presence of the `CFF `
-// table; a synthetic minimal sfnt would still exercise the same code
-// path but at the cost of hand-rolling head/hhea/maxp/hmtx/cmap. Once
-// the Phase 2 parser lands we can switch these tests to a synthetic
-// fixture and drop the system-font dependency.
+// testCFFFontPath returns a path to a CID-keyed CFF font (the dispatch
+// the embedder now gates on) that exists on the test system, or skips
+// the test. Non-CID-keyed CFF fonts are explicitly excluded here: they
+// fall through to the legacy TrueType embed path by design, so testing
+// the CFF dispatch with one of them would mis-fire the assertions.
+//
+// A synthetic sfnt-with-CFF fixture would remove the system-font
+// dependency entirely; that lands with the Phase 2 CFF parser, which
+// makes hand-rolling a valid sfnt-wrapped CID-keyed CFF a side-effect
+// of work already in progress rather than a one-off test fixture.
 func testCFFFontPath(t *testing.T) string {
 	t.Helper()
 	candidates := []string{
-		"/System/Library/Fonts/Supplemental/STIXGeneral.otf",
-		"/System/Library/Fonts/Supplemental/NotoSansCanadianAboriginal-Regular.otf",
-		"/System/Library/Fonts/LastResort.otf",
+		"/System/Library/Fonts/Hiragino Sans GB.ttc",
 		"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+		"/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+		"/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
 	}
 	for _, p := range candidates {
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
 	}
-	t.Skip("no CFF/OTF font available on this system")
+	t.Skip("no CID-keyed CFF font available on this system")
+	return ""
+}
+
+// testNonCIDKeyedCFFFontPath returns a Latin/.otf CFF font (name-keyed)
+// for testing that the dispatcher correctly *excludes* it. STIXGeneral
+// is widely available on macOS; on Linux there's no comparably
+// universal name-keyed CFF, so the test skips.
+func testNonCIDKeyedCFFFontPath(t *testing.T) string {
+	t.Helper()
+	candidates := []string{
+		"/System/Library/Fonts/Supplemental/STIXGeneral.otf",
+		"/System/Library/Fonts/Supplemental/NotoSansCanadianAboriginal-Regular.otf",
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	t.Skip("no name-keyed CFF font available on this system")
 	return ""
 }
 
@@ -45,7 +65,7 @@ func loadTestCFFFace(t *testing.T) Face {
 	return face
 }
 
-func TestIsCFFDetectsOutlineFormat(t *testing.T) {
+func TestIsCFFAndCFF2DetectOutlineFormat(t *testing.T) {
 	cff := loadTestCFFFace(t)
 	cf, ok := cff.(cffFace)
 	if !ok {
@@ -54,8 +74,11 @@ func TestIsCFFDetectsOutlineFormat(t *testing.T) {
 	if !cf.IsCFF() {
 		t.Error("expected IsCFF() = true for OTF/CFF font")
 	}
+	if cf.IsCFF2() {
+		t.Error("IsCFF2() must be false for a plain CFF v1 font")
+	}
 	if len(cf.CFFData()) == 0 {
-		t.Error("expected CFFData() to return non-empty bytes for CFF font")
+		t.Error("CFFData() returned empty for CFF font")
 	}
 
 	ttf := loadTestFace(t)
@@ -63,44 +86,78 @@ func TestIsCFFDetectsOutlineFormat(t *testing.T) {
 	if !ok {
 		t.Fatalf("TTF face does not implement cffFace")
 	}
-	if cf2.IsCFF() {
-		t.Error("expected IsCFF() = false for TrueType font")
+	if cf2.IsCFF() || cf2.IsCFF2() {
+		t.Error("TrueType face must have both IsCFF/IsCFF2 false")
 	}
 	if cf2.CFFData() != nil {
-		t.Error("expected CFFData() = nil for TrueType font")
+		t.Error("CFFData() must be nil for TrueType")
 	}
 }
 
-func TestFaceCFFDataHelper(t *testing.T) {
-	// TrueType: helper returns (nil, false).
-	ttf := loadTestFace(t)
-	if data, ok := faceCFFData(ttf); ok || data != nil {
-		t.Errorf("faceCFFData(TTF) = (%d bytes, %v), want (nil, false)", len(data), ok)
-	}
-
-	// CFF: helper returns (bytes, true) with the same payload as
-	// CFFData() directly. We compare lengths rather than full bytes
-	// to keep the assertion meaningful without ballooning test
-	// memory for large CJK fonts.
-	cff := loadTestCFFFace(t)
-	data, ok := faceCFFData(cff)
+func TestFaceCFFDataAcceptsCIDKeyed(t *testing.T) {
+	face := loadTestCFFFace(t)
+	data, ok := faceCFFData(face)
 	if !ok {
-		t.Fatal("faceCFFData(CFF) returned ok=false")
+		t.Fatal("faceCFFData rejected CID-keyed CFF face")
 	}
 	if len(data) == 0 {
-		t.Error("faceCFFData(CFF) returned empty bytes")
-	}
-	if direct := cff.(cffFace).CFFData(); len(direct) != len(data) {
-		t.Errorf("faceCFFData length %d != CFFData length %d", len(data), len(direct))
+		t.Error("faceCFFData returned empty bytes for CID-keyed CFF")
 	}
 }
 
-// TestBuildObjectsCFFDispatch exercises the embed-path branch added in
-// Phase 1: a CFF face must produce a /FontFile3 stream with
-// /CIDFontType0C subtype, a /CIDFontType0 descendant font, no
-// /CIDToGIDMap, and none of the TrueType-only keys (/FontFile2,
-// /CIDFontType2, /Length1).
-func TestBuildObjectsCFFDispatch(t *testing.T) {
+// TestFaceCFFDataExcludesNameKeyed verifies the CID-keyed gate added
+// in Phase 1.5. A plain Latin CFF font has a `CFF ` table but the Top
+// DICT does not open with ROS, so the dispatcher must keep it on the
+// legacy embed path until a non-CIDFont CFF graph (/Type1C) lands.
+func TestFaceCFFDataExcludesNameKeyed(t *testing.T) {
+	path := testNonCIDKeyedCFFFontPath(t)
+	face, err := LoadFont(path)
+	if err != nil {
+		t.Fatalf("LoadFont %s: %v", path, err)
+	}
+	cf := face.(cffFace)
+	if !cf.IsCFF() {
+		t.Fatalf("test precondition broken: %s should be CFF", path)
+	}
+	if _, ok := faceCFFData(face); ok {
+		t.Errorf("faceCFFData accepted name-keyed CFF; expected (nil, false)")
+	}
+}
+
+func TestFaceCFFDataRejectsTrueType(t *testing.T) {
+	if data, ok := faceCFFData(loadTestFace(t)); ok || data != nil {
+		t.Errorf("faceCFFData(TTF) = (%d bytes, %v), want (nil, false)", len(data), ok)
+	}
+}
+
+// name extracts the value of a /Name PDF object from a dictionary
+// slot. The two failures (key absent, value not a name) are folded
+// into a single error path because test callers only need the name
+// string or "missing".
+func name(t *testing.T, d *core.PdfDictionary, key string) string {
+	t.Helper()
+	v := d.Get(key)
+	if v == nil {
+		return ""
+	}
+	n, ok := v.(*core.PdfName)
+	if !ok {
+		t.Fatalf("dict key %q: expected *PdfName, got %T", key, v)
+	}
+	return n.Value
+}
+
+func hasKey(d *core.PdfDictionary, key string) bool {
+	return d.Get(key) != nil
+}
+
+// TestBuildObjectsCFFDispatchStructural asserts the CFF embed object
+// graph by reading PDF dictionary keys directly. Substring matches on
+// the serialized PDF text are fragile — `/CIDFontType0` is a strict
+// prefix of `/CIDFontType0C`, so a regression that wrote the wrong
+// subtype on the wrong dict would not be caught by a grep-based
+// assertion.
+func TestBuildObjectsCFFDispatchStructural(t *testing.T) {
 	face := loadTestCFFFace(t)
 	ef := NewEmbeddedFont(face)
 	ef.EncodeString("Test")
@@ -111,72 +168,119 @@ func TestBuildObjectsCFFDispatch(t *testing.T) {
 		objects = append(objects, obj)
 		return core.NewPdfIndirectReference(n, 0)
 	}
-
 	type0 := ef.BuildObjects(addObject)
 
-	// CFF path emits the same four indirect objects as TrueType:
-	// font stream, descriptor, CIDFont, ToUnicode.
 	if len(objects) != 4 {
-		t.Fatalf("expected 4 indirect objects, got %d", len(objects))
+		t.Fatalf("want 4 indirect objects, got %d", len(objects))
 	}
 
-	// Serialize every object so we can grep for keys without
-	// asserting on indirect-reference numbers.
-	dump := func(o core.PdfObject) string {
-		var buf bytes.Buffer
-		_, _ = o.WriteTo(&buf)
-		return buf.String()
+	// Object 0: the CFF stream. Subtype lives on the stream dict.
+	stream, ok := objects[0].(*core.PdfStream)
+	if !ok {
+		t.Fatalf("objects[0] is %T, want *PdfStream", objects[0])
 	}
-	streamText := dump(objects[0])
-	descriptorText := dump(objects[1])
-	cidFontText := dump(objects[2])
-	type0Text := dump(type0)
-
-	// Font stream must declare CFF subtype, never carry /Length1.
-	if !strings.Contains(streamText, "/Subtype /CIDFontType0C") {
-		t.Errorf("font stream missing /Subtype /CIDFontType0C:\n%s", streamText)
+	if got := name(t, stream.Dict, "Subtype"); got != "CIDFontType0C" {
+		t.Errorf("stream /Subtype = %q, want CIDFontType0C", got)
 	}
-	if strings.Contains(streamText, "/Length1") {
-		t.Error("font stream must not carry /Length1 in CFF path")
+	if hasKey(stream.Dict, "Length1") {
+		t.Error("stream must not carry /Length1 on the CFF path")
 	}
 
-	// FontDescriptor uses /FontFile3, not /FontFile2.
-	if !strings.Contains(descriptorText, "/FontFile3") {
-		t.Errorf("descriptor missing /FontFile3:\n%s", descriptorText)
+	// Object 1: FontDescriptor.
+	descriptor, ok := objects[1].(*core.PdfDictionary)
+	if !ok {
+		t.Fatalf("objects[1] is %T, want *PdfDictionary", objects[1])
 	}
-	if strings.Contains(descriptorText, "/FontFile2") {
-		t.Error("descriptor must not reference /FontFile2 in CFF path")
+	if got := name(t, descriptor, "Type"); got != "FontDescriptor" {
+		t.Errorf("descriptor /Type = %q", got)
+	}
+	if !hasKey(descriptor, "FontFile3") {
+		t.Error("descriptor missing /FontFile3")
+	}
+	if hasKey(descriptor, "FontFile2") {
+		t.Error("descriptor must not carry /FontFile2 on CFF path")
+	}
+	for _, k := range []string{"FontName", "Flags", "FontBBox", "Ascent", "Descent", "CapHeight", "StemV", "ItalicAngle"} {
+		if !hasKey(descriptor, k) {
+			t.Errorf("descriptor missing /%s", k)
+		}
 	}
 
-	// Descendant CIDFont must be CIDFontType0 and must NOT declare
-	// CIDToGIDMap (/Identity is implicit for /CIDFontType0; spec
-	// readers reject the explicit key).
-	if !strings.Contains(cidFontText, "/Subtype /CIDFontType0") {
-		t.Errorf("CIDFont missing /Subtype /CIDFontType0:\n%s", cidFontText)
+	// Object 2: CIDFont (descendant of Type0).
+	cidFont, ok := objects[2].(*core.PdfDictionary)
+	if !ok {
+		t.Fatalf("objects[2] is %T, want *PdfDictionary", objects[2])
 	}
-	if strings.Contains(cidFontText, "/CIDFontType2") {
-		t.Error("CIDFont must not declare /CIDFontType2 in CFF path")
+	if got := name(t, cidFont, "Subtype"); got != "CIDFontType0" {
+		t.Errorf("CIDFont /Subtype = %q, want exactly CIDFontType0", got)
 	}
-	if strings.Contains(cidFontText, "/CIDToGIDMap") {
+	if got := name(t, cidFont, "Type"); got != "Font" {
+		t.Errorf("CIDFont /Type = %q", got)
+	}
+	if hasKey(cidFont, "CIDToGIDMap") {
 		t.Error("CIDFont must omit /CIDToGIDMap for /CIDFontType0")
 	}
+	for _, k := range []string{"BaseFont", "CIDSystemInfo", "FontDescriptor", "DW", "W"} {
+		if !hasKey(cidFont, k) {
+			t.Errorf("CIDFont missing /%s", k)
+		}
+	}
 
-	// Shared behaviour with TrueType path: Type0 wrapper, Identity-H,
-	// ToUnicode link.
-	if !strings.Contains(type0Text, "/Subtype /Type0") {
-		t.Errorf("Type0 dict missing /Subtype /Type0:\n%s", type0Text)
+	// Type0 wrapper.
+	if got := name(t, type0, "Subtype"); got != "Type0" {
+		t.Errorf("Type0 /Subtype = %q", got)
 	}
-	if !strings.Contains(type0Text, "/Encoding /Identity-H") {
-		t.Errorf("Type0 dict missing /Encoding /Identity-H:\n%s", type0Text)
+	if got := name(t, type0, "Encoding"); got != "Identity-H" {
+		t.Errorf("Type0 /Encoding = %q", got)
 	}
-	if !strings.Contains(type0Text, "/ToUnicode") {
-		t.Errorf("Type0 dict missing /ToUnicode:\n%s", type0Text)
+	for _, k := range []string{"BaseFont", "DescendantFonts", "ToUnicode"} {
+		if !hasKey(type0, k) {
+			t.Errorf("Type0 missing /%s", k)
+		}
+	}
+}
+
+// TestBuildObjectsNameKeyedCFFFallthrough confirms a plain Latin CFF
+// (no ROS) takes the legacy TrueType embed path. This is a behavior
+// regression test for the gate: it must NOT silently route to the
+// CFF path and emit the wrong stream subtype.
+func TestBuildObjectsNameKeyedCFFFallthrough(t *testing.T) {
+	path := testNonCIDKeyedCFFFontPath(t)
+	face, err := LoadFont(path)
+	if err != nil {
+		t.Fatalf("LoadFont %s: %v", path, err)
+	}
+	ef := NewEmbeddedFont(face)
+	ef.EncodeString("Test")
+
+	var objects []core.PdfObject
+	addObject := func(obj core.PdfObject) *core.PdfIndirectReference {
+		n := len(objects) + 1
+		objects = append(objects, obj)
+		return core.NewPdfIndirectReference(n, 0)
+	}
+	ef.BuildObjects(addObject)
+
+	descriptor, ok := objects[1].(*core.PdfDictionary)
+	if !ok {
+		t.Fatalf("objects[1] is %T", objects[1])
+	}
+	// Legacy path: /FontFile2, not /FontFile3.
+	if !hasKey(descriptor, "FontFile2") {
+		t.Error("name-keyed CFF should fall through to /FontFile2 path")
+	}
+	if hasKey(descriptor, "FontFile3") {
+		t.Error("name-keyed CFF must not take /FontFile3 path until non-CID CFF support lands")
+	}
+
+	cidFont := objects[2].(*core.PdfDictionary)
+	if got := name(t, cidFont, "Subtype"); got != "CIDFontType2" {
+		t.Errorf("name-keyed CFF /Subtype = %q, want CIDFontType2 on legacy path", got)
 	}
 }
 
 // TestBuildObjectsTrueTypeUnchanged guards against the dispatch
-// inadvertently rerouting TrueType faces through the CFF path. This
-// is a regression test for the embed.go change in Phase 1.
+// inadvertently rerouting TrueType faces through the CFF path.
 func TestBuildObjectsTrueTypeUnchanged(t *testing.T) {
 	face := loadTestFace(t)
 	ef := NewEmbeddedFont(face)
@@ -190,23 +294,47 @@ func TestBuildObjectsTrueTypeUnchanged(t *testing.T) {
 	}
 	ef.BuildObjects(addObject)
 
-	var descriptorBuf bytes.Buffer
-	_, _ = objects[1].WriteTo(&descriptorBuf)
-	descriptorText := descriptorBuf.String()
-	if !strings.Contains(descriptorText, "/FontFile2") {
-		t.Errorf("TrueType descriptor must still use /FontFile2:\n%s", descriptorText)
+	descriptor := objects[1].(*core.PdfDictionary)
+	if !hasKey(descriptor, "FontFile2") {
+		t.Error("TrueType descriptor must still use /FontFile2")
 	}
-	if strings.Contains(descriptorText, "/FontFile3") {
+	if hasKey(descriptor, "FontFile3") {
 		t.Error("TrueType descriptor must not switch to /FontFile3")
 	}
 
-	var cidBuf bytes.Buffer
-	_, _ = objects[2].WriteTo(&cidBuf)
-	cidText := cidBuf.String()
-	if !strings.Contains(cidText, "/Subtype /CIDFontType2") {
-		t.Errorf("TrueType CIDFont must remain /CIDFontType2:\n%s", cidText)
+	cidFont := objects[2].(*core.PdfDictionary)
+	if got := name(t, cidFont, "Subtype"); got != "CIDFontType2" {
+		t.Errorf("TrueType CIDFont /Subtype = %q, want CIDFontType2", got)
 	}
-	if !strings.Contains(cidText, "/CIDToGIDMap /Identity") {
-		t.Errorf("TrueType CIDFont must keep /CIDToGIDMap /Identity:\n%s", cidText)
+	if got := name(t, cidFont, "CIDToGIDMap"); got != "Identity" {
+		t.Errorf("TrueType CIDFont /CIDToGIDMap = %q, want Identity", got)
+	}
+}
+
+// TestBuildObjectsCFFEmptyUsedGlyphs covers the edge case where no
+// EncodeString call has happened. The CFF builder must still emit four
+// indirect objects with sensible defaults (empty /W array, empty
+// ToUnicode bfchar block).
+func TestBuildObjectsCFFEmptyUsedGlyphs(t *testing.T) {
+	face := loadTestCFFFace(t)
+	ef := NewEmbeddedFont(face)
+
+	var objects []core.PdfObject
+	addObject := func(obj core.PdfObject) *core.PdfIndirectReference {
+		n := len(objects) + 1
+		objects = append(objects, obj)
+		return core.NewPdfIndirectReference(n, 0)
+	}
+	type0 := ef.BuildObjects(addObject)
+
+	if len(objects) != 4 {
+		t.Fatalf("want 4 indirect objects, got %d", len(objects))
+	}
+	cidFont := objects[2].(*core.PdfDictionary)
+	if !hasKey(cidFont, "W") {
+		t.Error("/W must be present even when empty")
+	}
+	if got := name(t, type0, "Subtype"); got != "Type0" {
+		t.Errorf("Type0 /Subtype = %q", got)
 	}
 }

@@ -71,6 +71,26 @@ func FuzzParseCFFDict(f *testing.F) {
 	})
 }
 
+// FuzzSubsetCFF makes sure malformed input never panics the assembly
+// pipeline. parseCFF rejects most garbage upstream; the subsetter's
+// remaining surface (INDEX writer + offset patching + section layout)
+// is the path the fuzzer explores when a valid CID-keyed CFF flows
+// through.
+func FuzzSubsetCFF(f *testing.F) {
+	f.Add([]byte{})
+	f.Add(buildSyntheticCIDKeyedCFF(testingTNoop{}, syntheticCFFOptions{numGlyphs: 3, fdCount: 1}))
+	f.Add(buildSyntheticCIDKeyedCFF(testingTNoop{}, syntheticCFFOptions{numGlyphs: 8, fdCount: 3}))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("SubsetCFF panicked on %d bytes: %v", len(data), r)
+			}
+		}()
+		_, _ = SubsetCFF(data, map[uint16]rune{1: 'a'})
+	})
+}
+
 // testingTNoop implements fixtureT for the synthetic CFF builder when
 // called from a fuzz seed list. The builder only calls Helper /
 // Fatalf on bad inputs that we never pass in seed corpus, so a no-op

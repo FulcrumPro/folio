@@ -3,7 +3,11 @@
 
 package font
 
-import "github.com/carlos7ags/folio/core"
+import (
+	"maps"
+
+	"github.com/carlos7ags/folio/core"
+)
 
 // buildObjectsCFF builds the PDF object graph for a CFF-flavored
 // embedded font. The structure mirrors the TrueType path in
@@ -33,11 +37,25 @@ func (ef *EmbeddedFont) buildObjectsCFF(cffData []byte, addObject func(core.PdfO
 	psName := sanitizePSName(face.PostScriptName())
 	upem := face.UnitsPerEm()
 
-	// Phase 1: embed CFF bytes unchanged. Phase 3+ will replace cffData
-	// with a SubsetCFF result and apply the six-letter "XXXXXX+"
-	// subset tag prefix to psName. The same prefix must be set on
-	// /BaseFont in the Type0 dict, /BaseFont in the CIDFont, and
-	// /FontName in the descriptor — derive once at that point.
+	// Always include .notdef (GID 0) in the used-glyph set so the
+	// subset tag hash is stable and the resulting CFF carries a
+	// valid .notdef glyph (required for any PDF font embed).
+	glyphs := make(map[uint16]rune, len(ef.usedGlyphs)+1)
+	glyphs[0] = 0
+	maps.Copy(glyphs, ef.usedGlyphs)
+
+	// Subset the CFF down to the used charstrings + their reachable
+	// subroutines. On failure we fall back to embedding the source
+	// bytes unchanged — that produces a much larger but structurally
+	// valid PDF, matching the TrueType path's silent-fallback policy
+	// at font/embed.go:167. The single PSName / BaseFont / FontName
+	// triplet must all carry the same "XXXXXX+" prefix when subsetting
+	// succeeds, per ISO 32000-1 §9.6.4.
+	if subsetData, err := SubsetCFF(cffData, glyphs); err == nil {
+		cffData = subsetData
+		psName = subsetTag(glyphs) + "+" + psName
+	}
+
 	fontStream := core.NewPdfStreamCompressed(cffData)
 	fontStream.Dict.Set("Subtype", core.NewPdfName("CIDFontType0C"))
 	fontStreamRef := addObject(fontStream)

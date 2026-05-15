@@ -311,6 +311,72 @@ func TestBuildObjectsTrueTypeUnchanged(t *testing.T) {
 	}
 }
 
+// TestBuildObjectsCFFSubsetsFontStream is the embed-path regression
+// test for issue #295. A CFF face passed through BuildObjects after
+// encoding a single CJK character must produce a font stream whose
+// raw payload is dramatically smaller than the source CFF table —
+// confirming SubsetCFF is wired in. The Phase 1 unsubsetted path
+// produced ~14 MB for this scenario; subset bytes should be well
+// under 1 MB.
+func TestBuildObjectsCFFSubsetsFontStream(t *testing.T) {
+	face := loadTestCFFFace(t)
+	cf := face.(cffFace)
+	srcLen := len(cf.CFFData())
+
+	ef := NewEmbeddedFont(face)
+	ef.EncodeString("a") // single CJK or Latin glyph — content doesn't matter
+
+	var objects []core.PdfObject
+	addObject := func(obj core.PdfObject) *core.PdfIndirectReference {
+		n := len(objects) + 1
+		objects = append(objects, obj)
+		return core.NewPdfIndirectReference(n, 0)
+	}
+	ef.BuildObjects(addObject)
+
+	stream := objects[0].(*core.PdfStream)
+	if len(stream.Data) >= srcLen/10 {
+		t.Errorf("embedded font stream size %d not significantly smaller than source CFF %d",
+			len(stream.Data), srcLen)
+	}
+	t.Logf("CFF font stream embed: %d -> %d bytes (%.1f%%)",
+		srcLen, len(stream.Data), float64(len(stream.Data))*100/float64(srcLen))
+}
+
+// TestBuildObjectsCFFSubsetTagPrefix verifies that when SubsetCFF
+// succeeds, the six-letter "XXXXXX+" subset tag prefix is applied
+// consistently to /BaseFont (Type0 and CIDFont) and /FontName
+// (descriptor) per ISO 32000-1 §9.6.4. PDF readers (Acrobat in
+// particular) warn when these disagree.
+func TestBuildObjectsCFFSubsetTagPrefix(t *testing.T) {
+	face := loadTestCFFFace(t)
+	ef := NewEmbeddedFont(face)
+	ef.EncodeString("a")
+
+	var objects []core.PdfObject
+	addObject := func(obj core.PdfObject) *core.PdfIndirectReference {
+		n := len(objects) + 1
+		objects = append(objects, obj)
+		return core.NewPdfIndirectReference(n, 0)
+	}
+	type0 := ef.BuildObjects(addObject)
+
+	prefixOf := func(d *core.PdfDictionary, key string) string {
+		s := name(t, d, key)
+		if len(s) < 7 || s[6] != '+' {
+			return ""
+		}
+		return s[:6]
+	}
+	type0Tag := prefixOf(type0, "BaseFont")
+	cidTag := prefixOf(objects[2].(*core.PdfDictionary), "BaseFont")
+	descTag := prefixOf(objects[1].(*core.PdfDictionary), "FontName")
+	if type0Tag == "" || type0Tag != cidTag || type0Tag != descTag {
+		t.Errorf("subset tag mismatch: Type0=%q CIDFont=%q Descriptor=%q",
+			type0Tag, cidTag, descTag)
+	}
+}
+
 // TestBuildObjectsCFFEmptyUsedGlyphs covers the edge case where no
 // EncodeString call has happened. The CFF builder must still emit four
 // indirect objects with sensible defaults (empty /W array, empty

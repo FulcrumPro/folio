@@ -242,11 +242,14 @@ const reportHTML = `<!DOCTYPE html>
 </body>
 </html>`
 
-func main() {
-	result, err := html.ConvertFull(reportHTML, nil)
+// buildDocument runs the example's full HTML → PDF pipeline on the
+// supplied source and returns the assembled, ready-to-write Document.
+// Extracted from main() so the example test (main_test.go) can exercise
+// the same pipeline against an in-memory buffer instead of disk.
+func buildDocument(htmlSource string) (*document.Document, error) {
+	result, err := html.ConvertFull(htmlSource, nil)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "convert:", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("convert: %w", err)
 	}
 
 	doc := document.NewDocument(document.PageSizeA4)
@@ -282,7 +285,15 @@ func main() {
 	if result.Metadata.Author != "" {
 		doc.Info.Author = result.Metadata.Author
 	}
+	return doc, nil
+}
 
+func main() {
+	doc, err := buildDocument(reportHTML)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	if err := doc.Save("report.pdf"); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

@@ -38,12 +38,21 @@ func buildSyntheticCFFv1(topDict []byte) []byte {
 	return out
 }
 
+// fixtureT is the minimal testing-T surface the synthetic CFF builders
+// need: Helper for stack-frame attribution and Fatalf to abort on
+// invalid options. *testing.T satisfies it; the fuzz seed corpus uses
+// a no-op stand-in so it can call the builder outside a test.
+type fixtureT interface {
+	Helper()
+	Fatalf(format string, args ...any)
+}
+
 // buildSyntheticCFFCollection assembles a CFF v1 blob with a Top DICT
 // INDEX containing two objects. Used to verify that isCIDKeyedCFFv1
 // rejects CFF font collections rather than guessing which Top DICT
 // applies — sfnt-wrapped OpenType cannot legitimately carry a multi-
 // Top-DICT CFF, so the safe answer is "not CID-keyed".
-func buildSyntheticCFFCollection(t *testing.T, dict1, dict2 []byte) []byte {
+func buildSyntheticCFFCollection(t fixtureT, dict1, dict2 []byte) []byte {
 	t.Helper()
 	if len(dict1)+1 > 0xFF || len(dict1)+1+len(dict2) > 0xFF {
 		t.Fatalf("synthetic dicts exceed 1-byte offset range")
@@ -72,6 +81,264 @@ const (
 	op2Byte      = 28   // operand prefix for 2-byte signed int
 	opBCD        = 30   // operand prefix for BCD real (same byte as ROS2)
 )
+
+// syntheticCFFOptions controls buildSyntheticCIDKeyedCFF. The defaults
+// (numGlyphs=3, fdCount=1) produce the smallest valid CID-keyed CFF
+// the parser accepts. The builder caps the supported ranges so all
+// INDEX sections fit with offSize=1, keeping the resulting bytes
+// trivial to hand-verify in test failures.
+type syntheticCFFOptions struct {
+	numGlyphs int // 1..100
+	fdCount   int // 1..20
+
+	// Customisations to drive negative tests. Each "skip" flag omits
+	// the named operator from the Top DICT or the per-FD font dict;
+	// parseCFF should reject every resulting blob.
+	skipROS         bool
+	skipCharStrings bool
+	skipFDArray     bool
+	skipFDSelect    bool
+	skipFDPrivate   bool
+
+	// brokenFDPrivate places the FD's Private DICT at an offset past
+	// the end of the buffer when true. Exercises the FD private
+	// bounds check.
+	brokenFDPrivate bool
+}
+
+// buildSyntheticCIDKeyedCFF assembles a complete, valid CID-keyed CFF
+// v1 blob deterministically — useful for parser tests that must not
+// depend on a system-installed CJK font. All offset operands in the
+// Top DICT and per-FD font/private DICTs use the longint (29 + int32)
+// encoding so section sizes are independent of the offset values; the
+// builder can therefore compute every absolute offset in a single
+// forward pass without iterating to a fixed point.
+//
+// Layout (fixed order, no shared sections):
+//
+//	Header(4)
+//	Name INDEX                ("Test", offSize=1)              -> 9 bytes
+//	Top DICT INDEX            (1 entry, fixed 50-byte payload) -> 55 bytes
+//	String INDEX              ("Adobe", "Identity")            -> 19 bytes
+//	Global Subr INDEX         (empty)                          -> 2 bytes
+//	Charset                   (format 0, numGlyphs-1 SIDs)
+//	FDSelect                  (format 0, numGlyphs entries)
+//	CharStrings INDEX         (each charstring = single byte 0x0E)
+//	FDArray INDEX             (per-FD font dict, 11 bytes each)
+//	[Private DICT + empty Local Subr INDEX] * fdCount
+//
+// The Private DICT contains the bare minimum that parseCFF will
+// accept: defaultWidthX, nominalWidthX, and Subrs (relative offset
+// equal to privateSize, so the empty Local Subr INDEX sits
+// immediately after).
+func buildSyntheticCIDKeyedCFF(t fixtureT, opts syntheticCFFOptions) []byte {
+	t.Helper()
+	if opts.numGlyphs < 1 || opts.numGlyphs > 100 {
+		t.Fatalf("synthetic: numGlyphs %d out of range [1,100]", opts.numGlyphs)
+	}
+	if opts.fdCount < 1 || opts.fdCount > 20 {
+		t.Fatalf("synthetic: fdCount %d out of range [1,20]", opts.fdCount)
+	}
+
+	const (
+		headerSize       = 4
+		nameIndexSize    = 9
+		topDictIndexSize = 55
+		stringIndexSize  = 19
+		gsubrSize        = 2
+		privateDictSize  = 18 // see writePrivateDict
+		localSubrSize    = 2  // empty INDEX
+		fdEntrySize      = 11 // per-FD font dict
+	)
+
+	// Pre-compute sizes that depend on opts.
+	charsetSize := 1 + (opts.numGlyphs-1)*2 // format 0
+	fdSelectSize := 1 + opts.numGlyphs      // format 0
+	charStringsSize := 2 + 1 + (opts.numGlyphs+1) + opts.numGlyphs
+	fdArraySize := 2 + 1 + (opts.fdCount + 1) + opts.fdCount*fdEntrySize
+
+	// Absolute offsets.
+	offNameIndex := headerSize
+	offTopDict := offNameIndex + nameIndexSize
+	offStringIndex := offTopDict + topDictIndexSize
+	offGsubr := offStringIndex + stringIndexSize
+	offCharset := offGsubr + gsubrSize
+	offFDSelect := offCharset + charsetSize
+	offCharStrings := offFDSelect + fdSelectSize
+	offFDArray := offCharStrings + charStringsSize
+
+	// Per-FD blocks come last; record their starting offsets so the
+	// FDArray font dicts can point at them and so a broken-private
+	// option can target a known-out-of-range address.
+	fdPrivateOff := make([]int, opts.fdCount)
+	cursor := offFDArray + fdArraySize
+	for i := range opts.fdCount {
+		fdPrivateOff[i] = cursor
+		cursor += privateDictSize + localSubrSize
+	}
+	totalSize := cursor
+	if opts.brokenFDPrivate && opts.fdCount > 0 {
+		fdPrivateOff[0] = totalSize + 0x10000 // far beyond the buffer
+	}
+
+	// Top DICT body. All operands use longint encoding (29 + int32 BE)
+	// to keep the body fixed at exactly topDictPayload bytes.
+	const topDictPayload = topDictIndexSize - 5 // 50 bytes
+	td := newBytes(t, topDictPayload)
+	if !opts.skipROS {
+		td.longInt(391) // registry SID (custom string 0)
+		td.longInt(392) // ordering SID (custom string 1)
+		td.longInt(0)   // supplement
+		td.byte(cffOpEscape)
+		td.byte(30) // ROS
+	}
+	td.longInt(int32(opts.numGlyphs))
+	td.byte(cffOpEscape)
+	td.byte(34) // CIDCount
+	td.longInt(int32(offCharset))
+	td.byte(cffOpCharset)
+	if !opts.skipCharStrings {
+		td.longInt(int32(offCharStrings))
+		td.byte(cffOpCharStrings)
+	}
+	if !opts.skipFDArray {
+		td.longInt(int32(offFDArray))
+		td.byte(cffOpEscape)
+		td.byte(36) // FDArray
+	}
+	if !opts.skipFDSelect {
+		td.longInt(int32(offFDSelect))
+		td.byte(cffOpEscape)
+		td.byte(37) // FDSelect
+	}
+	td.padTo(topDictPayload)
+
+	// Assemble the full blob.
+	out := make([]byte, 0, totalSize)
+
+	// Header: major=1, minor=0, hdrSize=4, offSize (informational)=1.
+	out = append(out, 1, 0, 4, 1)
+
+	// Name INDEX: count=1, offSize=1, offsets=[1,5], data="Test".
+	out = append(out, 0x00, 0x01, 0x01, 0x01, 0x05, 'T', 'e', 's', 't')
+
+	// Top DICT INDEX: count=1, offSize=1, offsets=[1, payload+1].
+	out = append(out, 0x00, 0x01, 0x01, 0x01, byte(topDictPayload+1))
+	out = append(out, td.bytes...)
+
+	// String INDEX: ("Adobe", "Identity") — 5 + 8 = 13 bytes payload.
+	out = append(out,
+		0x00, 0x02, 0x01,
+		0x01, 0x06, 0x0E,
+		'A', 'd', 'o', 'b', 'e',
+		'I', 'd', 'e', 'n', 't', 'i', 't', 'y',
+	)
+
+	// Global Subr INDEX: empty.
+	out = append(out, 0x00, 0x00)
+
+	// Charset format 0: SIDs for glyphs 1..numGlyphs-1.
+	out = append(out, 0x00)
+	for i := 1; i < opts.numGlyphs; i++ {
+		out = append(out, byte(i>>8), byte(i&0xFF))
+	}
+
+	// FDSelect format 0: per-glyph FD index = (glyph % fdCount).
+	out = append(out, 0x00)
+	for i := range opts.numGlyphs {
+		out = append(out, byte(i%opts.fdCount))
+	}
+
+	// CharStrings INDEX: each glyph is a single endchar byte (0x0E).
+	out = append(out, 0x00, byte(opts.numGlyphs), 0x01)
+	for i := range opts.numGlyphs + 1 {
+		out = append(out, byte(i+1))
+	}
+	for range opts.numGlyphs {
+		out = append(out, 0x0E)
+	}
+
+	// FDArray INDEX header.
+	out = append(out, 0x00, byte(opts.fdCount), 0x01)
+	for i := range opts.fdCount + 1 {
+		out = append(out, byte(1+i*fdEntrySize))
+	}
+	// Per-FD font dicts: longint(privSize) longint(privOff) op:Private.
+	for i := range opts.fdCount {
+		out = append(out, 29)
+		out = appendInt32(out, int32(privateDictSize))
+		out = append(out, 29)
+		out = appendInt32(out, int32(fdPrivateOff[i]))
+		if opts.skipFDPrivate {
+			out = append(out, cffOpVersion) // any operator other than Private
+		} else {
+			out = append(out, cffOpPrivate)
+		}
+	}
+
+	// Per-FD Private DICTs + empty Local Subr INDEXes.
+	for range opts.fdCount {
+		// defaultWidthX=0, nominalWidthX=0, Subrs at relative
+		// offset = privateDictSize.
+		out = append(out, 29)
+		out = appendInt32(out, 0)
+		out = append(out, cffOpDefaultWidthX)
+		out = append(out, 29)
+		out = appendInt32(out, 0)
+		out = append(out, cffOpNominalWidthX)
+		out = append(out, 29)
+		out = appendInt32(out, int32(privateDictSize))
+		out = append(out, cffOpSubrs)
+		// Local Subr INDEX (empty).
+		out = append(out, 0x00, 0x00)
+	}
+
+	if len(out) != totalSize {
+		t.Fatalf("synthetic: produced %d bytes, expected %d", len(out), totalSize)
+	}
+	return out
+}
+
+// appendInt32 appends a 4-byte big-endian int32. Inlined here to keep
+// the synthetic builder readable.
+func appendInt32(b []byte, v int32) []byte {
+	return append(b, byte(v>>24), byte(v>>16), byte(v>>8), byte(v))
+}
+
+// bytesBuilder is a fixed-capacity byte buffer used by the synthetic
+// CFF builder. It exists to make the layered Top DICT construction
+// readable: each operand/operator emit is a single named call, and a
+// final padTo zero-fills to the declared payload size.
+type bytesBuilder struct {
+	t     fixtureT
+	bytes []byte
+	cap   int
+}
+
+func newBytes(t fixtureT, cap int) *bytesBuilder {
+	return &bytesBuilder{t: t, cap: cap}
+}
+
+func (b *bytesBuilder) byte(v byte) {
+	if len(b.bytes)+1 > b.cap {
+		b.t.Fatalf("bytesBuilder: overflow at byte(%d)", v)
+	}
+	b.bytes = append(b.bytes, v)
+}
+
+func (b *bytesBuilder) longInt(v int32) {
+	if len(b.bytes)+5 > b.cap {
+		b.t.Fatalf("bytesBuilder: overflow at longInt(%d)", v)
+	}
+	b.bytes = append(b.bytes, 29)
+	b.bytes = appendInt32(b.bytes, v)
+}
+
+func (b *bytesBuilder) padTo(n int) {
+	for len(b.bytes) < n {
+		b.bytes = append(b.bytes, 0)
+	}
+}
 
 func TestIsCIDKeyedCFFv1Positive(t *testing.T) {
 	// Three integer operands then ROS — the canonical CID-keyed Top

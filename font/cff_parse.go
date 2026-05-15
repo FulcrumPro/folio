@@ -207,22 +207,30 @@ const (
 )
 
 // cffDictEntry records one (operands, operator) pair parsed from a
-// DICT. operator is the one-byte or escaped two-byte code; operandStart
-// and operandEnd bracket the operand bytes within the DICT's own byte
-// stream (for Phase 3 byte-level rewriting). intOperands holds decoded
-// integer values in order; BCD real operands occupy a slot whose
-// realBytes field carries the original encoding for verbatim
-// reproduction.
+// DICT. operator is the one-byte or escaped two-byte code.
+//
+// Phase 3+ rewrites individual operands of an entry (for example the
+// offset half of `Private size offset`), so byte ranges are tracked at
+// two granularities:
+//
+//   - operandStart and operandEnd bracket the run of all operand
+//     bytes — operandEnd is the position of the operator byte.
+//   - operandSpans[i] is the half-open byte range [start, end) of
+//     operand i within the DICT byte stream, in the same order as
+//     intOperands.
+//
+// intOperands holds decoded integer values in order. Slots that came
+// from a BCD real operand hold zero; their original bytes can be
+// recovered via operandSpans[i] when Phase 3 needs to reproduce the
+// real verbatim. realIndices lists those slot indices so callers do
+// not have to maintain a separate flag.
 type cffDictEntry struct {
 	operator     int
 	operandStart int
 	operandEnd   int
 	intOperands  []int64
-	// realIndices records the positions in intOperands that originated
-	// from BCD real operands rather than integers. Phase 3 must
-	// reproduce these from the original bytes; intOperands slot is
-	// zero in that position.
-	realIndices []int
+	operandSpans [][2]int
+	realIndices  []int
 }
 
 // cffDict is the ordered list of entries parsed from a DICT.
@@ -255,11 +263,13 @@ func (d cffDict) get(op int) (cffDictEntry, bool) {
 func parseCFFDict(b []byte) (cffDict, error) {
 	var out cffDict
 	var operands []int64
+	var spans [][2]int
 	var realIdx []int
 	operandStart := 0
 	pos := 0
 	for pos < len(b) {
 		bv := b[pos]
+		opStart := pos
 		switch {
 		case bv <= 21:
 			// Operator. 12 is the 2-byte escape; everything else is
@@ -280,10 +290,12 @@ func parseCFFDict(b []byte) (cffDict, error) {
 				operandStart: operandStart,
 				operandEnd:   pos,
 				intOperands:  operands,
+				operandSpans: spans,
 				realIndices:  realIdx,
 			})
 			pos += opSize
 			operands = nil
+			spans = nil
 			realIdx = nil
 			operandStart = pos
 		case bv == 28:
@@ -293,6 +305,7 @@ func parseCFFDict(b []byte) (cffDict, error) {
 			v := int64(int16(binary.BigEndian.Uint16(b[pos+1 : pos+3])))
 			operands = append(operands, v)
 			pos += 3
+			spans = append(spans, [2]int{opStart, pos})
 		case bv == 29:
 			if pos+5 > len(b) {
 				return nil, fmt.Errorf("cff: DICT longint truncated: %w", ErrTruncated)
@@ -300,6 +313,7 @@ func parseCFFDict(b []byte) (cffDict, error) {
 			v := int64(int32(binary.BigEndian.Uint32(b[pos+1 : pos+5])))
 			operands = append(operands, v)
 			pos += 5
+			spans = append(spans, [2]int{opStart, pos})
 		case bv == 30:
 			// BCD real. Walk bytes until a nibble equals 0xF (end).
 			pos++
@@ -315,14 +329,15 @@ func parseCFFDict(b []byte) (cffDict, error) {
 			if !ended {
 				return nil, fmt.Errorf("cff: DICT BCD real unterminated: %w", ErrTruncated)
 			}
-			// Reserve a slot in the int operands. Phase 3 will rebuild
-			// from the original bytes; the recorded operandStart/End
-			// pair covers the whole entry's operands.
+			// Reserve a zero-valued slot in intOperands; the original
+			// bytes live in operandSpans for Phase 3 to copy verbatim.
 			realIdx = append(realIdx, len(operands))
 			operands = append(operands, 0)
+			spans = append(spans, [2]int{opStart, pos})
 		case bv >= 32 && bv <= 246:
 			operands = append(operands, int64(bv)-139)
 			pos++
+			spans = append(spans, [2]int{opStart, pos})
 		case bv >= 247 && bv <= 250:
 			if pos+1 >= len(b) {
 				return nil, fmt.Errorf("cff: DICT 2-byte int truncated: %w", ErrTruncated)
@@ -330,6 +345,7 @@ func parseCFFDict(b []byte) (cffDict, error) {
 			v := int64(bv-247)*256 + int64(b[pos+1]) + 108
 			operands = append(operands, v)
 			pos += 2
+			spans = append(spans, [2]int{opStart, pos})
 		case bv >= 251 && bv <= 254:
 			if pos+1 >= len(b) {
 				return nil, fmt.Errorf("cff: DICT 2-byte int truncated: %w", ErrTruncated)
@@ -337,6 +353,7 @@ func parseCFFDict(b []byte) (cffDict, error) {
 			v := -int64(bv-251)*256 - int64(b[pos+1]) - 108
 			operands = append(operands, v)
 			pos += 2
+			spans = append(spans, [2]int{opStart, pos})
 		default:
 			// 22..27, 31, 255 are reserved/invalid in DICT streams.
 			return nil, fmt.Errorf("cff: DICT reserved byte 0x%02X at offset %d: %w", bv, pos, ErrCorruptTable)
@@ -445,6 +462,9 @@ func parseCFF(raw []byte) (*cffFont, error) {
 		return nil, fmt.Errorf("cff: charstrings index: %w", err)
 	}
 	numGlyphs := charStringsIdx.count
+	if numGlyphs == 0 {
+		return nil, fmt.Errorf("cff: charstrings index empty: %w", ErrCorruptTable)
+	}
 
 	fdArrayIdx, err := parseCFFIndex(raw, int(fdArrayOff))
 	if err != nil {
@@ -628,6 +648,16 @@ func computeFDSelectSize(raw []byte, off, numGlyphs int) (int, error) {
 		size := 1 + 2 + nRanges*3 + 2
 		if off+size > len(raw) {
 			return 0, fmt.Errorf("cff: fdselect format 3 body truncated: %w", ErrTruncated)
+		}
+		// Per TN #5176 §19, the trailing sentinel uint16 must equal
+		// numGlyphs — it terminates the implied range that begins at
+		// the last `first` field. A mismatch means either the table
+		// was authored against a different glyph count or the bytes
+		// are corrupt; either way Phase 3 cannot rely on the FD
+		// assignment, so reject up-front.
+		sentinel := int(binary.BigEndian.Uint16(raw[off+size-2 : off+size]))
+		if sentinel != numGlyphs {
+			return 0, fmt.Errorf("cff: fdselect format 3 sentinel %d != numGlyphs %d: %w", sentinel, numGlyphs, ErrCorruptTable)
 		}
 		return size, nil
 	default:

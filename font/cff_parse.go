@@ -159,28 +159,28 @@ func parseCFFIndex(raw []byte, pos int) (*cffIndex, error) {
 
 // CFF v1 DICT one-byte operator codes (TN #5176 Table 9).
 const (
-	cffOpVersion            = 0
-	cffOpNotice             = 1
-	cffOpFullName           = 2
-	cffOpFamilyName         = 3
-	cffOpWeight             = 4
-	cffOpFontBBox           = 5
-	cffOpBlueValues         = 6 // Private only
-	cffOpOtherBlues         = 7 // Private only
-	cffOpFamilyBlues        = 8 // Private only
-	cffOpFamilyOtherBlues   = 9 // Private only
-	cffOpStdHW              = 10
-	cffOpStdVW              = 11
-	cffOpEscape             = 12 // 2-byte operator prefix
-	cffOpUniqueID           = 13
-	cffOpXUID               = 14
-	cffOpCharset            = 15
-	cffOpEncoding           = 16
-	cffOpCharStrings        = 17
-	cffOpPrivate            = 18
-	cffOpSubrs              = 19 // Private only
-	cffOpDefaultWidthX      = 20 // Private only
-	cffOpNominalWidthX      = 21 // Private only
+	cffOpVersion          = 0
+	cffOpNotice           = 1
+	cffOpFullName         = 2
+	cffOpFamilyName       = 3
+	cffOpWeight           = 4
+	cffOpFontBBox         = 5
+	cffOpBlueValues       = 6 // Private only
+	cffOpOtherBlues       = 7 // Private only
+	cffOpFamilyBlues      = 8 // Private only
+	cffOpFamilyOtherBlues = 9 // Private only
+	cffOpStdHW            = 10
+	cffOpStdVW            = 11
+	cffOpEscape           = 12 // 2-byte operator prefix
+	cffOpUniqueID         = 13
+	cffOpXUID             = 14
+	cffOpCharset          = 15
+	cffOpEncoding         = 16
+	cffOpCharStrings      = 17
+	cffOpPrivate          = 18
+	cffOpSubrs            = 19 // Private only
+	cffOpDefaultWidthX    = 20 // Private only
+	cffOpNominalWidthX    = 21 // Private only
 )
 
 // CFF v1 DICT two-byte operator codes (TN #5176 Table 10). Encoded as
@@ -638,8 +638,7 @@ func computeCharsetSize(raw []byte, off, numGlyphs int) (int, error) {
 // at off. TN #5176 §19 defines two formats:
 //
 //   - 0: fmt(1) + numGlyphs * fd(uint8)
-//   - 3: fmt(1) + nRanges(uint16) + nRanges*(first uint16 + fd uint8)
-//        + sentinel uint16
+//   - 3: fmt(1) + nRanges(uint16) + nRanges*(first uint16 + fd uint8) + sentinel uint16
 func computeFDSelectSize(raw []byte, off, numGlyphs int) (int, error) {
 	if off < 0 || off >= len(raw) {
 		return 0, fmt.Errorf("cff: fdselect offset out of range: %w", ErrCorruptTable)

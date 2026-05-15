@@ -315,7 +315,7 @@ func TestSubsetCFFPreservesNonLongintTopDictOperands(t *testing.T) {
 	//   12, 2          ItalicAngle operator (2-byte; verbatim)
 	dict := []byte{
 		139, byte(cffOpCharStrings), // operand + CharStrings (rewritten)
-		139, byte(cffOpVersion),     // operand + version (verbatim, single-byte op)
+		139, byte(cffOpVersion), // operand + version (verbatim, single-byte op)
 		28, 0x12, 0x34, cffOpEscape, 2, // shortint + ItalicAngle (verbatim, 2-byte op)
 	}
 	entries, err := parseCFFDict(dict)

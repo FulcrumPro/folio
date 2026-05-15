@@ -255,9 +255,9 @@ func TestParseCFFDictShortIntEncoding(t *testing.T) {
 		want  int64
 	}{
 		{[]byte{28, 0x05, 0xDC, 0}, 1500},
-		{[]byte{28, 0x7F, 0xFF, 0}, 32767},        // INT16 max
-		{[]byte{28, 0x80, 0x00, 0}, -32768},       // INT16 min
-		{[]byte{28, 0xFF, 0xFF, 0}, -1},           // sign extension
+		{[]byte{28, 0x7F, 0xFF, 0}, 32767},  // INT16 max
+		{[]byte{28, 0x80, 0x00, 0}, -32768}, // INT16 min
+		{[]byte{28, 0xFF, 0xFF, 0}, -1},     // sign extension
 	}
 	for _, tc := range cases {
 		d, err := parseCFFDict(tc.bytes)
@@ -282,9 +282,9 @@ func TestParseCFFDictTwoByteIntPositive(t *testing.T) {
 		bytes []byte
 		want  int64
 	}{
-		{[]byte{247, 0, 0}, 108},          // 247: minimum
-		{[]byte{247, 255, 0}, 363},        // 247 with max N
-		{[]byte{250, 255, 0}, 1131},       // 250: maximum
+		{[]byte{247, 0, 0}, 108},    // 247: minimum
+		{[]byte{247, 255, 0}, 363},  // 247 with max N
+		{[]byte{250, 255, 0}, 1131}, // 250: maximum
 	}
 	for _, tc := range cases {
 		d, err := parseCFFDict(tc.bytes)
@@ -357,10 +357,10 @@ func TestParseCFFDictMixedIntRealOperands(t *testing.T) {
 	// real position must be zero, realIndices must point at it, and
 	// operandSpans must bracket each operand precisely.
 	dict := []byte{
-		139,        // int 0
-		30, 0x1F,   // real, end nibble F (digit 1 + end)
-		140,        // int 1
-		0,          // operator: version
+		139,      // int 0
+		30, 0x1F, // real, end nibble F (digit 1 + end)
+		140, // int 1
+		0,   // operator: version
 	}
 	d, err := parseCFFDict(dict)
 	if err != nil {

@@ -53,13 +53,13 @@ func FuzzParseCFF(f *testing.F) {
 // reserved-byte handling are all in scope.
 func FuzzParseCFFDict(f *testing.F) {
 	f.Add([]byte{})
-	f.Add([]byte{139, 0})                          // int 0, version
-	f.Add([]byte{28, 0x05, 0xDC, 0})               // shortint 1500
-	f.Add([]byte{29, 0, 0, 0, 0, 0})               // longint 0
-	f.Add([]byte{30, 0x1A, 0xFF, 0})               // BCD real "1." end
-	f.Add([]byte{139, 139, 139, 12, 30})           // ROS
-	f.Add([]byte{251, 0, 0})                       // negative 2-byte int
-	f.Add([]byte{247, 255, 0})                     // positive 2-byte int
+	f.Add([]byte{139, 0})                // int 0, version
+	f.Add([]byte{28, 0x05, 0xDC, 0})     // shortint 1500
+	f.Add([]byte{29, 0, 0, 0, 0, 0})     // longint 0
+	f.Add([]byte{30, 0x1A, 0xFF, 0})     // BCD real "1." end
+	f.Add([]byte{139, 139, 139, 12, 30}) // ROS
+	f.Add([]byte{251, 0, 0})             // negative 2-byte int
+	f.Add([]byte{247, 255, 0})           // positive 2-byte int
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		defer func() {
@@ -97,5 +97,5 @@ func FuzzSubsetCFF(f *testing.F) {
 // implementation is safe here.
 type testingTNoop struct{}
 
-func (testingTNoop) Helper()              {}
+func (testingTNoop) Helper()               {}
 func (testingTNoop) Fatalf(string, ...any) {}

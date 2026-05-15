@@ -35,6 +35,19 @@ var (
 )
 
 func main() {
+	doc := buildDocument()
+	if err := doc.Save("report.pdf"); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	fmt.Println("Created report.pdf")
+}
+
+// buildDocument assembles the example's full multi-page report and
+// returns the ready-to-write Document. Extracted from main() so the
+// example test (main_test.go) can exercise the same layout pipeline
+// against an in-memory buffer instead of disk.
+func buildDocument() *document.Document {
 	doc := document.NewDocument(document.PageSizeLetter)
 	doc.SetMargins(layout.Margins{Top: 72, Right: 72, Bottom: 72, Left: 72})
 	doc.Info.Title = "Annual Report 2026"
@@ -173,12 +186,7 @@ func main() {
 		doc.Add(card)
 	}
 
-	// --- Save ---
-	if err := doc.Save("report.pdf"); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	fmt.Println("Created report.pdf")
+	return doc
 }
 
 func body(text string) *layout.Paragraph {

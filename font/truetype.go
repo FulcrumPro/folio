@@ -279,6 +279,33 @@ func (f *sfntFace) NumGlyphs() int {
 	return int(f.pf.maxp.numGlyphs)
 }
 
+// IsCFF reports whether this face uses CFF v1 outlines (a `CFF ` table)
+// rather than TrueType outlines (glyf/loca). The check is intentionally
+// narrow — `CFF2` variable-CFF (a distinct table tag) returns false so
+// it cannot inadvertently take the v1 embed path, which would emit the
+// wrong /FontFile3 stream subtype.
+func (f *sfntFace) IsCFF() bool {
+	_, ok := f.pf.rawTables["CFF "]
+	return ok
+}
+
+// IsCFF2 reports whether this face uses CFF2 outlines (a `CFF2` table,
+// CFF variable-font extension). Folio does not yet have a CFF2 embed
+// path; the dispatcher uses this only to keep CFF2 fonts off the v1
+// path so they fall back to the legacy embed semantics.
+func (f *sfntFace) IsCFF2() bool {
+	_, ok := f.pf.rawTables["CFF2"]
+	return ok
+}
+
+// CFFData returns the raw bytes of the `CFF ` table when present.
+// The PDF FontFile3 stream expects raw CFF bytes — not the surrounding
+// sfnt wrapper — so this is the input both to CFF subsetting and to
+// the unmodified-embed fallback. Returns nil for non-CFF faces.
+func (f *sfntFace) CFFData() []byte {
+	return f.pf.rawTables["CFF "]
+}
+
 // GSUB returns the parsed GSUB substitution tables. The result is cached
 // after the first call; a nil return means the font has no GSUB tables
 // for any of the recognized features.

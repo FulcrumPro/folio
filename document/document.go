@@ -620,6 +620,17 @@ func (d *Document) WriteToWithOptions(w io.Writer, opts WriteOptions) (int64, er
 	pageRefs := make([]*core.PdfIndirectReference, 0, len(allPages))
 	pageDicts := make([]*core.PdfDictionary, 0, len(allPages))
 
+	// Document-wide font caches. A given *font.EmbeddedFont (or
+	// *font.Standard) is typically registered on every page that
+	// uses it, so without these caches BuildObjects / Dict would run
+	// once per page and the writer would emit a fresh /FontFile3 +
+	// CIDFont + descriptor for every page. For a 20-page document
+	// referencing one CJK font, that's 20× the embedded font data.
+	// The cache shares the Type0 indirect reference across pages so
+	// the font program is embedded exactly once per document.
+	embeddedFontRefs := make(map[*font.EmbeddedFont]*core.PdfIndirectReference)
+	standardFontRefs := make(map[*font.Standard]*core.PdfIndirectReference)
+
 	// First pass: build page objects.
 	for pageIdx, page := range allPages {
 		pageDict := core.NewPdfDictionary()
@@ -658,12 +669,20 @@ func (d *Document) WriteToWithOptions(w io.Writer, opts WriteOptions) (int64, er
 			fontDict := core.NewPdfDictionary()
 			for _, entry := range page.fonts {
 				if entry.standard != nil {
-					fontObjRef := writer.AddObject(entry.standard.Dict())
-					fontDict.Set(entry.name, fontObjRef)
+					ref, ok := standardFontRefs[entry.standard]
+					if !ok {
+						ref = writer.AddObject(entry.standard.Dict())
+						standardFontRefs[entry.standard] = ref
+					}
+					fontDict.Set(entry.name, ref)
 				} else if entry.embedded != nil {
-					type0 := entry.embedded.BuildObjects(writer.AddObject)
-					fontObjRef := writer.AddObject(type0)
-					fontDict.Set(entry.name, fontObjRef)
+					ref, ok := embeddedFontRefs[entry.embedded]
+					if !ok {
+						type0 := entry.embedded.BuildObjects(writer.AddObject)
+						ref = writer.AddObject(type0)
+						embeddedFontRefs[entry.embedded] = ref
+					}
+					fontDict.Set(entry.name, ref)
 				}
 			}
 			resources.Set("Font", fontDict)

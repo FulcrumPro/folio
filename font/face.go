@@ -104,3 +104,35 @@ type GSUBProvider interface {
 type GPOSProvider interface {
 	GPOS() *GPOSAdjustments
 }
+
+// cffFace is a package-private interface for accessing CFF table data
+// on faces whose underlying implementation parses sfnt tables. CFF
+// embedding takes a different PDF object-graph path from TrueType, so
+// the embedder needs to detect CFF and pull out the raw `CFF ` table
+// bytes; this interface keeps that coupling out of the public Face
+// surface during v0.x.
+type cffFace interface {
+	IsCFF() bool
+	IsCFF2() bool
+	CFFData() []byte
+}
+
+// faceCFFData returns (cffBytes, true) when the face is a CID-keyed
+// CFF v1 font — the only outline format Folio currently has a working
+// /FontFile3 + /CIDFontType0 embed path for. Plain (name-keyed) CFF v1
+// needs a /Type1C stream and a non-composite font dictionary; CFF2 has
+// a different stream subtype and FVAR-driven instancing. Both are
+// kept off the CID-keyed path and fall back to the legacy embed
+// semantics until a dedicated path lands. Returns (nil, false)
+// otherwise.
+func faceCFFData(f Face) ([]byte, bool) {
+	cf, ok := f.(cffFace)
+	if !ok || !cf.IsCFF() || cf.IsCFF2() {
+		return nil, false
+	}
+	data := cf.CFFData()
+	if !isCIDKeyedCFFv1(data) {
+		return nil, false
+	}
+	return data, true
+}

@@ -150,6 +150,15 @@ func (ef *EmbeddedFont) Kern(left, right rune) float64 {
 // this method returns a builder function that takes an "add object" callback.
 func (ef *EmbeddedFont) BuildObjects(addObject func(core.PdfObject) *core.PdfIndirectReference) *core.PdfDictionary {
 	face := ef.face
+
+	// CFF outlines need a different PDF object graph (/FontFile3,
+	// /CIDFontType0, no /CIDToGIDMap). Route them through the CFF
+	// builder; everything below this point assumes TrueType outlines
+	// (glyf/loca) for the /FontFile2 + /CIDFontType2 path.
+	if cffData, ok := faceCFFData(face); ok {
+		return ef.buildObjectsCFF(cffData, addObject)
+	}
+
 	psName := sanitizePSName(face.PostScriptName())
 	upem := face.UnitsPerEm()
 

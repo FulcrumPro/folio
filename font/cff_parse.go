@@ -186,7 +186,7 @@ const (
 // CFF v1 DICT two-byte operator codes (TN #5176 Table 10). Encoded as
 // (12 << 8) | secondByte so a single int identifies them uniquely.
 const (
-	cffOp2Copyright          = 12<<8 | 0
+	cffOp2Copyright          = 12 << 8
 	cffOp2IsFixedPitch       = 12<<8 | 1
 	cffOp2ItalicAngle        = 12<<8 | 2
 	cffOp2UnderlinePosition  = 12<<8 | 3

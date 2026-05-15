@@ -74,12 +74,12 @@ func buildSyntheticCFFCollection(t fixtureT, dict1, dict2 []byte) []byte {
 // 139 encodes integer 0 (single-byte form, value = b0 - 139).
 const (
 	opInt0  byte = 139  // integer 0
-	opROS1       = 0x0C // first byte of two-byte ROS operator
-	opROS2       = 30   // second byte: ROS
-	opVer        = 0    // single-byte 'version' operator
-	op4Byte      = 29   // operand prefix for 4-byte signed int
-	op2Byte      = 28   // operand prefix for 2-byte signed int
-	opBCD        = 30   // operand prefix for BCD real (same byte as ROS2)
+	opROS1  byte = 0x0C // first byte of two-byte ROS operator
+	opROS2  byte = 30   // second byte: ROS
+	opVer   byte = 0    // single-byte 'version' operator
+	op4Byte byte = 29   // operand prefix for 4-byte signed int
+	op2Byte byte = 28   // operand prefix for 2-byte signed int
+	opBCD   byte = 30   // operand prefix for BCD real (same byte as ROS2)
 )
 
 // syntheticCFFOptions controls buildSyntheticCIDKeyedCFF. The defaults

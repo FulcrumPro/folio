@@ -361,17 +361,25 @@ func TestBuildObjectsCFFSubsetTagPrefix(t *testing.T) {
 	}
 	type0 := ef.BuildObjects(addObject)
 
-	prefixOf := func(d *core.PdfDictionary, key string) string {
+	prefixOf := func(d *core.PdfDictionary, key string) (string, bool) {
 		s := name(t, d, key)
 		if len(s) < 7 || s[6] != '+' {
-			return ""
+			return s, false
 		}
-		return s[:6]
+		return s[:6], true
 	}
-	type0Tag := prefixOf(type0, "BaseFont")
-	cidTag := prefixOf(objects[2].(*core.PdfDictionary), "BaseFont")
-	descTag := prefixOf(objects[1].(*core.PdfDictionary), "FontName")
-	if type0Tag == "" || type0Tag != cidTag || type0Tag != descTag {
+	type0Tag, type0OK := prefixOf(type0, "BaseFont")
+	cidTag, cidOK := prefixOf(objects[2].(*core.PdfDictionary), "BaseFont")
+	descTag, descOK := prefixOf(objects[1].(*core.PdfDictionary), "FontName")
+	if !type0OK || !cidOK || !descOK {
+		// All three names must carry the XXXXXX+ prefix when
+		// subsetting succeeds. A silently-absent prefix means the
+		// subsetter failed (silent-fallback path); this is the
+		// signal we want to catch, not paper over with "" == "".
+		t.Fatalf("missing subset prefix: Type0=%q(ok=%v) CIDFont=%q(ok=%v) Descriptor=%q(ok=%v)",
+			type0Tag, type0OK, cidTag, cidOK, descTag, descOK)
+	}
+	if type0Tag != cidTag || type0Tag != descTag {
 		t.Errorf("subset tag mismatch: Type0=%q CIDFont=%q Descriptor=%q",
 			type0Tag, cidTag, descTag)
 	}

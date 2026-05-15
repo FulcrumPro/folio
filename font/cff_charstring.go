@@ -70,6 +70,12 @@ type charstringWalker struct {
 	// Recursion depth guard. TN #5177 specifies a max subr nesting
 	// depth of 10 levels.
 	maxDepth int
+
+	// walkCalls counts every entry into walk(). The visited-check
+	// at handleCall ensures recursion is bounded, but tests that
+	// would otherwise hang on a regression check this counter
+	// directly. Phase 3+ does not consult it on the hot path.
+	walkCalls int
 }
 
 // newCharstringWalker prepares a walker for a CFF whose global subr
@@ -133,6 +139,7 @@ func (w *charstringWalker) LsubrReached(fd, i int) bool {
 // operators (and the implicit vstem before the first hintmask) are
 // summed so hintmask / cntrmask know how many mask bytes follow.
 func (w *charstringWalker) walk(bytes []byte, fd int, depth int) {
+	w.walkCalls++
 	if depth >= w.maxDepth {
 		// Bail out to pessimistic reachability rather than risk
 		// missing a real call buried in deeply nested subrs. Phase 3

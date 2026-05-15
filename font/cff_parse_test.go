@@ -787,6 +787,29 @@ func TestParseCFFRejectionPaths(t *testing.T) {
 // CharStrings INDEX of count 0. The synthetic builder doesn't expose
 // this case directly (it requires numGlyphs >= 1), so we patch the
 // CharStrings INDEX header byte by byte.
+func TestParseCFFRejectsPredefinedCharset(t *testing.T) {
+	// Predefined charset values 0 (ISOAdobe), 1 (Expert), 2 (ExpertSubset)
+	// are reserved for non-CID CFF (TN #5176 §18). CID-keyed fonts that
+	// include them are either malformed or attempting to confuse the
+	// parser into reading CFF header bytes as a charset format.
+	for _, override := range []int32{0, 1, 2} {
+		cff := buildSyntheticCIDKeyedCFF(t, syntheticCFFOptions{
+			numGlyphs:          3,
+			fdCount:            1,
+			useCharsetOverride: true,
+			charsetOverride:    override,
+		})
+		_, err := parseCFF(cff)
+		if err == nil {
+			t.Errorf("charsetOverride=%d: expected error", override)
+			continue
+		}
+		if !errors.Is(err, ErrCorruptTable) {
+			t.Errorf("charsetOverride=%d: err=%v, want ErrCorruptTable", override, err)
+		}
+	}
+}
+
 func TestParseCFFEmptyCharStrings(t *testing.T) {
 	cff := buildSyntheticCIDKeyedCFF(t, syntheticCFFOptions{numGlyphs: 1, fdCount: 1})
 	// Find the CharStrings INDEX by re-parsing and editing the count

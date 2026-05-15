@@ -206,6 +206,204 @@ func TestFdForGlyphFormat0(t *testing.T) {
 	}
 }
 
+// TestSubsetCFFPreservesDistinguishableCharStrings uses non-trivial
+// per-glyph charstring bytes so the assertions can tell "kept
+// verbatim" apart from "replaced with endchar". The previous synthetic
+// fixture made every charstring identical, hiding off-by-one bugs in
+// keep-set indexing.
+func TestSubsetCFFPreservesDistinguishableCharStrings(t *testing.T) {
+	// Glyph i gets a charstring whose distinguishing byte is `i+1`
+	// followed by endchar so it terminates the trace cleanly.
+	const n = 5
+	cs := make([][]byte, n)
+	for i := range n {
+		cs[i] = []byte{byte(i + 1), 0x0E}
+	}
+	cff := buildSyntheticCIDKeyedCFF(t, syntheticCFFOptions{
+		numGlyphs:   n,
+		fdCount:     1,
+		charStrings: cs,
+	})
+	used := map[uint16]rune{2: 'A'}
+
+	subset, err := SubsetCFF(cff, used)
+	if err != nil {
+		t.Fatalf("SubsetCFF: %v", err)
+	}
+	parsed, err := parseCFF(subset)
+	if err != nil {
+		t.Fatalf("re-parse: %v", err)
+	}
+	// GID 0 (.notdef) is always kept; GID 2 explicitly. Everything
+	// else must become a single endchar.
+	wantKept := map[int]bool{0: true, 2: true}
+	for gid := range n {
+		got := parsed.charStringsIndex.Object(gid)
+		if wantKept[gid] {
+			if len(got) != 2 || got[0] != byte(gid+1) || got[1] != 0x0E {
+				t.Errorf("kept gid %d = %v, want [%d 0x0E]", gid, got, gid+1)
+			}
+		} else {
+			if len(got) != 1 || got[0] != 0x0E {
+				t.Errorf("dropped gid %d = %v, want [0x0E]", gid, got)
+			}
+		}
+	}
+}
+
+// TestSubsetCFFPrunesUnreachableGsubrs builds a CFF with two global
+// subroutines: gsubr 0 is called by the kept glyph, gsubr 1 is
+// orphaned. After subsetting, gsubr 0 must survive byte-identical and
+// gsubr 1 must be replaced with a single `return` byte.
+func TestSubsetCFFPrunesUnreachableGsubrs(t *testing.T) {
+	// gsubr 0: terminate immediately. The kept glyph calls it.
+	gsubr0 := []byte{t2OpReturn}
+	// gsubr 1: contains a distinguishable payload so a reachability
+	// regression that retains all gsubrs is visible.
+	gsubr1 := []byte{0x20, 0x20, 0x20, t2OpReturn}
+
+	// The kept glyph (gid 1) calls gsubr 0 then endchar.
+	// callgsubr expects a biased index; biased = idx - 107 for
+	// nSubrs < 1240. We have nSubrs = 2, so the bias is 107 and the
+	// biased index for gsubr 0 is -107.
+	callGsubr0 := []byte{}
+	callGsubr0 = append(callGsubr0, t2Int(-107)...)
+	callGsubr0 = append(callGsubr0, t2OpCallgsubr, t2OpEndchar)
+
+	cs := [][]byte{
+		{0x0E},     // GID 0 notdef
+		callGsubr0, // GID 1: kept and calls gsubr 0
+		{0x0E},     // GID 2
+	}
+	cff := buildSyntheticCIDKeyedCFF(t, syntheticCFFOptions{
+		numGlyphs:   3,
+		fdCount:     1,
+		charStrings: cs,
+		globalSubrs: [][]byte{gsubr0, gsubr1},
+	})
+	used := map[uint16]rune{1: 'A'}
+
+	subset, err := SubsetCFF(cff, used)
+	if err != nil {
+		t.Fatalf("SubsetCFF: %v", err)
+	}
+	parsed, err := parseCFF(subset)
+	if err != nil {
+		t.Fatalf("re-parse: %v", err)
+	}
+	if parsed.gsubrIndex.count != 2 {
+		t.Fatalf("gsubr count = %d, want 2 (size preserved)", parsed.gsubrIndex.count)
+	}
+	if got := parsed.gsubrIndex.Object(0); len(got) != len(gsubr0) || got[0] != gsubr0[0] {
+		t.Errorf("gsubr 0 = %v, want %v (reached, must be verbatim)", got, gsubr0)
+	}
+	if got := parsed.gsubrIndex.Object(1); len(got) != 1 || got[0] != 0x0B {
+		t.Errorf("gsubr 1 = %v, want [0x0B] (unreached)", got)
+	}
+}
+
+// TestSubsetCFFPreservesNonLongintTopDictOperands unit-tests
+// rewriteTopDict directly with a hand-rolled DICT containing
+// non-longint operands (single-byte int, shortint, BCD real). The
+// rewriter must copy verbatim operators byte-for-byte.
+func TestSubsetCFFPreservesNonLongintTopDictOperands(t *testing.T) {
+	// Build a Top DICT with three verbatim entries and one rewritten:
+	//   139            single-byte int 0
+	//   17             CharStrings operator (will be rewritten)
+	//   139, 0         single-byte int 0, then version op
+	//   28, 0x12, 0x34 shortint 0x1234
+	//   12, 2          ItalicAngle operator (2-byte; verbatim)
+	dict := []byte{
+		139, byte(cffOpCharStrings), // operand + CharStrings (rewritten)
+		139, byte(cffOpVersion),     // operand + version (verbatim, single-byte op)
+		28, 0x12, 0x34, cffOpEscape, 2, // shortint + ItalicAngle (verbatim, 2-byte op)
+	}
+	entries, err := parseCFFDict(dict)
+	if err != nil {
+		t.Fatalf("parseCFFDict: %v", err)
+	}
+
+	out, patch := rewriteTopDict(dict, entries)
+	if patch.charStrings < 0 {
+		t.Fatal("CharStrings patch position not recorded")
+	}
+
+	// Find where the verbatim version and ItalicAngle entries land in
+	// the output. CharStrings becomes 5-byte placeholder + 1-byte op =
+	// 6 bytes total (vs. 2 bytes in source). Original source layout
+	// after CharStrings entry: 5 verbatim bytes (139, 0, 28, 0x12, 0x34)
+	// + escape op + ItalicAngle.
+	wantSuffix := []byte{139, byte(cffOpVersion), 28, 0x12, 0x34, cffOpEscape, 2}
+	if len(out) < len(wantSuffix) {
+		t.Fatalf("rewritten dict too short: %d bytes", len(out))
+	}
+	tail := out[len(out)-len(wantSuffix):]
+	if string(tail) != string(wantSuffix) {
+		t.Errorf("verbatim suffix = %v, want %v", tail, wantSuffix)
+	}
+}
+
+// TestFdForGlyphFormat3 exercises the multi-range FDSelect format
+// used by every real-world CID-keyed CJK font, which the original
+// synthetic builder couldn't reach. Three ranges with non-uniform
+// widths drive the boundary arithmetic in fdForGlyph and the
+// computeFDSelectSize sentinel check together.
+func TestFdForGlyphFormat3(t *testing.T) {
+	// 10 glyphs split into three FDs:
+	//   [0..3]  -> FD 0
+	//   [4..6]  -> FD 1
+	//   [7..9]  -> FD 2
+	cff := buildSyntheticCIDKeyedCFF(t, syntheticCFFOptions{
+		numGlyphs: 10,
+		fdCount:   3,
+		fdSelectFormat3: []syntheticFDRange{
+			{firstGID: 0, fd: 0},
+			{firstGID: 4, fd: 1},
+			{firstGID: 7, fd: 2},
+		},
+	})
+	parsed, err := parseCFF(cff)
+	if err != nil {
+		t.Fatalf("parseCFF: %v", err)
+	}
+	wantFD := []int{0, 0, 0, 0, 1, 1, 1, 2, 2, 2}
+	for gid, want := range wantFD {
+		got, err := parsed.fdForGlyph(gid)
+		if err != nil {
+			t.Errorf("fdForGlyph(%d): %v", gid, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("fdForGlyph(%d) = %d, want %d", gid, got, want)
+		}
+	}
+}
+
+func TestFdForGlyphFormat3SingleRange(t *testing.T) {
+	// Degenerate one-range form: every glyph in FD 0.
+	cff := buildSyntheticCIDKeyedCFF(t, syntheticCFFOptions{
+		numGlyphs: 4,
+		fdCount:   1,
+		fdSelectFormat3: []syntheticFDRange{
+			{firstGID: 0, fd: 0},
+		},
+	})
+	parsed, err := parseCFF(cff)
+	if err != nil {
+		t.Fatalf("parseCFF: %v", err)
+	}
+	for gid := range 4 {
+		got, err := parsed.fdForGlyph(gid)
+		if err != nil {
+			t.Errorf("fdForGlyph(%d): %v", gid, err)
+			continue
+		}
+		if got != 0 {
+			t.Errorf("fdForGlyph(%d) = %d, want 0", gid, got)
+		}
+	}
+}
+
 func TestFdForGlyphOutOfRange(t *testing.T) {
 	cff := buildSyntheticCIDKeyedCFF(t, syntheticCFFOptions{numGlyphs: 3, fdCount: 1})
 	parsed, err := parseCFF(cff)

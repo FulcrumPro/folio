@@ -191,7 +191,8 @@ func TestCharstringWalkerHintmaskWithImplicitVstem(t *testing.T) {
 
 func TestCharstringWalkerCyclicSubrTerminates(t *testing.T) {
 	// gsubr 0 calls gsubr 0 in an infinite loop. The walker must not
-	// recurse forever — depth guard or visited check must trip.
+	// recurse forever — the visited-check must short-circuit the
+	// second entry.
 	gsubr := buildSubrIndex(t, [][]byte{
 		appendOps(nil, t2Int(-107), []byte{t2OpCallgsubr, t2OpReturn}),
 	})
@@ -202,6 +203,14 @@ func TestCharstringWalkerCyclicSubrTerminates(t *testing.T) {
 
 	if !w.GsubrReached(0) {
 		t.Error("cyclic subr must still be marked reached on first visit")
+	}
+	// Bounded work: at most one walk into the top-level charstring +
+	// one walk into gsubr 0. If the visited-check regresses, this
+	// counter explodes — the test would otherwise just hang and time
+	// out the suite. The +2 slack absorbs depth-guard fallback paths
+	// that might add a single extra entry.
+	if w.walkCalls > 4 {
+		t.Errorf("walk invoked %d times on cyclic subr; expected <= 4", w.walkCalls)
 	}
 }
 

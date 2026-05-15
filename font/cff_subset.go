@@ -152,8 +152,6 @@ func SubsetCFF(cffBytes []byte, usedGlyphs map[uint16]rune) ([]byte, error) {
 	pos := 0
 	pos += len(headerBytes)
 	pos += len(nameBytes)
-	offTopDictIdx := pos
-	_ = offTopDictIdx
 	pos += len(newTopDictIndexBytes)
 	pos += len(stringBytes)
 	pos += len(newGsubrBytes)
@@ -178,10 +176,15 @@ func SubsetCFF(cffBytes []byte, usedGlyphs map[uint16]rune) ([]byte, error) {
 	patchInt32(newTopDict, topPatch.charStrings, int32(offCharStrings))
 	patchInt32(newTopDict, topPatch.fdArray, int32(offFDArray))
 	patchInt32(newTopDict, topPatch.fdSelect, int32(offFDSelect))
-	// Re-serialize Top DICT INDEX since we mutated its single object's
-	// bytes (the INDEX wrapper carries offset metadata that depends on
-	// the object's length, which is unchanged — but easier to rebuild
-	// than to patch in place).
+	// The re-serialize below is REQUIRED, not an optimization choice:
+	// writeCFFIndex above copied newTopDict's bytes into its output
+	// (see appendOff + the final payload append), so the previous
+	// newTopDictIndexBytes still carries the placeholder zeros even
+	// though newTopDict itself has been patched. Refresh the wrapper
+	// from the patched object bytes. Object length is unchanged
+	// because every placeholder used the same fixed 5-byte longint
+	// encoding, so the layout pass that already consumed
+	// len(newTopDictIndexBytes) above remains accurate.
 	newTopDictIndexBytes = writeCFFIndex([][]byte{newTopDict})
 
 	// Patch each FDArray font dict's Private (size, offset) operands.
@@ -189,8 +192,13 @@ func SubsetCFF(cffBytes []byte, usedGlyphs map[uint16]rune) ([]byte, error) {
 		patchInt32(b.fontDict, b.fontDictPatch.size, int32(len(b.privateDict)))
 		patchInt32(b.fontDict, b.fontDictPatch.offset, int32(fdPrivateOff[i]))
 	}
-	// FDArray INDEX is unchanged in shape — its object bytes were
-	// mutated in place, so rewrite it to refresh the assembled bytes.
+	// Refresh FDArray INDEX bytes for the same reason as Top DICT
+	// above: writeCFFIndex copied each font dict's bytes into the
+	// INDEX payload before we patched the per-FD Private operands,
+	// so the previous newFDArrayBytes carries stale zero
+	// placeholders. Object byte lengths are unchanged by patchInt32,
+	// so the cached len(newFDArrayBytes) from the layout pass is
+	// still accurate.
 	newFDArrayBytes = writeCFFIndex(fdArrayObjects)
 
 	// Patch each Private DICT's Subrs operand. The offset is relative

@@ -449,7 +449,19 @@ func parseCFF(raw []byte) (*cffFont, error) {
 	if !ok {
 		return nil, fmt.Errorf("cff: missing FDSelect operator: %w", ErrCorruptTable)
 	}
-	charsetOff, _ := dictInt(topDict, cffOpCharset) // 0 = ISOAdobe default
+	// CID-keyed CFFs must declare a custom charset explicitly
+	// (TN #5176 §18). The implicit-default values 0 (ISOAdobe), 1
+	// (Expert), and 2 (ExpertSubset) are reserved for non-CID fonts;
+	// here they would also be treated as absolute byte offsets and
+	// computeCharsetSize would interpret CFF header bytes as a
+	// charset format byte, yielding nonsense. Reject early.
+	charsetOff, ok := dictInt(topDict, cffOpCharset)
+	if !ok {
+		return nil, fmt.Errorf("cff: CID-keyed font missing charset operator: %w", ErrCorruptTable)
+	}
+	if charsetOff < 3 {
+		return nil, fmt.Errorf("cff: CID-keyed font using predefined charset %d (reserved for non-CID CFF): %w", charsetOff, ErrCorruptTable)
+	}
 	cidCountVal, _ := dictInt(topDict, cffOp2CIDCount)
 	cidCount := int(cidCountVal)
 	if cidCount == 0 {

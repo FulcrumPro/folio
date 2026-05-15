@@ -104,6 +104,41 @@ type syntheticCFFOptions struct {
 	// the end of the buffer when true. Exercises the FD private
 	// bounds check.
 	brokenFDPrivate bool
+
+	// charsetOverride, when non-zero, replaces the Top DICT charset
+	// operand with the supplied absolute offset. Used to drive
+	// rejection tests for predefined-charset values (0 = ISOAdobe,
+	// 1 = Expert, 2 = ExpertSubset) that CID-keyed CFFs must not use
+	// per TN #5176 §18.
+	charsetOverride    int32
+	useCharsetOverride bool
+
+	// charStrings, when non-nil, replaces the default one-endchar-
+	// per-glyph charstrings. Length must equal numGlyphs. Used by
+	// subset tests to distinguish "kept verbatim" from "replaced
+	// with endchar" — the default fixture's identical 0x0E bytes
+	// hide that distinction.
+	charStrings [][]byte
+
+	// globalSubrs, when non-nil, populates the Global Subr INDEX
+	// with the supplied bodies. Used by subset tests to verify
+	// reachability-based pruning.
+	globalSubrs [][]byte
+
+	// fdSelectFormat3, when non-nil, emits an FDSelect format 3
+	// table covering the contiguous ranges supplied. Range
+	// boundaries are first-glyph values; the FD applies from
+	// that glyph until the next range's first (or numGlyphs).
+	// When nil, the builder emits format 0 with FD = gid % fdCount.
+	// The first range must start at glyph 0.
+	fdSelectFormat3 []syntheticFDRange
+}
+
+// syntheticFDRange is one row in an FDSelect format 3 table: the
+// glyph index where the range begins and the FD that owns it.
+type syntheticFDRange struct {
+	firstGID int
+	fd       int
 }
 
 // buildSyntheticCIDKeyedCFF assembles a complete, valid CID-keyed CFF
@@ -145,16 +180,36 @@ func buildSyntheticCIDKeyedCFF(t fixtureT, opts syntheticCFFOptions) []byte {
 		nameIndexSize    = 9
 		topDictIndexSize = 55
 		stringIndexSize  = 19
-		gsubrSize        = 2
 		privateDictSize  = 18 // see writePrivateDict
 		localSubrSize    = 2  // empty INDEX
 		fdEntrySize      = 11 // per-FD font dict
 	)
 
 	// Pre-compute sizes that depend on opts.
+	// Resolve variable section payloads.
+	cs := opts.charStrings
+	if cs == nil {
+		cs = make([][]byte, opts.numGlyphs)
+		for i := range opts.numGlyphs {
+			cs[i] = []byte{0x0E}
+		}
+	}
+	if len(cs) != opts.numGlyphs {
+		t.Fatalf("synthetic: charStrings length %d != numGlyphs %d", len(cs), opts.numGlyphs)
+	}
+	charStringsPayload := writeCFFIndex(cs)
+	globalSubrPayload := writeCFFIndex(opts.globalSubrs)
+
 	charsetSize := 1 + (opts.numGlyphs-1)*2 // format 0
-	fdSelectSize := 1 + opts.numGlyphs      // format 0
-	charStringsSize := 2 + 1 + (opts.numGlyphs+1) + opts.numGlyphs
+	fdSelectSize := 1 + opts.numGlyphs      // default: format 0
+	if opts.fdSelectFormat3 != nil {
+		if len(opts.fdSelectFormat3) == 0 || opts.fdSelectFormat3[0].firstGID != 0 {
+			t.Fatalf("synthetic: fdSelectFormat3 must start with a range at glyph 0")
+		}
+		fdSelectSize = 1 + 2 + len(opts.fdSelectFormat3)*3 + 2
+	}
+	charStringsSize := len(charStringsPayload)
+	gsubrPayloadSize := len(globalSubrPayload)
 	fdArraySize := 2 + 1 + (opts.fdCount + 1) + opts.fdCount*fdEntrySize
 
 	// Absolute offsets.
@@ -162,7 +217,7 @@ func buildSyntheticCIDKeyedCFF(t fixtureT, opts syntheticCFFOptions) []byte {
 	offTopDict := offNameIndex + nameIndexSize
 	offStringIndex := offTopDict + topDictIndexSize
 	offGsubr := offStringIndex + stringIndexSize
-	offCharset := offGsubr + gsubrSize
+	offCharset := offGsubr + gsubrPayloadSize
 	offFDSelect := offCharset + charsetSize
 	offCharStrings := offFDSelect + fdSelectSize
 	offFDArray := offCharStrings + charStringsSize
@@ -195,7 +250,11 @@ func buildSyntheticCIDKeyedCFF(t fixtureT, opts syntheticCFFOptions) []byte {
 	td.longInt(int32(opts.numGlyphs))
 	td.byte(cffOpEscape)
 	td.byte(34) // CIDCount
-	td.longInt(int32(offCharset))
+	charsetOperand := int32(offCharset)
+	if opts.useCharsetOverride {
+		charsetOperand = opts.charsetOverride
+	}
+	td.longInt(charsetOperand)
 	td.byte(cffOpCharset)
 	if !opts.skipCharStrings {
 		td.longInt(int32(offCharStrings))
@@ -234,8 +293,8 @@ func buildSyntheticCIDKeyedCFF(t fixtureT, opts syntheticCFFOptions) []byte {
 		'I', 'd', 'e', 'n', 't', 'i', 't', 'y',
 	)
 
-	// Global Subr INDEX: empty.
-	out = append(out, 0x00, 0x00)
+	// Global Subr INDEX.
+	out = append(out, globalSubrPayload...)
 
 	// Charset format 0: SIDs for glyphs 1..numGlyphs-1.
 	out = append(out, 0x00)
@@ -243,20 +302,24 @@ func buildSyntheticCIDKeyedCFF(t fixtureT, opts syntheticCFFOptions) []byte {
 		out = append(out, byte(i>>8), byte(i&0xFF))
 	}
 
-	// FDSelect format 0: per-glyph FD index = (glyph % fdCount).
-	out = append(out, 0x00)
-	for i := range opts.numGlyphs {
-		out = append(out, byte(i%opts.fdCount))
+	// FDSelect: format 0 by default, or format 3 when ranges given.
+	if opts.fdSelectFormat3 != nil {
+		out = append(out, 0x03)
+		out = append(out, byte(len(opts.fdSelectFormat3)>>8), byte(len(opts.fdSelectFormat3)&0xFF))
+		for _, r := range opts.fdSelectFormat3 {
+			out = append(out, byte(r.firstGID>>8), byte(r.firstGID&0xFF), byte(r.fd))
+		}
+		// Sentinel uint16 = numGlyphs.
+		out = append(out, byte(opts.numGlyphs>>8), byte(opts.numGlyphs&0xFF))
+	} else {
+		out = append(out, 0x00)
+		for i := range opts.numGlyphs {
+			out = append(out, byte(i%opts.fdCount))
+		}
 	}
 
-	// CharStrings INDEX: each glyph is a single endchar byte (0x0E).
-	out = append(out, 0x00, byte(opts.numGlyphs), 0x01)
-	for i := range opts.numGlyphs + 1 {
-		out = append(out, byte(i+1))
-	}
-	for range opts.numGlyphs {
-		out = append(out, 0x0E)
-	}
+	// CharStrings INDEX.
+	out = append(out, charStringsPayload...)
 
 	// FDArray INDEX header.
 	out = append(out, 0x00, byte(opts.fdCount), 0x01)

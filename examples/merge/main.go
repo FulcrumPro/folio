@@ -27,6 +27,51 @@ import (
 	"github.com/carlos7ags/folio/reader"
 )
 
+// buildMergedPDF runs the example's full source-PDF construction +
+// merge pipeline and returns the merged PDF bytes. Extracted from
+// main() so the example test (main_test.go) can verify the merged
+// output without writing to disk.
+func buildMergedPDF() ([]byte, error) {
+	pdf1 := createReport("Q3 2026 Revenue Report", []string{
+		"Total revenue reached $25.1M, up 18% year-over-year.",
+		"Advisory services contributed $12.8M (51% of total).",
+		"New client acquisitions increased by 23 accounts.",
+	})
+
+	pdf2 := createReport("Q4 2026 Revenue Report", []string{
+		"Total revenue reached $28.3M, up 22% year-over-year.",
+		"Operating margin improved to 30%, driven by cost optimization.",
+		"Asia-Pacific region grew 31.7%, the fastest across all regions.",
+	})
+
+	pdf3 := createCoverPage("Annual Summary 2026", "Apex Capital Partners")
+
+	r1, err := reader.Parse(pdf1)
+	if err != nil {
+		return nil, fmt.Errorf("parse pdf1: %w", err)
+	}
+	r2, err := reader.Parse(pdf2)
+	if err != nil {
+		return nil, fmt.Errorf("parse pdf2: %w", err)
+	}
+	r3, err := reader.Parse(pdf3)
+	if err != nil {
+		return nil, fmt.Errorf("parse pdf3: %w", err)
+	}
+
+	merged, err := reader.Merge(r3, r1, r2)
+	if err != nil {
+		return nil, fmt.Errorf("merge: %w", err)
+	}
+	merged.SetInfo("Annual Summary 2026", "Apex Capital Partners")
+
+	var buf bytes.Buffer
+	if _, err := merged.WriteTo(&buf); err != nil {
+		return nil, fmt.Errorf("write merged: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
 func main() {
 	// --- Create source PDFs ---
 	fmt.Println("Creating source PDFs...")

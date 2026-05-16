@@ -33,6 +33,33 @@ import (
 	"github.com/carlos7ags/folio/reader"
 )
 
+// buildRedactedPDF runs the example's full redaction pipeline and
+// returns the redacted PDF bytes — equivalent to what main() writes
+// to disk at the end of its --- Step 4 --- block (text + regex SSN
+// redaction with metadata stripping). Extracted so the example test
+// can verify the redacted output without writing to disk.
+func buildRedactedPDF() ([]byte, error) {
+	pdf := createSensitivePDF()
+	r, err := reader.Parse(pdf)
+	if err != nil {
+		return nil, fmt.Errorf("parse source: %w", err)
+	}
+	ssnPattern := regexp.MustCompile(`\d{3}-\d{2}-\d{4}`)
+	m, err := reader.RedactPattern(r, ssnPattern, &reader.RedactOptions{
+		FillColor:     [3]float64{0, 0, 0},
+		OverlayText:   "[SSN]",
+		StripMetadata: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("redact pattern: %w", err)
+	}
+	var buf bytes.Buffer
+	if _, err := m.WriteTo(&buf); err != nil {
+		return nil, fmt.Errorf("write redacted: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
 func main() {
 	// --- Step 1: Create a PDF with sensitive content ---
 	fmt.Println("Creating PDF with sensitive content...")

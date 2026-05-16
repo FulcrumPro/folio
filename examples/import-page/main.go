@@ -28,33 +28,24 @@ import (
 	"github.com/carlos7ags/folio/reader"
 )
 
-func main() {
-	// --- Load the template PDF ---
-	templatePath := findTemplate()
+// buildDocument loads the template PDF, extracts page 0, and renders
+// the three demo receipts on copies of it. Extracted from main() so
+// the example test (main_test.go) can exercise the import+overlay
+// pipeline against an in-memory buffer.
+func buildDocument(templatePath string) (*document.Document, error) {
 	templateBytes, err := os.ReadFile(templatePath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "read:", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("read template: %w", err)
 	}
-
 	r, err := reader.Parse(templateBytes)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "parse:", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("parse template: %w", err)
 	}
-
-	// Extract the first page for importing.
-	// ExtractPageImport resolves all indirect references (fonts, images,
-	// color spaces) so the result is self-contained and independent of
-	// the source PdfReader.
 	imp, err := reader.ExtractPageImport(r, 0)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "extract:", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("extract template page: %w", err)
 	}
-	fmt.Printf("Template: %.0fx%.0f pt\n", imp.Width, imp.Height)
 
-	// --- Fill in receipts from the template ---
 	receipts := []struct{ number, date, from, amount, method, work, period string }{
 		{"REC-001", "2026-03-15", "Apex Capital Partners", "$34,948.88", "Wire Transfer", "Q1 consulting services", "Jan — Mar 2026"},
 		{"REC-002", "2026-03-16", "Meridian Dynamics", "$12,500.00", "Check", "Software license — annual", "Mar 2026 — Mar 2027"},
@@ -82,6 +73,16 @@ func main() {
 		p.AddText(rec.period, font.Helvetica, 10, 310, 380) // on "Corresponding to the period of" line
 	}
 
+	return doc, nil
+}
+
+func main() {
+	templatePath := findTemplate()
+	doc, err := buildDocument(templatePath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	if err := doc.Save("receipts.pdf"); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

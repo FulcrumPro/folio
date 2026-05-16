@@ -63,8 +63,11 @@ type Invoice struct {
 	Notes    string
 }
 
-func main() {
-	inv := Invoice{
+// sampleInvoice returns the demo invoice rendered by main(). Exported
+// to the example test (main_test.go) so the assertions read the same
+// values main() actually writes to disk.
+func sampleInvoice() Invoice {
+	return Invoice{
 		Number:   "1042",
 		Date:     time.Now().Format("January 2, 2006"),
 		Customer: "Globex Corporation",
@@ -76,8 +79,10 @@ func main() {
 		Total: 6488.00,
 		Notes: "Payment due within 30 days.",
 	}
+}
 
-	doc, err := tmpl.RenderDocument(invoiceTemplate, inv, nil)
+func main() {
+	doc, err := tmpl.RenderDocument(invoiceTemplate, sampleInvoice(), nil)
 	if err != nil {
 		log.Fatal(err)
 	}

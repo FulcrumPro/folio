@@ -47,4 +47,9 @@ node_modules/
 # OS
 .DS_Store
 Thumbs.db
-template
+
+# Scratch / build artefacts produced by example runs and ad-hoc
+# template experiments at repo root. The leading slash keeps the
+# rule anchored to the root so it does not accidentally hide files
+# under examples/template/ or anywhere else nested.
+/template

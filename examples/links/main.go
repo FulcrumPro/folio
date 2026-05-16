@@ -29,6 +29,19 @@ import (
 )
 
 func main() {
+	doc := buildDocument()
+	if err := doc.Save("links.pdf"); err != nil {
+		fmt.Fprintf(os.Stderr, "save: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("Created links.pdf")
+}
+
+// buildDocument assembles the multi-page links showcase and returns
+// the ready-to-write Document. Extracted from main() so the example
+// test (main_test.go) can exercise the same construction against an
+// in-memory buffer instead of disk.
+func buildDocument() *document.Document {
 	doc := document.NewDocument(document.PageSizeLetter)
 	doc.Info.Title = "Folio Links Showcase"
 	doc.Info.Author = "Folio"
@@ -232,11 +245,7 @@ hr { margin: 6px 0; }
 		PageIndex: 1, Type: document.DestFit,
 	})
 
-	if err := doc.Save("links.pdf"); err != nil {
-		fmt.Fprintf(os.Stderr, "save: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println("Created links.pdf")
+	return doc
 }
 
 // sectionHeading creates a small bold heading.

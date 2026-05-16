@@ -18,6 +18,18 @@ import (
 )
 
 func main() {
+	if err := buildDocument().Save("hello.pdf"); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("Created hello.pdf")
+}
+
+// buildDocument assembles the one-page hello PDF and returns the
+// ready-to-write Document. Extracted from main() so the example test
+// (main_test.go) can exercise the same construction against an
+// in-memory buffer instead of disk.
+func buildDocument() *document.Document {
 	doc := document.NewDocument(document.PageSizeLetter)
 	doc.Info.Title = "Hello World"
 	doc.Info.Author = "Folio"
@@ -28,10 +40,5 @@ func main() {
 			"Folio is a pure-Go library for creating, reading, and signing PDF documents.",
 		font.Helvetica, 12,
 	))
-
-	if err := doc.Save("hello.pdf"); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println("Created hello.pdf")
+	return doc
 }

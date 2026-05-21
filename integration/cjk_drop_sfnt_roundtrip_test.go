@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -91,6 +92,70 @@ body { font-family: 'CJK'; font-size: 14px; }
 	// any trailing character (incl. the period) fails here. The text
 	// extractor may surround the paragraph with whitespace; trim
 	// before comparing.
+	wantFull := want + "。"
+	if strings.TrimSpace(got) != wantFull {
+		t.Errorf("extracted text does not match input.\n  want: %q\n  got:  %q", wantFull, got)
+	}
+}
+
+// TestCJKRoundTripWithSyntheticFixture is the platform-agnostic
+// counterpart to TestCJKDropSfntRoundTripsThroughPDFExtraction above.
+// It uses the synthetic CJK font under font/testdata/synthetic_cjk.ttf
+// (issue #281), so the round-trip pin runs on every host — including
+// CI runners that lack STHeiti / NotoSansCJK / MingLiU.
+//
+// The fixture covers exactly the 19 unique codepoints in the test
+// phrase, one glyph per codepoint. It does NOT exercise the
+// large-cmap recovery path that motivated #260; that branch stays
+// covered by the macOS-gated test above and by the synthetic-cmap
+// unit test at font/cmap_test.go::TestParseCmapFormat12LargeGroupCount.
+// What this test pins is the user-facing claim: HTML containing a
+// 19-character CJK phrase, rendered to PDF through @font-face, must
+// extract back as the same phrase via the /ToUnicode CMap.
+func TestCJKRoundTripWithSyntheticFixture(t *testing.T) {
+	fixturePath, err := filepath.Abs("../font/testdata/synthetic_cjk.ttf")
+	if err != nil {
+		t.Fatalf("resolve fixture path: %v", err)
+	}
+	if _, err := os.Stat(fixturePath); err != nil {
+		t.Fatalf("synthetic fixture missing at %s: %v (run go run ./font/testdata/build_cjk_fixture.go to regenerate)", fixturePath, err)
+	}
+	const want = "中华人民共和国是一个历史悠久的文明古国"
+
+	htmlStr := fmt.Sprintf(`<!DOCTYPE html>
+<html><head><style>
+@font-face { font-family: 'CJK'; src: url('%s'); }
+body { font-family: 'CJK'; font-size: 14px; }
+</style></head><body><p>%s。</p></body></html>`, fixturePath, want)
+
+	result, err := html.ConvertFull(htmlStr, &html.Options{StrictAssets: true})
+	if err != nil {
+		t.Fatalf("ConvertFull: %v", err)
+	}
+	doc := document.NewDocument(document.PageSizeLetter)
+	for _, e := range result.Elements {
+		doc.Add(e)
+	}
+	var buf bytes.Buffer
+	if _, err := doc.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+
+	r, err := reader.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatalf("reader.Parse: %v", err)
+	}
+	if r.PageCount() == 0 {
+		t.Fatal("PDF has no pages")
+	}
+	page, err := r.Page(0)
+	if err != nil {
+		t.Fatalf("Page(0): %v", err)
+	}
+	got, err := page.ExtractText()
+	if err != nil {
+		t.Fatalf("ExtractText: %v", err)
+	}
 	wantFull := want + "。"
 	if strings.TrimSpace(got) != wantFull {
 		t.Errorf("extracted text does not match input.\n  want: %q\n  got:  %q", wantFull, got)

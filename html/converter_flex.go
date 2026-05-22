@@ -14,6 +14,11 @@ import (
 
 // convertFlex converts a display:flex container into a layout.Flex.
 func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Element {
+	// Save the parent's containing-block width before narrowing.
+	// Margin / padding percentages on the flex container itself
+	// resolve against the containing block (CSS 2.1 §8.4), not
+	// against the flex's own post-narrow content box.
+	parentContainerWidth := c.containerWidth
 	restore := c.narrowContainerWidth(style)
 	defer restore()
 
@@ -86,10 +91,10 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 
 	if style.hasPadding() {
 		flex.SetPaddingAll(layout.Padding{
-			Top:    style.PaddingTop,
-			Right:  style.PaddingRight,
-			Bottom: style.PaddingBottom,
-			Left:   style.PaddingLeft,
+			Top:    style.PaddingTopAt(parentContainerWidth),
+			Right:  style.PaddingRightAt(parentContainerWidth),
+			Bottom: style.PaddingBottomAt(parentContainerWidth),
+			Left:   style.PaddingLeftAt(parentContainerWidth),
 		})
 	}
 	if style.hasBorder() {
@@ -98,11 +103,11 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 	if style.BackgroundColor != nil {
 		flex.SetBackground(*style.BackgroundColor)
 	}
-	if style.MarginTop > 0 {
-		flex.SetSpaceBefore(style.MarginTop)
+	if mt := style.MarginTopAt(parentContainerWidth); mt > 0 {
+		flex.SetSpaceBefore(mt)
 	}
-	if style.MarginBottom > 0 {
-		flex.SetSpaceAfter(style.MarginBottom)
+	if mb := style.MarginBottomAt(parentContainerWidth); mb > 0 {
+		flex.SetSpaceAfter(mb)
 	}
 
 	// Add children as flex items.
@@ -271,7 +276,10 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 			flex.SetDefiniteCrossSize(true)
 		}
 		div.Add(flex)
-		applyDivStyles(div, style, c.containerWidth)
+		// applyDivStyles needs the parent's containing-block width
+		// for margin/padding percent resolution, not the post-narrow
+		// flex content box.
+		applyDivStyles(div, style, parentContainerWidth)
 		return []layout.Element{div}
 	}
 

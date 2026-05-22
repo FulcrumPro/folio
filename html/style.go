@@ -519,9 +519,22 @@ func (s *computedStyle) inherit() computedStyle {
 	return child
 }
 
-// hasPadding returns true if any padding is set.
+// hasPadding returns true if any padding is declared AND would
+// resolve to a non-zero value against a non-zero container. The
+// check intentionally returns true for `padding: 50%` (legacy
+// float64 resolves to 0, but the sibling carries a meaningful
+// non-zero value when given a container width) while returning
+// false for explicit-zero declarations like `padding: 0` or
+// `padding: 0%`, which add no layout effect and should not
+// trigger wrapper-emission code paths.
 func (s *computedStyle) hasPadding() bool {
-	return s.PaddingTop > 0 || s.PaddingRight > 0 || s.PaddingBottom > 0 || s.PaddingLeft > 0
+	if s.PaddingTop > 0 || s.PaddingRight > 0 || s.PaddingBottom > 0 || s.PaddingLeft > 0 {
+		return true
+	}
+	return hasMeaningfulLength(s.PaddingTopLength) ||
+		hasMeaningfulLength(s.PaddingRightLength) ||
+		hasMeaningfulLength(s.PaddingBottomLength) ||
+		hasMeaningfulLength(s.PaddingLeftLength)
 }
 
 // hasBorder returns true if any border is set.
@@ -529,9 +542,37 @@ func (s *computedStyle) hasBorder() bool {
 	return s.BorderTopWidth > 0 || s.BorderRightWidth > 0 || s.BorderBottomWidth > 0 || s.BorderLeftWidth > 0
 }
 
-// hasMargin returns true if any margin is set.
+// hasMargin returns true if any margin is declared AND would
+// resolve to a non-zero value. See hasPadding for the
+// non-zero-declaration rationale.
 func (s *computedStyle) hasMargin() bool {
-	return s.MarginTop > 0 || s.MarginRight > 0 || s.MarginBottom > 0 || s.MarginLeft > 0
+	if s.MarginTop > 0 || s.MarginRight > 0 || s.MarginBottom > 0 || s.MarginLeft > 0 {
+		return true
+	}
+	return hasMeaningfulLength(s.MarginTopLength) ||
+		hasMeaningfulLength(s.MarginRightLength) ||
+		hasMeaningfulLength(s.MarginBottomLength) ||
+		hasMeaningfulLength(s.MarginLeftLength)
+}
+
+// hasMeaningfulLength reports whether a *cssLength sibling carries a
+// declaration that would resolve to a non-zero value for some
+// container width — distinct from "no declaration" (nil) and from
+// "explicit zero declaration" (`0` / `0%` / `calc(0)`).
+//
+// A plain length leaf is meaningful when Value != 0. A calc / min /
+// max / clamp tree is meaningful conservatively — we cannot determine
+// at parse time whether the expression evaluates to non-zero, so we
+// assume it does. Callers gate wrapper emission on this, and a
+// spurious wrapper is preferable to a missing one.
+func hasMeaningfulLength(l *cssLength) bool {
+	if l == nil {
+		return false
+	}
+	if l.calc != nil || l.minArgs != nil || l.maxArgs != nil {
+		return true
+	}
+	return l.Value != 0
 }
 
 // MarginTopAt resolves the top margin against containerWidth. When the

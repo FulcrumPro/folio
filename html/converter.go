@@ -719,8 +719,16 @@ func (c *converter) getFallbackFont() *font.EmbeddedFont {
 	}
 	c.fallbackFontLoaded = true
 
+	// Document lang reaches this lazy load because getFallbackFont
+	// is only invoked from chooseFont during walkChildren, which
+	// runs after findHTMLLang in ConvertFull/Convert. The same TTC
+	// face-selection rules that govern @font-face apply: a doc with
+	// lang="zh-CN" pulling NotoSansCJK-Regular.ttc as the system
+	// fallback picks the SC face instead of JP face-0.
+	lang := c.metadata.Language
+
 	if c.opts.FallbackFontPath != "" {
-		if face, err := c.loadFallbackFont(c.opts.FallbackFontPath); err == nil {
+		if face, err := c.loadFallbackFont(c.opts.FallbackFontPath, lang); err == nil {
 			c.fallbackFont = font.NewEmbeddedFont(face)
 			return c.fallbackFont
 		} else {
@@ -762,7 +770,7 @@ func (c *converter) getFallbackFont() *font.EmbeddedFont {
 		`C:\Windows\Fonts\segoeui.ttf`,
 	}
 	for _, path := range candidates {
-		if face, err := font.LoadFont(path); err == nil {
+		if face, err := font.LoadFontForLanguage(path, lang); err == nil {
 			c.fallbackFont = font.NewEmbeddedFont(face)
 			return c.fallbackFont
 		}
@@ -788,19 +796,19 @@ func (c *converter) getFallbackFont() *font.EmbeddedFont {
 //     a typo in the option does not silently produce no-fallback text.
 //     The retry is logged at debug level so the BaseFS attempt remains
 //     observable when investigating which path the loader took.
-func (c *converter) loadFallbackFont(p string) (font.Face, error) {
+func (c *converter) loadFallbackFont(p, lang string) (font.Face, error) {
 	if filepath.IsAbs(p) {
-		return font.LoadFont(p)
+		return font.LoadFontForLanguage(p, lang)
 	}
 	if c.opts.BaseFS != nil {
 		data, baseErr := c.resolveLocalAsset("", p, 50<<20)
 		if baseErr == nil {
-			return font.ParseFont(data)
+			return font.ParseFontForLanguage(data, lang)
 		}
 		c.logger.Debug("folio/html: FallbackFontPath not in BaseFS, trying OS",
 			"path", p, "error", baseErr)
 	}
-	return font.LoadFont(p)
+	return font.LoadFontForLanguage(p, lang)
 }
 
 // resolveFontForText returns the best font for the given text. If the text

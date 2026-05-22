@@ -637,7 +637,7 @@ func TestFallbackFontPathOSFallback(t *testing.T) {
 	// BaseFS to point at /tmp without coupling, use the absolute-path branch:
 	// confirm font.LoadFont errors with a parse-related error (not
 	// fs.ErrNotExist), proving the file was reached on disk.
-	_, err := c.loadFallbackFont(osPath)
+	_, err := c.loadFallbackFont(osPath, "")
 	if err == nil {
 		t.Fatal("expected parse error for invalid font bytes, got nil")
 	}
@@ -657,7 +657,7 @@ func TestFallbackFontAbsoluteSkipsBaseFS(t *testing.T) {
 	// Use a path that is absolute on the host. On a non-existent file the
 	// font loader will error; we only care that BaseFS sees zero opens.
 	abs := string(filepath.Separator) + filepath.Join("does", "not", "exist", "x.ttf")
-	_, _ = c.loadFallbackFont(abs)
+	_, _ = c.loadFallbackFont(abs, "")
 	if got := fsys.count(strings.TrimPrefix(filepath.ToSlash(abs), "/")); got != 0 {
 		t.Errorf("absolute path should bypass BaseFS, but it was opened %d times", got)
 	}

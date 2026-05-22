@@ -95,9 +95,23 @@ func ParseFontForLanguage(data []byte, lang string) (Face, error) {
 // [ErrUnknownFormat], [ErrTruncated], or [ErrCorruptTable] so callers
 // can match failure modes with errors.Is.
 func LoadFont(path string) (Face, error) {
+	return LoadFontForLanguage(path, "")
+}
+
+// LoadFontForLanguage reads and parses a font file from disk like
+// [LoadFont] but, for TrueType Collections, selects the face whose
+// name-table FontFamily best matches the supplied BCP-47 language tag.
+// Empty lang behaves identically to [LoadFont] — face 0 for TTCs, the
+// single face for standalone TTF/OTF/WOFF.
+//
+// Useful for paths the caller knows ahead of time will resolve to a
+// pan-CJK TTC (NotoSansCJK-Regular.ttc, msyh.ttc, simsun.ttc) when the
+// document context specifies a target language. See
+// [ParseFontForLanguage] for the BCP-47 tag matching rules.
+func LoadFontForLanguage(path, lang string) (Face, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read font file: %w", err)
 	}
-	return ParseFont(data)
+	return ParseFontForLanguage(data, lang)
 }

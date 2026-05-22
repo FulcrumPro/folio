@@ -191,3 +191,69 @@ func TestScaleAndSkewCalcResolveCorrectly(t *testing.T) {
 		})
 	}
 }
+
+// TestParseLineHeight pins parseLineHeight against each input form
+// CSS Inline Layout Module Level 3 §4.3 accepts. The "dimensionless
+// calc" cases are the central regression bar for #275 — pre-fix
+// `calc(1.2 * 1.5)` resolved to 1.8 then was divided by fontSize=9,
+// producing a 9× compression of line spacing. The length-form calc
+// cases (`calc(1.5em)`, `calc(24px)`) must still divide by fontSize;
+// without the explicit length-form coverage a regression that drops
+// the divide-by-fontSize would mis-render existing documents.
+func TestParseLineHeight(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    string
+		fontSize float64
+		want     float64
+	}{
+		// Keyword + simple forms.
+		{"normal keyword", "normal", 12, 1.2},
+		{"empty string falls back to normal", "", 12, 1.2},
+		{"bare unitless number", "1.5", 12, 1.5},
+		{"zero collapses the line box", "0", 12, 0},
+
+		// Percentage form — CSS Inline Layout L3 §4.3 lists this
+		// alongside <number> / <length>. A percent is resolved against
+		// fontSize, so the multiplier equals the percent / 100.
+		{"percentage 150% (multiplier 1.5)", "150%", 12, 1.5},
+		{"percentage 50% (multiplier 0.5)", "50%", 12, 0.5},
+
+		// Dimensionless calc — every leaf is a bare number. The result
+		// IS the multiplier; dividing by fontSize would mis-render
+		// (the original #275 bug).
+		{"dimensionless calc — multiplication", "calc(1.2 * 1.5)", 12, 1.8},
+		{"dimensionless calc — addition", "calc(1 + 0.5)", 9, 1.5},
+		{"dimensionless calc — single leaf", "calc(1.5)", 12, 1.5},
+		{"dimensionless calc — zero factor", "calc(0 * 5)", 12, 0},
+		// CSS-invalid (negative line-height) but the parser tolerates
+		// it; pin the lenient behavior so a future strictness change
+		// is intentional rather than an accident.
+		{"dimensionless calc — negative result", "calc(0.5 - 1)", 12, -0.5},
+
+		// Length-form calc — at least one leaf carries a length unit.
+		// The result is in points; the multiplier is points / fontSize.
+		// Using pt explicitly avoids coupling the assertion to folio's
+		// px→pt conversion factor (1px = 0.75pt at 96dpi).
+		{"length-form calc with em", "calc(1.5em)", 12, 1.5},
+		{"length-form calc with pt", "calc(18pt)", 12, 1.5},
+
+		// Documenting test: min/max args route through parseLength,
+		// which tags bare numbers as "px" (folio's default-unit
+		// convention). So min(1.2, 1.8) is a length min, not a
+		// dimensionless min. Result: 1.2px = 0.9pt → 0.9/12 = 0.075.
+		// CSS spec rejects bare numbers in min/max anyway; pinning
+		// the lenient folio behavior keeps a future "treat bare
+		// numbers as num inside min/max" refactor visible.
+		{"min() of bare numbers — folio treats as px", "min(1.2, 1.8)", 12, 0.075},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseLineHeight(tc.value, tc.fontSize)
+			if math.Abs(got-tc.want) > 0.001 {
+				t.Errorf("parseLineHeight(%q, %v) = %v, want %v",
+					tc.value, tc.fontSize, got, tc.want)
+			}
+		})
+	}
+}

@@ -755,8 +755,27 @@ func breakCJKWords(words []Word) []Word {
 	return result
 }
 
-// breakLongWords splits any word exceeding maxWidth into character-level chunks
-// so that the word-wrap algorithm can handle them. Words that fit are unchanged.
+// breakLongWords splits any word exceeding maxWidth into character-level
+// chunks so that the word-wrap algorithm can handle them. Words that fit
+// are unchanged.
+//
+// For shaped words (where OriginalText carries the pre-shape Unicode and
+// either Text was Arabic-shaped to Presentation Forms-B or GIDs carries
+// the Indic shaper output), the function breaks on OriginalText
+// codepoint boundaries and re-runs the appropriate shaper for each
+// chunk. This preserves Word.OriginalText (used by the renderer's
+// /ActualText marked-content wrapper, ISO 32000-2 §14.9.4) and
+// Word.GIDs (needed by the Identity-H emit path for Indic). A prior
+// implementation dropped both fields on subsequent chunks, breaking
+// copy/paste recovery and Devanagari rendering at chunk boundaries
+// (#255).
+//
+// Re-shaping per chunk produces context-independent glyphs at the chunk
+// boundaries — Arabic cursive joins won't carry across a break, and
+// Indic ligatures that would span a break do not form. That's the
+// expected outcome for a character-broken word: the layout engine has
+// already decided the word must split at this character, and shaping
+// honours that decision.
 func breakLongWords(words []Word, maxWidth float64) []Word {
 	var result []Word
 	for _, w := range words {
@@ -764,19 +783,25 @@ func breakLongWords(words []Word, maxWidth float64) []Word {
 			result = append(result, w)
 			continue
 		}
-		// Break by characters. Build chunks that fit within maxWidth.
-		runes := []rune(w.Text)
-		measurer := w.Font
-		var emb *font.EmbeddedFont
-		if w.Embedded != nil {
-			emb = w.Embedded
+
+		// Source text for codepoint-boundary breaks: pre-shape
+		// OriginalText when the word was shaped, else the post-shape
+		// Text. The shaped flag drives both the rune-iteration source
+		// and the per-chunk shaping path below.
+		shaped := w.OriginalText != ""
+		sourceText := w.Text
+		if shaped {
+			sourceText = w.OriginalText
 		}
-		var measure func(string) float64
-		if emb != nil {
-			measure = func(s string) float64 { return emb.MeasureString(s, w.FontSize) }
-		} else if measurer != nil {
-			measure = func(s string) float64 { return measurer.MeasureString(s, w.FontSize) }
-		} else {
+		runes := []rune(sourceText)
+
+		shapeChunk := shapedChunkBuilder(&w, shaped)
+		// Probe the first single-rune chunk to detect a missing
+		// measurer (no Font and no Embedded). Without one we cannot
+		// width-test candidates, so pass the source word through
+		// verbatim — matches the original break-by-characters
+		// fallback semantics.
+		if _, _, _, ok := shapeChunk(string(runes[0:1])); !ok {
 			result = append(result, w)
 			continue
 		}
@@ -785,16 +810,17 @@ func breakLongWords(words []Word, maxWidth float64) []Word {
 		for start < len(runes) {
 			end := start + 1
 			for end < len(runes) {
-				candidate := string(runes[start : end+1])
-				if measure(candidate) > maxWidth {
+				_, _, width, _ := shapeChunk(string(runes[start : end+1]))
+				if width > maxWidth {
 					break
 				}
 				end++
 			}
-			chunk := string(runes[start:end])
-			result = append(result, Word{
-				Text:          chunk,
-				Width:         measure(chunk),
+			chunkSource := string(runes[start:end])
+			chunkText, chunkGIDs, chunkWidth, _ := shapeChunk(chunkSource)
+			chunk := Word{
+				Text:          chunkText,
+				Width:         chunkWidth,
 				Font:          w.Font,
 				Embedded:      w.Embedded,
 				FontSize:      w.FontSize,
@@ -803,11 +829,64 @@ func breakLongWords(words []Word, maxWidth float64) []Word {
 				SpaceAfter:    0, // no inter-word space within a broken word
 				LetterSpacing: w.LetterSpacing,
 				WordSpacing:   w.WordSpacing,
-			})
+				GIDs:          chunkGIDs,
+			}
+			if shaped {
+				// Per-chunk pre-shape slice. Without this the
+				// renderer's /ActualText wrapper would emit the
+				// shaped codepoints, breaking copy/paste recovery.
+				chunk.OriginalText = chunkSource
+			}
+			result = append(result, chunk)
 			start = end
 		}
 	}
 	return result
+}
+
+// shapedChunkBuilder returns a function that produces (post-shape text,
+// GIDs, width, ok) for an arbitrary slice of a word's source text. It
+// captures w by pointer so that per-chunk results inherit the word's
+// font / Embedded / size without allocating closures over each field.
+// The shaped flag selects the path: unshaped words route through
+// MeasureString on the source text; shaped words re-run the Indic
+// shaper when w.GIDs was non-nil, otherwise the Arabic shaper.
+func shapedChunkBuilder(w *Word, shaped bool) func(chunkSrc string) (text string, gids []uint16, width float64, ok bool) {
+	return func(chunkSrc string) (text string, gids []uint16, width float64, ok bool) {
+		if !shaped {
+			if w.Embedded != nil {
+				return chunkSrc, nil, w.Embedded.MeasureString(chunkSrc, w.FontSize), true
+			}
+			if w.Font != nil {
+				return chunkSrc, nil, w.Font.MeasureString(chunkSrc, w.FontSize), true
+			}
+			return "", nil, 0, false
+		}
+		// Indic path — try only if the original word carried GIDs
+		// (i.e. the initial shaper succeeded). The script of the
+		// chunk could differ from the script of the whole word at
+		// boundaries between scripts, but breakLongWords operates on
+		// a single word from the shaper's segmentation, so the chunk
+		// shares the parent word's script.
+		if w.GIDs != nil && w.Embedded != nil {
+			if sc := indicScriptOfWord(chunkSrc); sc != ScriptCommon {
+				if g, ok := ShapeIndicWithEmbedded(chunkSrc, w.Embedded, sc); ok {
+					return chunkSrc, g, w.Embedded.MeasureGIDs(g, w.FontSize), true
+				}
+			}
+		}
+		// Arabic / general rune fallback. ShapeArabic is a no-op for
+		// non-Arabic input so this also handles a defensive fallback
+		// path where the Indic shaper failed.
+		shapedText := ShapeArabic(chunkSrc)
+		if w.Embedded != nil {
+			return shapedText, nil, w.Embedded.MeasureString(shapedText, w.FontSize), true
+		}
+		if w.Font != nil {
+			return shapedText, nil, w.Font.MeasureString(shapedText, w.FontSize), true
+		}
+		return "", nil, 0, false
+	}
 }
 
 // hyphenateWord attempts to split a word to fit within `available` points

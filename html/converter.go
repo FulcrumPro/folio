@@ -285,6 +285,16 @@ type DocMetadata struct {
 	Keywords    string // from <meta name="keywords">
 	Creator     string // from <meta name="generator">
 	Subject     string // from <meta name="subject">
+
+	// Language is the BCP-47 tag from <html lang="..."> when present
+	// (e.g. "zh-CN", "ja", "en-US"). It is currently consumed by the
+	// @font-face loader to select the appropriate face from pan-CJK
+	// TTCs via font.ParseFontForLanguage — a document declaring
+	// lang="zh-CN" with a NotoSansCJK-Regular.ttc loads the SC face
+	// instead of the JP face-0 default. Per-element lang attributes
+	// (<p lang="ja">) are NOT yet honoured; the property is currently
+	// document-level only (issue #280, deferred Phase 2).
+	Language string
 }
 
 // MarginBoxContent holds the parsed content of a CSS margin box (e.g. @top-center).
@@ -388,6 +398,12 @@ func ConvertFull(htmlStr string, opts *Options) (*ConvertResult, error) {
 		}
 	}
 
+	// Extract <html lang> before loading @font-face URLs so the
+	// document-level language drives TTC face selection. Storing on
+	// the metadata struct also exposes it to callers via
+	// ConvertResult below.
+	c.metadata.Language = findHTMLLang(doc)
+
 	// Load @font-face fonts.
 	c.loadFontFaces(ss.fontFaces)
 
@@ -443,6 +459,10 @@ func Convert(htmlStr string, opts *Options) ([]layout.Element, error) {
 			c.opts.PageHeight = pc.Height
 		}
 	}
+
+	// Match ConvertFull: extract <html lang> before @font-face load
+	// so the document-level language drives TTC face selection.
+	c.metadata.Language = findHTMLLang(doc)
 
 	// Load @font-face fonts.
 	c.loadFontFaces(ss.fontFaces)
@@ -570,6 +590,15 @@ type pendingOverlay struct {
 // through Options.Logger at warn level and skipped — they never abort the
 // conversion.
 func (c *converter) loadFontFaces(faces []fontFaceRule) {
+	// Document-level lang drives TTC face selection. Empty lang is
+	// the no-op default — font.ParseFontForLanguage with "" picks
+	// face 0, matching the legacy font.ParseFont behaviour for
+	// back-compat. Per-element lang overrides (<p lang="ja">) are
+	// not yet honoured (#280 Phase 2): a single face is loaded per
+	// @font-face rule at converter setup time, so an element-level
+	// override would need either eager multi-face loading or a
+	// shape-time face selector — both deferred.
+	lang := c.metadata.Language
 	for _, ff := range faces {
 		src := ff.src
 
@@ -582,7 +611,7 @@ func (c *converter) loadFontFaces(faces []fontFaceRule) {
 		} else {
 			data, err = c.resolveLocalAsset(ff.origin, src, 50<<20)
 			if err == nil {
-				face, err = font.ParseFont(data)
+				face, err = font.ParseFontForLanguage(data, lang)
 			}
 		}
 
@@ -690,8 +719,16 @@ func (c *converter) getFallbackFont() *font.EmbeddedFont {
 	}
 	c.fallbackFontLoaded = true
 
+	// Document lang reaches this lazy load because getFallbackFont
+	// is only invoked from chooseFont during walkChildren, which
+	// runs after findHTMLLang in ConvertFull/Convert. The same TTC
+	// face-selection rules that govern @font-face apply: a doc with
+	// lang="zh-CN" pulling NotoSansCJK-Regular.ttc as the system
+	// fallback picks the SC face instead of JP face-0.
+	lang := c.metadata.Language
+
 	if c.opts.FallbackFontPath != "" {
-		if face, err := c.loadFallbackFont(c.opts.FallbackFontPath); err == nil {
+		if face, err := c.loadFallbackFont(c.opts.FallbackFontPath, lang); err == nil {
 			c.fallbackFont = font.NewEmbeddedFont(face)
 			return c.fallbackFont
 		} else {
@@ -733,7 +770,7 @@ func (c *converter) getFallbackFont() *font.EmbeddedFont {
 		`C:\Windows\Fonts\segoeui.ttf`,
 	}
 	for _, path := range candidates {
-		if face, err := font.LoadFont(path); err == nil {
+		if face, err := font.LoadFontForLanguage(path, lang); err == nil {
 			c.fallbackFont = font.NewEmbeddedFont(face)
 			return c.fallbackFont
 		}
@@ -759,19 +796,19 @@ func (c *converter) getFallbackFont() *font.EmbeddedFont {
 //     a typo in the option does not silently produce no-fallback text.
 //     The retry is logged at debug level so the BaseFS attempt remains
 //     observable when investigating which path the loader took.
-func (c *converter) loadFallbackFont(p string) (font.Face, error) {
+func (c *converter) loadFallbackFont(p, lang string) (font.Face, error) {
 	if filepath.IsAbs(p) {
-		return font.LoadFont(p)
+		return font.LoadFontForLanguage(p, lang)
 	}
 	if c.opts.BaseFS != nil {
 		data, baseErr := c.resolveLocalAsset("", p, 50<<20)
 		if baseErr == nil {
-			return font.ParseFont(data)
+			return font.ParseFontForLanguage(data, lang)
 		}
 		c.logger.Debug("folio/html: FallbackFontPath not in BaseFS, trying OS",
 			"path", p, "error", baseErr)
 	}
-	return font.LoadFont(p)
+	return font.LoadFontForLanguage(p, lang)
 }
 
 // resolveFontForText returns the best font for the given text. If the text

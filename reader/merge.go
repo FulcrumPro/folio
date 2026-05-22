@@ -35,7 +35,7 @@ func MergeFiles(paths ...string) (*Modifier, error) {
 	for _, path := range paths {
 		r, err := Load(path)
 		if err != nil {
-			return nil, fmt.Errorf("merge: %w", err)
+			return nil, fmt.Errorf("reader: merge: %w", err)
 		}
 		readers = append(readers, r)
 	}
@@ -85,18 +85,18 @@ func (m *Modifier) appendReader(r *PdfReader) error {
 	for i := range r.PageCount() {
 		page, err := r.Page(i)
 		if err != nil {
-			return fmt.Errorf("merge page %d: %w", i, err)
+			return fmt.Errorf("reader: merge page %d: %w", i, err)
 		}
 
 		// Deep-copy the page dictionary.
 		copied, err := copier.CopyObject(page.pageDict)
 		if err != nil {
-			return fmt.Errorf("merge page %d: %w", i, err)
+			return fmt.Errorf("reader: merge page %d: %w", i, err)
 		}
 
 		copiedDict, ok := copied.(*core.PdfDictionary)
 		if !ok {
-			return fmt.Errorf("merge page %d: copied object is not a dictionary", i)
+			return fmt.Errorf("reader: merge page %d: copied object is not a dictionary", i)
 		}
 
 		// Remove /Parent from source, set our own.
@@ -193,7 +193,7 @@ func (m *Modifier) PageCount() int {
 // RemovePage removes the page at the given 0-based index.
 func (m *Modifier) RemovePage(index int) error {
 	if index < 0 || index >= m.pageCount {
-		return fmt.Errorf("page index %d out of range [0, %d)", index, m.pageCount)
+		return fmt.Errorf("reader: page index %d out of range [0, %d)", index, m.pageCount)
 	}
 	m.kids.RemoveAt(index)
 	m.pageDicts = append(m.pageDicts[:index], m.pageDicts[index+1:]...)
@@ -205,13 +205,13 @@ func (m *Modifier) RemovePage(index int) error {
 // Degrees must be a multiple of 90 (0, 90, 180, 270).
 func (m *Modifier) RotatePage(index int, degrees int) error {
 	if index < 0 || index >= m.pageCount {
-		return fmt.Errorf("page index %d out of range [0, %d)", index, m.pageCount)
+		return fmt.Errorf("reader: page index %d out of range [0, %d)", index, m.pageCount)
 	}
 	if degrees%90 != 0 {
-		return fmt.Errorf("rotation must be a multiple of 90, got %d", degrees)
+		return fmt.Errorf("reader: rotation must be a multiple of 90, got %d", degrees)
 	}
 	if m.pageDicts[index] == nil {
-		return fmt.Errorf("page %d has no accessible dictionary", index)
+		return fmt.Errorf("reader: page %d has no accessible dictionary", index)
 	}
 	m.pageDicts[index].Set("Rotate", core.NewPdfInteger(degrees))
 	return nil
@@ -221,15 +221,15 @@ func (m *Modifier) RotatePage(index int, degrees int) error {
 // order must be a permutation of [0, pageCount).
 func (m *Modifier) ReorderPages(order []int) error {
 	if len(order) != m.pageCount {
-		return fmt.Errorf("order length %d does not match page count %d", len(order), m.pageCount)
+		return fmt.Errorf("reader: order length %d does not match page count %d", len(order), m.pageCount)
 	}
 	seen := make(map[int]bool, m.pageCount)
 	for _, idx := range order {
 		if idx < 0 || idx >= m.pageCount {
-			return fmt.Errorf("invalid page index %d in order", idx)
+			return fmt.Errorf("reader: invalid page index %d in order", idx)
 		}
 		if seen[idx] {
-			return fmt.Errorf("duplicate page index %d in order", idx)
+			return fmt.Errorf("reader: duplicate page index %d in order", idx)
 		}
 		seen[idx] = true
 	}
@@ -247,10 +247,10 @@ func (m *Modifier) ReorderPages(order []int) error {
 // CropPage sets the CropBox on the page at the given index.
 func (m *Modifier) CropPage(index int, rect [4]float64) error {
 	if index < 0 || index >= m.pageCount {
-		return fmt.Errorf("page index %d out of range [0, %d)", index, m.pageCount)
+		return fmt.Errorf("reader: page index %d out of range [0, %d)", index, m.pageCount)
 	}
 	if m.pageDicts[index] == nil {
-		return fmt.Errorf("page %d has no accessible dictionary", index)
+		return fmt.Errorf("reader: page %d has no accessible dictionary", index)
 	}
 	m.pageDicts[index].Set("CropBox", core.NewPdfArray(
 		core.NewPdfReal(rect[0]), core.NewPdfReal(rect[1]),

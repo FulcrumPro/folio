@@ -381,13 +381,13 @@ func defaultFuncs() htmltpl.FuncMap {
 		// as a template execution failure.
 		"dict": func(pairs ...any) (map[string]any, error) {
 			if len(pairs)%2 != 0 {
-				return nil, fmt.Errorf("dict: odd number of arguments (%d)", len(pairs))
+				return nil, fmt.Errorf("tmpl: dict: odd number of arguments (%d)", len(pairs))
 			}
 			m := make(map[string]any, len(pairs)/2)
 			for i := 0; i+1 < len(pairs); i += 2 {
 				k, ok := pairs[i].(string)
 				if !ok {
-					return nil, fmt.Errorf("dict: key at position %d is %T, want string", i, pairs[i])
+					return nil, fmt.Errorf("tmpl: dict: key at position %d is %T, want string", i, pairs[i])
 				}
 				m[k] = pairs[i+1]
 			}

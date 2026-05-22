@@ -62,7 +62,7 @@ type ObjStmPlacement struct {
 // builder-owned keys.
 func BuildObjStm(entries []ObjStmEntry) (*PdfStream, error) {
 	if len(entries) == 0 {
-		return nil, fmt.Errorf("objstm: no entries")
+		return nil, fmt.Errorf("core: objstm: no entries")
 	}
 
 	seen := make(map[int]struct{}, len(entries))
@@ -71,18 +71,18 @@ func BuildObjStm(entries []ObjStmEntry) (*PdfStream, error) {
 
 	for i, e := range entries {
 		if e.Object == nil {
-			return nil, fmt.Errorf("objstm: entry %d: nil object", i)
+			return nil, fmt.Errorf("core: objstm: entry %d: nil object", i)
 		}
 		if e.ObjectNumber <= 0 {
-			return nil, fmt.Errorf("objstm: entry %d: object number must be positive, got %d", i, e.ObjectNumber)
+			return nil, fmt.Errorf("core: objstm: entry %d: object number must be positive, got %d", i, e.ObjectNumber)
 		}
 		if _, dup := seen[e.ObjectNumber]; dup {
-			return nil, fmt.Errorf("objstm: duplicate object number %d", e.ObjectNumber)
+			return nil, fmt.Errorf("core: objstm: duplicate object number %d", e.ObjectNumber)
 		}
 		seen[e.ObjectNumber] = struct{}{}
 
 		if e.Object.Type() == ObjectTypeStream {
-			return nil, fmt.Errorf("objstm: entry %d (object %d): stream objects cannot be compressed", i, e.ObjectNumber)
+			return nil, fmt.Errorf("core: objstm: entry %d (object %d): stream objects cannot be compressed", i, e.ObjectNumber)
 		}
 
 		if i > 0 {
@@ -94,7 +94,7 @@ func BuildObjStm(entries []ObjStmEntry) (*PdfStream, error) {
 		}
 		offsets[i] = bodies.Len()
 		if _, err := e.Object.WriteTo(&bodies); err != nil {
-			return nil, fmt.Errorf("objstm: entry %d (object %d): serialize body: %w", i, e.ObjectNumber, err)
+			return nil, fmt.Errorf("core: objstm: entry %d (object %d): serialize body: %w", i, e.ObjectNumber, err)
 		}
 	}
 

@@ -330,7 +330,7 @@ func locatePlaceholders(pdf []byte, sigDictObjNum int) (signaturePlaceholder, er
 	objHeader := fmt.Sprintf("%d 0 obj", sigDictObjNum)
 	objStart := bytes.Index(pdf, []byte(objHeader))
 	if objStart < 0 {
-		return ph, fmt.Errorf("could not find signature object %d", sigDictObjNum)
+		return ph, fmt.Errorf("sign: could not find signature object %d", sigDictObjNum)
 	}
 
 	searchArea := pdf[objStart:]
@@ -338,14 +338,14 @@ func locatePlaceholders(pdf []byte, sigDictObjNum int) (signaturePlaceholder, er
 	brMarker := []byte("/ByteRange ")
 	brIdx := bytes.Index(searchArea, brMarker)
 	if brIdx < 0 {
-		return ph, errors.New("could not find /ByteRange placeholder")
+		return ph, errors.New("sign: could not find /ByteRange placeholder")
 	}
 	ph.ByteRangeOffset = objStart + brIdx + len(brMarker)
 
 	contentsMarker := []byte("/Contents <")
 	cIdx := bytes.Index(searchArea, contentsMarker)
 	if cIdx < 0 {
-		return ph, errors.New("could not find /Contents placeholder")
+		return ph, errors.New("sign: could not find /Contents placeholder")
 	}
 	ph.ContentsOffset = objStart + cIdx + len("/Contents ")
 	ph.ContentsLen = len(contentsPlaceholder)

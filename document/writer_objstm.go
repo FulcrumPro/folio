@@ -66,7 +66,7 @@ func (w *Writer) writeXRefStreamWithObjStms(cw *countingWriter, opts WriteOption
 	// the encryption walk; this is defense in depth in case a future
 	// caller bypasses WriteToWithOptions.
 	if w.encryptor != nil {
-		return fmt.Errorf("writer: object streams are not supported with encryption in phase 1")
+		return fmt.Errorf("document: writer: object streams are not supported with encryption in phase 1")
 	}
 
 	capacity := opts.ObjectStreamCapacity
@@ -102,7 +102,7 @@ func (w *Writer) writeXRefStreamWithObjStms(cw *countingWriter, opts WriteOption
 		}
 		stream, err := core.BuildObjStm(entries)
 		if err != nil {
-			return fmt.Errorf("build object stream: %w", err)
+			return fmt.Errorf("document: build object stream: %w", err)
 		}
 
 		thisObjStmNum := nextObjNum
@@ -193,7 +193,7 @@ func (w *Writer) writeXRefStreamWithObjStms(cw *countingWriter, opts WriteOption
 		}
 		off, ok := inlineOffsets[i]
 		if !ok {
-			return fmt.Errorf("writer: object %d is neither inline nor compressed", i)
+			return fmt.Errorf("document: writer: object %d is neither inline nor compressed", i)
 		}
 		entries[i] = core.XRefStreamEntry{
 			Type:   core.XRefEntryInUse,
@@ -215,7 +215,7 @@ func (w *Writer) writeXRefStreamWithObjStms(cw *countingWriter, opts WriteOption
 	subsections := []core.XRefStreamSubsection{{First: 0, Entries: entries}}
 	stream, err := core.BuildXRefStream(subsections, size, extras)
 	if err != nil {
-		return fmt.Errorf("build xref stream: %w", err)
+		return fmt.Errorf("document: build xref stream: %w", err)
 	}
 
 	if _, err := fmt.Fprintf(cw, "%d 0 obj\n", xrefStreamObjNum); err != nil {

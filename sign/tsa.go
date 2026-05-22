@@ -100,7 +100,7 @@ func buildTimestampReq(digest []byte, hashFunc crypto.Hash) ([]byte, error) {
 	case crypto.SHA512:
 		hashOID = oidSHA512
 	default:
-		return nil, fmt.Errorf("unsupported hash function: %v", hashFunc)
+		return nil, fmt.Errorf("sign: unsupported hash function: %v", hashFunc)
 	}
 
 	req := timeStampReq{

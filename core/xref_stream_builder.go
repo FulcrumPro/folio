@@ -35,20 +35,20 @@ type XRefStreamSubsection struct {
 // is deferred until the rest of the optimizer is in place.
 func BuildXRefStream(subsections []XRefStreamSubsection, size int, extras *PdfDictionary) (*PdfStream, error) {
 	if len(subsections) == 0 {
-		return nil, fmt.Errorf("xref stream: at least one subsection required")
+		return nil, fmt.Errorf("core: xref stream: at least one subsection required")
 	}
 	if size <= 0 {
-		return nil, fmt.Errorf("xref stream: size must be positive, got %d", size)
+		return nil, fmt.Errorf("core: xref stream: size must be positive, got %d", size)
 	}
 
 	var maxField2, maxField3 uint64
 	totalEntries := 0
 	for _, sub := range subsections {
 		if sub.First < 0 {
-			return nil, fmt.Errorf("xref stream: subsection First must be non-negative, got %d", sub.First)
+			return nil, fmt.Errorf("core: xref stream: subsection First must be non-negative, got %d", sub.First)
 		}
 		if sub.First+len(sub.Entries) > size {
-			return nil, fmt.Errorf("xref stream: subsection [%d,%d) extends past size %d",
+			return nil, fmt.Errorf("core: xref stream: subsection [%d,%d) extends past size %d",
 				sub.First, sub.First+len(sub.Entries), size)
 		}
 		totalEntries += len(sub.Entries)

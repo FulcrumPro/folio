@@ -71,7 +71,7 @@ func (o *os2) useTypoMetrics() bool {
 // Version 0 is 78 bytes; versions 1 and up extend the trailing fields.
 func parseOS2(data []byte) (*os2, error) {
 	if uint64(len(data)) < 78 {
-		return nil, fmt.Errorf("OS/2: table truncated (%d < 78 bytes): %w", len(data), ErrTruncated)
+		return nil, fmt.Errorf("font: OS/2: table truncated (%d < 78 bytes): %w", len(data), ErrTruncated)
 	}
 	o := &os2{
 		version:        binary.BigEndian.Uint16(data[0:2]),

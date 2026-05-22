@@ -55,16 +55,16 @@ type nameRecords struct {
 func parseName(data []byte) (nameRecords, error) {
 	dataLen := uint64(len(data))
 	if dataLen < 6 {
-		return nameRecords{}, fmt.Errorf("name: header truncated (%d < 6): %w", dataLen, ErrTruncated)
+		return nameRecords{}, fmt.Errorf("font: name: header truncated (%d < 6): %w", dataLen, ErrTruncated)
 	}
 	count := uint64(binary.BigEndian.Uint16(data[2:4]))
 	stringOff := uint64(binary.BigEndian.Uint16(data[4:6]))
 	recordsEnd := 6 + count*12
 	if recordsEnd > dataLen {
-		return nameRecords{}, fmt.Errorf("name: record array truncated (need %d, have %d): %w", recordsEnd, dataLen, ErrTruncated)
+		return nameRecords{}, fmt.Errorf("font: name: record array truncated (need %d, have %d): %w", recordsEnd, dataLen, ErrTruncated)
 	}
 	if stringOff > dataLen {
-		return nameRecords{}, fmt.Errorf("name: stringOffset %d beyond table length %d: %w", stringOff, dataLen, ErrCorruptTable)
+		return nameRecords{}, fmt.Errorf("font: name: stringOffset %d beyond table length %d: %w", stringOff, dataLen, ErrCorruptTable)
 	}
 
 	type candidate struct {

@@ -44,26 +44,26 @@ type woffTableEntry struct {
 // decodeWOFF decodes a WOFF1 font file into raw TTF/OTF bytes.
 func decodeWOFF(data []byte) ([]byte, error) {
 	if len(data) < woffHeaderSize {
-		return nil, fmt.Errorf("woff: data too short for header: %w", ErrTruncated)
+		return nil, fmt.Errorf("font: woff: data too short for header: %w", ErrTruncated)
 	}
 
 	// Parse header.
 	var hdr woffHeader
 	hdr.signature = binary.BigEndian.Uint32(data[0:4])
 	if hdr.signature != woffMagic {
-		return nil, fmt.Errorf("woff: invalid signature 0x%08X: %w", hdr.signature, ErrUnknownFormat)
+		return nil, fmt.Errorf("font: woff: invalid signature 0x%08X: %w", hdr.signature, ErrUnknownFormat)
 	}
 	hdr.flavor = binary.BigEndian.Uint32(data[4:8])
 	hdr.numTables = binary.BigEndian.Uint16(data[12:14])
 
 	if hdr.numTables == 0 {
-		return nil, fmt.Errorf("woff: no tables: %w", ErrCorruptTable)
+		return nil, fmt.Errorf("font: woff: no tables: %w", ErrCorruptTable)
 	}
 
 	// Parse table directory.
 	dirEnd := woffHeaderSize + int(hdr.numTables)*woffTableDirEntrySize
 	if len(data) < dirEnd {
-		return nil, fmt.Errorf("woff: data too short for table directory: %w", ErrTruncated)
+		return nil, fmt.Errorf("font: woff: data too short for table directory: %w", ErrTruncated)
 	}
 
 	entries := make([]woffTableEntry, hdr.numTables)
@@ -82,7 +82,7 @@ func decodeWOFF(data []byte) ([]byte, error) {
 	tables := make([][]byte, len(entries))
 	for i, e := range entries {
 		if int(e.offset)+int(e.compLength) > len(data) {
-			return nil, fmt.Errorf("woff: table %d extends beyond file: %w", i, ErrTruncated)
+			return nil, fmt.Errorf("font: woff: table %d extends beyond file: %w", i, ErrTruncated)
 		}
 		tableData := data[e.offset : e.offset+e.compLength]
 
@@ -90,15 +90,15 @@ func decodeWOFF(data []byte) ([]byte, error) {
 			// zlib-compressed table.
 			r, err := zlib.NewReader(bytes.NewReader(tableData))
 			if err != nil {
-				return nil, fmt.Errorf("woff: zlib init for table %d: %v: %w", i, err, ErrCorruptTable)
+				return nil, fmt.Errorf("font: woff: zlib init for table %d: %v: %w", i, err, ErrCorruptTable)
 			}
 			decompressed, err := io.ReadAll(r)
 			_ = r.Close()
 			if err != nil {
-				return nil, fmt.Errorf("woff: zlib decompress table %d: %v: %w", i, err, ErrCorruptTable)
+				return nil, fmt.Errorf("font: woff: zlib decompress table %d: %v: %w", i, err, ErrCorruptTable)
 			}
 			if uint32(len(decompressed)) != e.origLength {
-				return nil, fmt.Errorf("woff: table %d decompressed size mismatch: got %d, want %d: %w", i, len(decompressed), e.origLength, ErrCorruptTable)
+				return nil, fmt.Errorf("font: woff: table %d decompressed size mismatch: got %d, want %d: %w", i, len(decompressed), e.origLength, ErrCorruptTable)
 			}
 			tables[i] = decompressed
 		} else {

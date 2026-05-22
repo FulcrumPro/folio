@@ -73,7 +73,7 @@ func (w *Writer) SetFileID(id []byte) {
 func (w *Writer) GenerateFileID() error {
 	id := make([]byte, 16)
 	if _, err := rand.Read(id); err != nil {
-		return fmt.Errorf("writer: generate file ID: %w", err)
+		return fmt.Errorf("document: writer: generate file ID: %w", err)
 	}
 	w.fileID = id
 	return nil

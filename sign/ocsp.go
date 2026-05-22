@@ -150,10 +150,10 @@ func validateOCSPResponse(data []byte) error {
 	var resp ocspResponse
 	_, err := asn1.Unmarshal(data, &resp)
 	if err != nil {
-		return fmt.Errorf("unmarshal: %w", err)
+		return fmt.Errorf("sign: unmarshal: %w", err)
 	}
 	if resp.ResponseStatus != 0 {
-		return fmt.Errorf("OCSP response status %d (not successful)", resp.ResponseStatus)
+		return fmt.Errorf("sign: OCSP response status %d (not successful)", resp.ResponseStatus)
 	}
 	return nil
 }

@@ -106,7 +106,7 @@ func (idx *cffIndex) Object(i int) []byte {
 // represented as an empty INDEX in CID-keyed fonts.
 func parseCFFIndex(raw []byte, pos int) (*cffIndex, error) {
 	if pos < 0 || pos+2 > len(raw) {
-		return nil, fmt.Errorf("cff: INDEX header truncated at offset %d: %w", pos, ErrTruncated)
+		return nil, fmt.Errorf("font: cff: INDEX header truncated at offset %d: %w", pos, ErrTruncated)
 	}
 	count := int(binary.BigEndian.Uint16(raw[pos : pos+2]))
 	if count == 0 {
@@ -117,34 +117,34 @@ func parseCFFIndex(raw []byte, pos int) (*cffIndex, error) {
 		}, nil
 	}
 	if pos+3 > len(raw) {
-		return nil, fmt.Errorf("cff: INDEX offSize truncated at offset %d: %w", pos, ErrTruncated)
+		return nil, fmt.Errorf("font: cff: INDEX offSize truncated at offset %d: %w", pos, ErrTruncated)
 	}
 	offSize := int(raw[pos+2])
 	if offSize < 1 || offSize > 4 {
-		return nil, fmt.Errorf("cff: INDEX offSize %d out of range: %w", offSize, ErrCorruptTable)
+		return nil, fmt.Errorf("font: cff: INDEX offSize %d out of range: %w", offSize, ErrCorruptTable)
 	}
 	offBase := pos + 3
 	offBytes := (count + 1) * offSize
 	if offBase+offBytes > len(raw) {
-		return nil, fmt.Errorf("cff: INDEX offset table truncated: %w", ErrTruncated)
+		return nil, fmt.Errorf("font: cff: INDEX offset table truncated: %w", ErrTruncated)
 	}
 	offsets := make([]int, count+1)
 	for i := range count + 1 {
 		offsets[i] = readOffset(raw[offBase+i*offSize:], offSize)
 	}
 	if offsets[0] != 1 {
-		return nil, fmt.Errorf("cff: INDEX first offset %d != 1: %w", offsets[0], ErrCorruptTable)
+		return nil, fmt.Errorf("font: cff: INDEX first offset %d != 1: %w", offsets[0], ErrCorruptTable)
 	}
 	for i := range count {
 		if offsets[i+1] < offsets[i] {
-			return nil, fmt.Errorf("cff: INDEX offsets non-monotonic at %d: %w", i, ErrCorruptTable)
+			return nil, fmt.Errorf("font: cff: INDEX offsets non-monotonic at %d: %w", i, ErrCorruptTable)
 		}
 	}
 	objectsBase := offBase + offBytes
 	payloadSize := offsets[count] - 1
 	end := objectsBase + payloadSize
 	if end > len(raw) || end < objectsBase {
-		return nil, fmt.Errorf("cff: INDEX payload truncated: %w", ErrTruncated)
+		return nil, fmt.Errorf("font: cff: INDEX payload truncated: %w", ErrTruncated)
 	}
 	return &cffIndex{
 		rawStart:    pos,
@@ -277,7 +277,7 @@ func parseCFFDict(b []byte) (cffDict, error) {
 			var op, opSize int
 			if bv == cffOpEscape {
 				if pos+1 >= len(b) {
-					return nil, fmt.Errorf("cff: DICT 2-byte operator truncated: %w", ErrTruncated)
+					return nil, fmt.Errorf("font: cff: DICT 2-byte operator truncated: %w", ErrTruncated)
 				}
 				op = cffOpEscape<<8 | int(b[pos+1])
 				opSize = 2
@@ -300,7 +300,7 @@ func parseCFFDict(b []byte) (cffDict, error) {
 			operandStart = pos
 		case bv == 28:
 			if pos+3 > len(b) {
-				return nil, fmt.Errorf("cff: DICT shortint truncated: %w", ErrTruncated)
+				return nil, fmt.Errorf("font: cff: DICT shortint truncated: %w", ErrTruncated)
 			}
 			v := int64(int16(binary.BigEndian.Uint16(b[pos+1 : pos+3])))
 			operands = append(operands, v)
@@ -308,7 +308,7 @@ func parseCFFDict(b []byte) (cffDict, error) {
 			spans = append(spans, [2]int{opStart, pos})
 		case bv == 29:
 			if pos+5 > len(b) {
-				return nil, fmt.Errorf("cff: DICT longint truncated: %w", ErrTruncated)
+				return nil, fmt.Errorf("font: cff: DICT longint truncated: %w", ErrTruncated)
 			}
 			v := int64(int32(binary.BigEndian.Uint32(b[pos+1 : pos+5])))
 			operands = append(operands, v)
@@ -327,7 +327,7 @@ func parseCFFDict(b []byte) (cffDict, error) {
 				}
 			}
 			if !ended {
-				return nil, fmt.Errorf("cff: DICT BCD real unterminated: %w", ErrTruncated)
+				return nil, fmt.Errorf("font: cff: DICT BCD real unterminated: %w", ErrTruncated)
 			}
 			// Reserve a zero-valued slot in intOperands; the original
 			// bytes live in operandSpans for Phase 3 to copy verbatim.
@@ -340,7 +340,7 @@ func parseCFFDict(b []byte) (cffDict, error) {
 			spans = append(spans, [2]int{opStart, pos})
 		case bv >= 247 && bv <= 250:
 			if pos+1 >= len(b) {
-				return nil, fmt.Errorf("cff: DICT 2-byte int truncated: %w", ErrTruncated)
+				return nil, fmt.Errorf("font: cff: DICT 2-byte int truncated: %w", ErrTruncated)
 			}
 			v := int64(bv-247)*256 + int64(b[pos+1]) + 108
 			operands = append(operands, v)
@@ -348,7 +348,7 @@ func parseCFFDict(b []byte) (cffDict, error) {
 			spans = append(spans, [2]int{opStart, pos})
 		case bv >= 251 && bv <= 254:
 			if pos+1 >= len(b) {
-				return nil, fmt.Errorf("cff: DICT 2-byte int truncated: %w", ErrTruncated)
+				return nil, fmt.Errorf("font: cff: DICT 2-byte int truncated: %w", ErrTruncated)
 			}
 			v := -int64(bv-251)*256 - int64(b[pos+1]) - 108
 			operands = append(operands, v)
@@ -356,7 +356,7 @@ func parseCFFDict(b []byte) (cffDict, error) {
 			spans = append(spans, [2]int{opStart, pos})
 		default:
 			// 22..27, 31, 255 are reserved/invalid in DICT streams.
-			return nil, fmt.Errorf("cff: DICT reserved byte 0x%02X at offset %d: %w", bv, pos, ErrCorruptTable)
+			return nil, fmt.Errorf("font: cff: DICT reserved byte 0x%02X at offset %d: %w", bv, pos, ErrCorruptTable)
 		}
 	}
 	// Operands not followed by an operator are spec-illegal but we
@@ -387,35 +387,35 @@ func dictInt(d cffDict, op int) (int64, bool) {
 // returns an error wrapping one of the package sentinels.
 func parseCFF(raw []byte) (*cffFont, error) {
 	if len(raw) < 4 {
-		return nil, fmt.Errorf("cff: header truncated: %w", ErrTruncated)
+		return nil, fmt.Errorf("font: cff: header truncated: %w", ErrTruncated)
 	}
 	if raw[0] != 1 {
-		return nil, fmt.Errorf("cff: unsupported major %d: %w", raw[0], ErrUnknownFormat)
+		return nil, fmt.Errorf("font: cff: unsupported major %d: %w", raw[0], ErrUnknownFormat)
 	}
 	hdrSize := int(raw[2])
 	if hdrSize < 4 || hdrSize > len(raw) {
-		return nil, fmt.Errorf("cff: bad hdrSize %d: %w", hdrSize, ErrCorruptTable)
+		return nil, fmt.Errorf("font: cff: bad hdrSize %d: %w", hdrSize, ErrCorruptTable)
 	}
 
 	pos := hdrSize
 	nameIdx, err := parseCFFIndex(raw, pos)
 	if err != nil {
-		return nil, fmt.Errorf("cff: name index: %w", err)
+		return nil, fmt.Errorf("font: cff: name index: %w", err)
 	}
 	pos = nameIdx.rawEnd
 
 	topDictIdx, err := parseCFFIndex(raw, pos)
 	if err != nil {
-		return nil, fmt.Errorf("cff: top dict index: %w", err)
+		return nil, fmt.Errorf("font: cff: top dict index: %w", err)
 	}
 	if topDictIdx.count != 1 {
-		return nil, fmt.Errorf("cff: top dict count %d != 1 (font collection unsupported): %w", topDictIdx.count, ErrCorruptTable)
+		return nil, fmt.Errorf("font: cff: top dict count %d != 1 (font collection unsupported): %w", topDictIdx.count, ErrCorruptTable)
 	}
 	pos = topDictIdx.rawEnd
 
 	topDict, err := parseCFFDict(topDictIdx.Object(0))
 	if err != nil {
-		return nil, fmt.Errorf("cff: top dict: %w", err)
+		return nil, fmt.Errorf("font: cff: top dict: %w", err)
 	}
 
 	// Require ROS so callers can rely on CID-keyed semantics. Charset
@@ -423,31 +423,31 @@ func parseCFF(raw []byte) (*cffFont, error) {
 	// keyed CFFs (TN #5176 §18); enforce them explicitly.
 	rosEntry, ok := topDict.get(cffOp2ROS)
 	if !ok || len(rosEntry.intOperands) < 3 {
-		return nil, fmt.Errorf("cff: missing or malformed ROS operator: %w", ErrCorruptTable)
+		return nil, fmt.Errorf("font: cff: missing or malformed ROS operator: %w", ErrCorruptTable)
 	}
 
 	stringIdx, err := parseCFFIndex(raw, pos)
 	if err != nil {
-		return nil, fmt.Errorf("cff: string index: %w", err)
+		return nil, fmt.Errorf("font: cff: string index: %w", err)
 	}
 	pos = stringIdx.rawEnd
 
 	gsubrIdx, err := parseCFFIndex(raw, pos)
 	if err != nil {
-		return nil, fmt.Errorf("cff: gsubr index: %w", err)
+		return nil, fmt.Errorf("font: cff: gsubr index: %w", err)
 	}
 
 	charStringsOff, ok := dictInt(topDict, cffOpCharStrings)
 	if !ok {
-		return nil, fmt.Errorf("cff: missing CharStrings operator: %w", ErrCorruptTable)
+		return nil, fmt.Errorf("font: cff: missing CharStrings operator: %w", ErrCorruptTable)
 	}
 	fdArrayOff, ok := dictInt(topDict, cffOp2FDArray)
 	if !ok {
-		return nil, fmt.Errorf("cff: missing FDArray operator: %w", ErrCorruptTable)
+		return nil, fmt.Errorf("font: cff: missing FDArray operator: %w", ErrCorruptTable)
 	}
 	fdSelectOff, ok := dictInt(topDict, cffOp2FDSelect)
 	if !ok {
-		return nil, fmt.Errorf("cff: missing FDSelect operator: %w", ErrCorruptTable)
+		return nil, fmt.Errorf("font: cff: missing FDSelect operator: %w", ErrCorruptTable)
 	}
 	// CID-keyed CFFs must declare a custom charset explicitly
 	// (TN #5176 §18). The implicit-default values 0 (ISOAdobe), 1
@@ -457,10 +457,10 @@ func parseCFF(raw []byte) (*cffFont, error) {
 	// charset format byte, yielding nonsense. Reject early.
 	charsetOff, ok := dictInt(topDict, cffOpCharset)
 	if !ok {
-		return nil, fmt.Errorf("cff: CID-keyed font missing charset operator: %w", ErrCorruptTable)
+		return nil, fmt.Errorf("font: cff: CID-keyed font missing charset operator: %w", ErrCorruptTable)
 	}
 	if charsetOff < 3 {
-		return nil, fmt.Errorf("cff: CID-keyed font using predefined charset %d (reserved for non-CID CFF): %w", charsetOff, ErrCorruptTable)
+		return nil, fmt.Errorf("font: cff: CID-keyed font using predefined charset %d (reserved for non-CID CFF): %w", charsetOff, ErrCorruptTable)
 	}
 	cidCountVal, _ := dictInt(topDict, cffOp2CIDCount)
 	cidCount := int(cidCountVal)
@@ -471,35 +471,35 @@ func parseCFF(raw []byte) (*cffFont, error) {
 
 	charStringsIdx, err := parseCFFIndex(raw, int(charStringsOff))
 	if err != nil {
-		return nil, fmt.Errorf("cff: charstrings index: %w", err)
+		return nil, fmt.Errorf("font: cff: charstrings index: %w", err)
 	}
 	numGlyphs := charStringsIdx.count
 	if numGlyphs == 0 {
-		return nil, fmt.Errorf("cff: charstrings index empty: %w", ErrCorruptTable)
+		return nil, fmt.Errorf("font: cff: charstrings index empty: %w", ErrCorruptTable)
 	}
 
 	fdArrayIdx, err := parseCFFIndex(raw, int(fdArrayOff))
 	if err != nil {
-		return nil, fmt.Errorf("cff: fdarray index: %w", err)
+		return nil, fmt.Errorf("font: cff: fdarray index: %w", err)
 	}
 	if fdArrayIdx.count == 0 {
-		return nil, fmt.Errorf("cff: empty FDArray INDEX: %w", ErrCorruptTable)
+		return nil, fmt.Errorf("font: cff: empty FDArray INDEX: %w", ErrCorruptTable)
 	}
 
 	charsetSize, err := computeCharsetSize(raw, int(charsetOff), numGlyphs)
 	if err != nil {
-		return nil, fmt.Errorf("cff: charset: %w", err)
+		return nil, fmt.Errorf("font: cff: charset: %w", err)
 	}
 	fdSelectSize, err := computeFDSelectSize(raw, int(fdSelectOff), numGlyphs)
 	if err != nil {
-		return nil, fmt.Errorf("cff: fdselect: %w", err)
+		return nil, fmt.Errorf("font: cff: fdselect: %w", err)
 	}
 
 	fds := make([]*cffFD, fdArrayIdx.count)
 	for i := range fdArrayIdx.count {
 		fd, err := parseCFFFD(raw, fdArrayIdx, i)
 		if err != nil {
-			return nil, fmt.Errorf("cff: fd[%d]: %w", i, err)
+			return nil, fmt.Errorf("font: cff: fd[%d]: %w", i, err)
 		}
 		fds[i] = fd
 	}
@@ -534,35 +534,35 @@ func parseCFF(raw []byte) (*cffFont, error) {
 func parseCFFFD(raw []byte, fdArrayIdx *cffIndex, i int) (*cffFD, error) {
 	fontDictBytes := fdArrayIdx.Object(i)
 	if fontDictBytes == nil {
-		return nil, fmt.Errorf("cff: fd %d missing: %w", i, ErrCorruptTable)
+		return nil, fmt.Errorf("font: cff: fd %d missing: %w", i, ErrCorruptTable)
 	}
 	fontDict, err := parseCFFDict(fontDictBytes)
 	if err != nil {
-		return nil, fmt.Errorf("cff: fd %d font dict: %w", i, err)
+		return nil, fmt.Errorf("font: cff: fd %d font dict: %w", i, err)
 	}
 	privEntry, ok := fontDict.get(cffOpPrivate)
 	if !ok || len(privEntry.intOperands) != 2 {
-		return nil, fmt.Errorf("cff: fd %d Private operator missing or malformed: %w", i, ErrCorruptTable)
+		return nil, fmt.Errorf("font: cff: fd %d Private operator missing or malformed: %w", i, ErrCorruptTable)
 	}
 	privSize := int(privEntry.intOperands[0])
 	privOff := int(privEntry.intOperands[1])
 	if privSize < 0 || privOff < 0 || privOff+privSize > len(raw) {
-		return nil, fmt.Errorf("cff: fd %d Private range [%d:%d] out of raw bounds: %w", i, privOff, privOff+privSize, ErrCorruptTable)
+		return nil, fmt.Errorf("font: cff: fd %d Private range [%d:%d] out of raw bounds: %w", i, privOff, privOff+privSize, ErrCorruptTable)
 	}
 	privBytes := raw[privOff : privOff+privSize]
 	privDict, err := parseCFFDict(privBytes)
 	if err != nil {
-		return nil, fmt.Errorf("cff: fd %d private dict: %w", i, err)
+		return nil, fmt.Errorf("font: cff: fd %d private dict: %w", i, err)
 	}
 	var localSubrs *cffIndex
 	if subrsEntry, ok := privDict.get(cffOpSubrs); ok {
 		if len(subrsEntry.intOperands) != 1 {
-			return nil, fmt.Errorf("cff: fd %d Subrs operand count %d: %w", i, len(subrsEntry.intOperands), ErrCorruptTable)
+			return nil, fmt.Errorf("font: cff: fd %d Subrs operand count %d: %w", i, len(subrsEntry.intOperands), ErrCorruptTable)
 		}
 		subrsRel := int(subrsEntry.intOperands[0])
 		localSubrs, err = parseCFFIndex(raw, privOff+subrsRel)
 		if err != nil {
-			return nil, fmt.Errorf("cff: fd %d local subr index: %w", i, err)
+			return nil, fmt.Errorf("font: cff: fd %d local subr index: %w", i, err)
 		}
 	}
 	return &cffFD{
@@ -587,10 +587,10 @@ func parseCFFFD(raw []byte, fdArrayIdx *cffIndex, i int) (*cffFD, error) {
 // reaches numGlyphs-1 (charset omits GID 0 — .notdef is implicit).
 func computeCharsetSize(raw []byte, off, numGlyphs int) (int, error) {
 	if off < 0 || off >= len(raw) {
-		return 0, fmt.Errorf("cff: charset offset out of range: %w", ErrCorruptTable)
+		return 0, fmt.Errorf("font: cff: charset offset out of range: %w", ErrCorruptTable)
 	}
 	if numGlyphs < 1 {
-		return 0, fmt.Errorf("cff: numGlyphs %d invalid: %w", numGlyphs, ErrCorruptTable)
+		return 0, fmt.Errorf("font: cff: numGlyphs %d invalid: %w", numGlyphs, ErrCorruptTable)
 	}
 	format := raw[off]
 	remaining := numGlyphs - 1 // glyphs to cover, excluding GID 0
@@ -598,39 +598,39 @@ func computeCharsetSize(raw []byte, off, numGlyphs int) (int, error) {
 	case 0:
 		size := 1 + remaining*2
 		if off+size > len(raw) {
-			return 0, fmt.Errorf("cff: charset format 0 truncated: %w", ErrTruncated)
+			return 0, fmt.Errorf("font: cff: charset format 0 truncated: %w", ErrTruncated)
 		}
 		return size, nil
 	case 1:
 		pos := off + 1
 		for remaining > 0 {
 			if pos+3 > len(raw) {
-				return 0, fmt.Errorf("cff: charset format 1 truncated: %w", ErrTruncated)
+				return 0, fmt.Errorf("font: cff: charset format 1 truncated: %w", ErrTruncated)
 			}
 			nLeft := int(raw[pos+2])
 			remaining -= nLeft + 1
 			pos += 3
 		}
 		if remaining < 0 {
-			return 0, fmt.Errorf("cff: charset format 1 over-covers glyphs by %d: %w", -remaining, ErrCorruptTable)
+			return 0, fmt.Errorf("font: cff: charset format 1 over-covers glyphs by %d: %w", -remaining, ErrCorruptTable)
 		}
 		return pos - off, nil
 	case 2:
 		pos := off + 1
 		for remaining > 0 {
 			if pos+4 > len(raw) {
-				return 0, fmt.Errorf("cff: charset format 2 truncated: %w", ErrTruncated)
+				return 0, fmt.Errorf("font: cff: charset format 2 truncated: %w", ErrTruncated)
 			}
 			nLeft := int(binary.BigEndian.Uint16(raw[pos+2 : pos+4]))
 			remaining -= nLeft + 1
 			pos += 4
 		}
 		if remaining < 0 {
-			return 0, fmt.Errorf("cff: charset format 2 over-covers glyphs by %d: %w", -remaining, ErrCorruptTable)
+			return 0, fmt.Errorf("font: cff: charset format 2 over-covers glyphs by %d: %w", -remaining, ErrCorruptTable)
 		}
 		return pos - off, nil
 	default:
-		return 0, fmt.Errorf("cff: charset format %d unknown: %w", format, ErrCorruptTable)
+		return 0, fmt.Errorf("font: cff: charset format %d unknown: %w", format, ErrCorruptTable)
 	}
 }
 
@@ -641,24 +641,24 @@ func computeCharsetSize(raw []byte, off, numGlyphs int) (int, error) {
 //   - 3: fmt(1) + nRanges(uint16) + nRanges*(first uint16 + fd uint8) + sentinel uint16
 func computeFDSelectSize(raw []byte, off, numGlyphs int) (int, error) {
 	if off < 0 || off >= len(raw) {
-		return 0, fmt.Errorf("cff: fdselect offset out of range: %w", ErrCorruptTable)
+		return 0, fmt.Errorf("font: cff: fdselect offset out of range: %w", ErrCorruptTable)
 	}
 	format := raw[off]
 	switch format {
 	case 0:
 		size := 1 + numGlyphs
 		if off+size > len(raw) {
-			return 0, fmt.Errorf("cff: fdselect format 0 truncated: %w", ErrTruncated)
+			return 0, fmt.Errorf("font: cff: fdselect format 0 truncated: %w", ErrTruncated)
 		}
 		return size, nil
 	case 3:
 		if off+3 > len(raw) {
-			return 0, fmt.Errorf("cff: fdselect format 3 header truncated: %w", ErrTruncated)
+			return 0, fmt.Errorf("font: cff: fdselect format 3 header truncated: %w", ErrTruncated)
 		}
 		nRanges := int(binary.BigEndian.Uint16(raw[off+1 : off+3]))
 		size := 1 + 2 + nRanges*3 + 2
 		if off+size > len(raw) {
-			return 0, fmt.Errorf("cff: fdselect format 3 body truncated: %w", ErrTruncated)
+			return 0, fmt.Errorf("font: cff: fdselect format 3 body truncated: %w", ErrTruncated)
 		}
 		// Per TN #5176 §19, the trailing sentinel uint16 must equal
 		// numGlyphs — it terminates the implied range that begins at
@@ -668,10 +668,10 @@ func computeFDSelectSize(raw []byte, off, numGlyphs int) (int, error) {
 		// assignment, so reject up-front.
 		sentinel := int(binary.BigEndian.Uint16(raw[off+size-2 : off+size]))
 		if sentinel != numGlyphs {
-			return 0, fmt.Errorf("cff: fdselect format 3 sentinel %d != numGlyphs %d: %w", sentinel, numGlyphs, ErrCorruptTable)
+			return 0, fmt.Errorf("font: cff: fdselect format 3 sentinel %d != numGlyphs %d: %w", sentinel, numGlyphs, ErrCorruptTable)
 		}
 		return size, nil
 	default:
-		return 0, fmt.Errorf("cff: fdselect format %d unknown: %w", format, ErrCorruptTable)
+		return 0, fmt.Errorf("font: cff: fdselect format %d unknown: %w", format, ErrCorruptTable)
 	}
 }

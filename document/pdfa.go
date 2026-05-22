@@ -241,14 +241,14 @@ func (d *Document) validatePdfA(allPages []*Page) error {
 
 	// PDF/A forbids encryption.
 	if d.encryption != nil {
-		return fmt.Errorf("pdfa: encryption is not allowed in PDF/A documents")
+		return fmt.Errorf("document: pdfa: encryption is not allowed in PDF/A documents")
 	}
 
 	// All fonts on all pages must be embedded (no bare standard fonts).
 	for i, page := range allPages {
 		for _, fr := range page.fonts {
 			if fr.standard != nil && fr.embedded == nil {
-				return fmt.Errorf("pdfa: page %d uses non-embedded standard font %q; PDF/A requires all fonts to be embedded",
+				return fmt.Errorf("document: pdfa: page %d uses non-embedded standard font %q; PDF/A requires all fonts to be embedded",
 					i, fr.standard.Name())
 			}
 		}
@@ -258,7 +258,7 @@ func (d *Document) validatePdfA(allPages []*Page) error {
 	if isPdfA1(d.pdfA.Level) {
 		for i, page := range allPages {
 			if len(page.extGStates) > 0 {
-				return fmt.Errorf("pdfa: page %d uses transparency (ExtGState); PDF/A-1 forbids transparency", i)
+				return fmt.Errorf("document: pdfa: page %d uses transparency (ExtGState); PDF/A-1 forbids transparency", i)
 			}
 		}
 	}
@@ -267,12 +267,12 @@ func (d *Document) validatePdfA(allPages []*Page) error {
 	// allow them: PDF/A-3 (ISO 19005-3 §6.4) and PDF/A-4f / PDF/A-4e
 	// (ISO 19005-4 §6.8). Plain PDF/A-4 forbids them.
 	if len(d.attachments) > 0 && !allowsAttachments(d.pdfA.Level) {
-		return fmt.Errorf("pdfa: file attachments are only permitted in PDF/A-3 (a/b) or PDF/A-4f / PDF/A-4e; current level does not allow them")
+		return fmt.Errorf("document: pdfa: file attachments are only permitted in PDF/A-3 (a/b) or PDF/A-4f / PDF/A-4e; current level does not allow them")
 	}
 
 	// Title is required.
 	if d.Info.Title == "" {
-		return fmt.Errorf("pdfa: document Title is required for PDF/A conformance")
+		return fmt.Errorf("document: pdfa: document Title is required for PDF/A conformance")
 	}
 
 	// Level A (accessibility-conformance) requires a declared natural
@@ -280,7 +280,7 @@ func (d *Document) validatePdfA(allPages []*Page) error {
 	// Folio satisfies this via the catalog /Lang entry, populated from
 	// Info.Language. Per-structure Lang is not yet exposed.
 	if isLevelA(d.pdfA.Level) && d.Info.Language == "" {
-		return fmt.Errorf("pdfa: Info.Language is required for Level A (accessibility-conformance) variants; set Info.Language to a BCP 47 / RFC 3066 tag (e.g. \"en-US\")")
+		return fmt.Errorf("document: pdfa: Info.Language is required for Level A (accessibility-conformance) variants; set Info.Language to a BCP 47 / RFC 3066 tag (e.g. \"en-US\")")
 	}
 
 	return nil

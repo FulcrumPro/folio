@@ -44,12 +44,12 @@ type cmapTable map[rune]uint16
 func parseCmapTable(data []byte) (cmapTable, error) {
 	dataLen := uint64(len(data))
 	if dataLen < 4 {
-		return nil, fmt.Errorf("cmap: header truncated (%d < 4): %w", dataLen, ErrTruncated)
+		return nil, fmt.Errorf("font: cmap: header truncated (%d < 4): %w", dataLen, ErrTruncated)
 	}
 	numTables := uint64(binary.BigEndian.Uint16(data[2:4]))
 	recordsEnd := 4 + numTables*8
 	if recordsEnd > dataLen {
-		return nil, fmt.Errorf("cmap: encoding records truncated (need %d, have %d): %w", recordsEnd, dataLen, ErrTruncated)
+		return nil, fmt.Errorf("font: cmap: encoding records truncated (need %d, have %d): %w", recordsEnd, dataLen, ErrTruncated)
 	}
 
 	type pick struct {
@@ -80,7 +80,7 @@ func parseCmapTable(data []byte) (cmapTable, error) {
 		}
 	}
 	if best.score == 0 {
-		return nil, fmt.Errorf("cmap: no supported Unicode subtable: %w", ErrCorruptTable)
+		return nil, fmt.Errorf("font: cmap: no supported Unicode subtable: %w", ErrCorruptTable)
 	}
 	var (
 		out cmapTable
@@ -92,7 +92,7 @@ func parseCmapTable(data []byte) (cmapTable, error) {
 	case 12:
 		out, err = parseCmapFormat12(data, best.offset)
 	default:
-		return nil, fmt.Errorf("cmap: subtable format %d not implemented: %w", best.format, ErrCorruptTable)
+		return nil, fmt.Errorf("font: cmap: subtable format %d not implemented: %w", best.format, ErrCorruptTable)
 	}
 	if err != nil {
 		return nil, err
@@ -197,15 +197,15 @@ func scoreSubtable(platformID, encodingID, format uint16) int {
 func parseCmapFormat4(data []byte, subOff uint64) (cmapTable, error) {
 	dataLen := uint64(len(data))
 	if subOff+14 > dataLen {
-		return nil, fmt.Errorf("cmap fmt4: header truncated: %w", ErrTruncated)
+		return nil, fmt.Errorf("font: cmap fmt4: header truncated: %w", ErrTruncated)
 	}
 	length := uint64(binary.BigEndian.Uint16(data[subOff+2 : subOff+4]))
 	if subOff+length > dataLen {
-		return nil, fmt.Errorf("cmap fmt4: declared length %d exceeds table: %w", length, ErrTruncated)
+		return nil, fmt.Errorf("font: cmap fmt4: declared length %d exceeds table: %w", length, ErrTruncated)
 	}
 	segCountX2 := uint64(binary.BigEndian.Uint16(data[subOff+6 : subOff+8]))
 	if segCountX2%2 != 0 || segCountX2 == 0 {
-		return nil, fmt.Errorf("cmap fmt4: invalid segCountX2 %d: %w", segCountX2, ErrCorruptTable)
+		return nil, fmt.Errorf("font: cmap fmt4: invalid segCountX2 %d: %w", segCountX2, ErrCorruptTable)
 	}
 	segCount := segCountX2 / 2
 
@@ -216,7 +216,7 @@ func parseCmapFormat4(data []byte, subOff uint64) (cmapTable, error) {
 	glyphArrOff := rangeOff + segCountX2
 
 	if glyphArrOff > subOff+length {
-		return nil, fmt.Errorf("cmap fmt4: arrays exceed declared length: %w", ErrTruncated)
+		return nil, fmt.Errorf("font: cmap fmt4: arrays exceed declared length: %w", ErrTruncated)
 	}
 
 	out := make(cmapTable)
@@ -295,19 +295,19 @@ func parseCmapFormat4(data []byte, subOff uint64) (cmapTable, error) {
 func parseCmapFormat12(data []byte, subOff uint64) (cmapTable, error) {
 	dataLen := uint64(len(data))
 	if subOff+16 > dataLen {
-		return nil, fmt.Errorf("cmap fmt12: header truncated: %w", ErrTruncated)
+		return nil, fmt.Errorf("font: cmap fmt12: header truncated: %w", ErrTruncated)
 	}
 	length := uint64(binary.BigEndian.Uint32(data[subOff+4 : subOff+8]))
 	if length < 16 {
-		return nil, fmt.Errorf("cmap fmt12: declared length %d < header size: %w", length, ErrCorruptTable)
+		return nil, fmt.Errorf("font: cmap fmt12: declared length %d < header size: %w", length, ErrCorruptTable)
 	}
 	if subOff+length > dataLen {
-		return nil, fmt.Errorf("cmap fmt12: declared length %d exceeds table: %w", length, ErrTruncated)
+		return nil, fmt.Errorf("font: cmap fmt12: declared length %d exceeds table: %w", length, ErrTruncated)
 	}
 	numGroups := uint64(binary.BigEndian.Uint32(data[subOff+12 : subOff+16]))
 	groupsEnd := subOff + 16 + numGroups*12
 	if groupsEnd > subOff+length {
-		return nil, fmt.Errorf("cmap fmt12: groups (%d) exceed declared length: %w", numGroups, ErrTruncated)
+		return nil, fmt.Errorf("font: cmap fmt12: groups (%d) exceed declared length: %w", numGroups, ErrTruncated)
 	}
 
 	out := make(cmapTable)

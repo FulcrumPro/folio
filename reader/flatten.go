@@ -23,7 +23,7 @@ func (m *Modifier) FlattenForms() error {
 			continue
 		}
 		if err := m.flattenPage(pageDict, i); err != nil {
-			return fmt.Errorf("flatten page %d: %w", i, err)
+			return fmt.Errorf("reader: flatten page %d: %w", i, err)
 		}
 	}
 

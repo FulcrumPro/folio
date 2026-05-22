@@ -45,17 +45,17 @@ type PageImport struct {
 func ExtractPageImport(r *PdfReader, pageIndex int) (*PageImport, error) {
 	page, err := r.Page(pageIndex)
 	if err != nil {
-		return nil, fmt.Errorf("import: page %d: %w", pageIndex, err)
+		return nil, fmt.Errorf("reader: import: page %d: %w", pageIndex, err)
 	}
 
 	data, err := page.ContentStream()
 	if err != nil {
-		return nil, fmt.Errorf("import: content stream: %w", err)
+		return nil, fmt.Errorf("reader: import: content stream: %w", err)
 	}
 
 	resources, err := page.Resources()
 	if err != nil {
-		return nil, fmt.Errorf("import: resources: %w", err)
+		return nil, fmt.Errorf("reader: import: resources: %w", err)
 	}
 
 	// Deep-copy resources, resolving all indirect references so the
@@ -64,7 +64,7 @@ func ExtractPageImport(r *PdfReader, pageIndex int) (*PageImport, error) {
 	// that are meaningless outside the source PDF.
 	resolvedRes, err := resolveDeep(resources, r.resolver)
 	if err != nil {
-		return nil, fmt.Errorf("import: resolve resources: %w", err)
+		return nil, fmt.Errorf("reader: import: resolve resources: %w", err)
 	}
 	resDict, _ := resolvedRes.(*core.PdfDictionary)
 

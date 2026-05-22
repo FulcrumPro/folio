@@ -18,14 +18,14 @@ import (
 func NewPNG(data []byte) (*Image, error) {
 	img, err := png.Decode(bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("png: %w", err)
+		return nil, fmt.Errorf("image: png: %w", err)
 	}
 
 	bounds := img.Bounds()
 	w := bounds.Dx()
 	h := bounds.Dy()
 	if err := checkDimensions(w, h); err != nil {
-		return nil, fmt.Errorf("png: %w", err)
+		return nil, fmt.Errorf("image: png: %w", err)
 	}
 
 	if isGrayscale(img) {

@@ -25,15 +25,15 @@ import (
 // numberOfHMetrics is required to be at least 1 by the spec.
 func parseHmtx(data []byte, numberOfHMetrics, numGlyphs int) ([]uint16, []int16, error) {
 	if numberOfHMetrics <= 0 {
-		return nil, nil, fmt.Errorf("hmtx: numberOfHMetrics must be >= 1, got %d: %w", numberOfHMetrics, ErrCorruptTable)
+		return nil, nil, fmt.Errorf("font: hmtx: numberOfHMetrics must be >= 1, got %d: %w", numberOfHMetrics, ErrCorruptTable)
 	}
 	if numGlyphs < numberOfHMetrics {
-		return nil, nil, fmt.Errorf("hmtx: numGlyphs %d < numberOfHMetrics %d: %w", numGlyphs, numberOfHMetrics, ErrCorruptTable)
+		return nil, nil, fmt.Errorf("font: hmtx: numGlyphs %d < numberOfHMetrics %d: %w", numGlyphs, numberOfHMetrics, ErrCorruptTable)
 	}
 	tail := numGlyphs - numberOfHMetrics
 	need := uint64(numberOfHMetrics)*4 + uint64(tail)*2
 	if uint64(len(data)) < need {
-		return nil, nil, fmt.Errorf("hmtx: table truncated (have %d, need %d): %w", len(data), need, ErrTruncated)
+		return nil, nil, fmt.Errorf("font: hmtx: table truncated (have %d, need %d): %w", len(data), need, ErrTruncated)
 	}
 
 	advances := make([]uint16, numGlyphs)

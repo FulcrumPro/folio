@@ -580,13 +580,13 @@ func extractFilters(obj core.PdfObject) []string {
 func inflateFlateDecode(data []byte, maxBytes int64) ([]byte, error) {
 	r, err := zlib.NewReader(bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("FlateDecode: %w", err)
+		return nil, fmt.Errorf("reader: FlateDecode: %w", err)
 	}
 	defer func() { _ = r.Close() }()
 
 	result, err := limitedReadAll(r, maxBytes)
 	if err != nil {
-		return nil, fmt.Errorf("FlateDecode: %w", err)
+		return nil, fmt.Errorf("reader: FlateDecode: %w", err)
 	}
 	return result, nil
 }

@@ -446,14 +446,14 @@ func consumeArgs(tokens []pathToken, pos, argCount int) ([]float64, int, error) 
 	args := make([]float64, argCount)
 	for j := range argCount {
 		if pos >= len(tokens) {
-			return nil, pos, fmt.Errorf("expected %d args, got %d", argCount, j)
+			return nil, pos, fmt.Errorf("svg: expected %d args, got %d", argCount, j)
 		}
 		if tokens[pos].isCommand {
-			return nil, pos, fmt.Errorf("expected number, got command %q", tokens[pos].value)
+			return nil, pos, fmt.Errorf("svg: expected number, got command %q", tokens[pos].value)
 		}
 		v, err := parseFloat(tokens[pos].value)
 		if err != nil {
-			return nil, pos, fmt.Errorf("invalid number %q: %w", tokens[pos].value, err)
+			return nil, pos, fmt.Errorf("svg: invalid number %q: %w", tokens[pos].value, err)
 		}
 		args[j] = v
 		pos++

@@ -45,14 +45,14 @@ type head struct {
 // The minimum length is 54 bytes.
 func parseHead(data []byte) (head, error) {
 	if uint64(len(data)) < 54 {
-		return head{}, fmt.Errorf("head: table truncated (%d < 54 bytes): %w", len(data), ErrTruncated)
+		return head{}, fmt.Errorf("font: head: table truncated (%d < 54 bytes): %w", len(data), ErrTruncated)
 	}
 	if magic := binary.BigEndian.Uint32(data[12:16]); magic != 0x5F0F3CF5 {
-		return head{}, fmt.Errorf("head: magicNumber 0x%08X != 0x5F0F3CF5: %w", magic, ErrCorruptTable)
+		return head{}, fmt.Errorf("font: head: magicNumber 0x%08X != 0x5F0F3CF5: %w", magic, ErrCorruptTable)
 	}
 	upem := binary.BigEndian.Uint16(data[18:20])
 	if upem == 0 {
-		return head{}, fmt.Errorf("head: unitsPerEm is zero: %w", ErrCorruptTable)
+		return head{}, fmt.Errorf("font: head: unitsPerEm is zero: %w", ErrCorruptTable)
 	}
 	return head{
 		unitsPerEm:       upem,

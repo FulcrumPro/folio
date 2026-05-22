@@ -154,7 +154,7 @@ func decodeDataURI(uri string) (*folioimage.Image, error) {
 	// Split at comma: metadata,data
 	commaIdx := strings.IndexByte(rest, ',')
 	if commaIdx < 0 {
-		return nil, fmt.Errorf("invalid data URI: no comma")
+		return nil, fmt.Errorf("html: invalid data URI: no comma")
 	}
 	meta := rest[:commaIdx]
 	encoded := rest[commaIdx+1:]
@@ -165,7 +165,7 @@ func decodeDataURI(uri string) (*folioimage.Image, error) {
 		var err error
 		data, err = base64Decode(encoded)
 		if err != nil {
-			return nil, fmt.Errorf("data URI base64: %w", err)
+			return nil, fmt.Errorf("html: data URI base64: %w", err)
 		}
 	} else {
 		data = []byte(encoded)
@@ -269,7 +269,7 @@ func (c *converter) convertImgSVG(src, alt string, style computedStyle) []layout
 		rest := strings.TrimPrefix(src, "data:")
 		commaIdx := strings.IndexByte(rest, ',')
 		if commaIdx < 0 {
-			err = fmt.Errorf("invalid data URI: no comma")
+			err = fmt.Errorf("html: invalid data URI: no comma")
 		} else {
 			meta := rest[:commaIdx]
 			encoded := rest[commaIdx+1:]

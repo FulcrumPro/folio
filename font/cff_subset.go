@@ -31,7 +31,7 @@ import (
 func SubsetCFF(cffBytes []byte, usedGlyphs map[uint16]rune) ([]byte, error) {
 	src, err := parseCFF(cffBytes)
 	if err != nil {
-		return nil, fmt.Errorf("subset cff: %w", err)
+		return nil, fmt.Errorf("font: subset cff: %w", err)
 	}
 
 	keepGlyph := make([]bool, src.numGlyphs)
@@ -54,7 +54,7 @@ func SubsetCFF(cffBytes []byte, usedGlyphs map[uint16]rune) ([]byte, error) {
 		}
 		fd, err := src.fdForGlyph(gid)
 		if err != nil {
-			return nil, fmt.Errorf("subset cff: gid %d: %w", gid, err)
+			return nil, fmt.Errorf("font: subset cff: gid %d: %w", gid, err)
 		}
 		walker.Trace(src.charStringsIndex.Object(gid), fd)
 	}
@@ -227,7 +227,7 @@ func SubsetCFF(cffBytes []byte, usedGlyphs map[uint16]rune) ([]byte, error) {
 		out = append(out, b.localSubrsData...)
 	}
 	if len(out) != finalSize {
-		return nil, fmt.Errorf("subset cff: assembled %d bytes, expected %d: %w", len(out), finalSize, ErrCorruptTable)
+		return nil, fmt.Errorf("font: subset cff: assembled %d bytes, expected %d: %w", len(out), finalSize, ErrCorruptTable)
 	}
 	return out, nil
 }
@@ -238,7 +238,7 @@ func SubsetCFF(cffBytes []byte, usedGlyphs map[uint16]rune) ([]byte, error) {
 // format is unknown.
 func (cff *cffFont) fdForGlyph(gid int) (int, error) {
 	if gid < 0 || gid >= cff.numGlyphs {
-		return 0, fmt.Errorf("cff: gid %d out of range [0,%d): %w", gid, cff.numGlyphs, ErrCorruptTable)
+		return 0, fmt.Errorf("font: cff: gid %d out of range [0,%d): %w", gid, cff.numGlyphs, ErrCorruptTable)
 	}
 	off := cff.fdSelectOffset
 	switch cff.raw[off] {
@@ -262,9 +262,9 @@ func (cff *cffFont) fdForGlyph(gid int) (int, error) {
 				return fd, nil
 			}
 		}
-		return 0, fmt.Errorf("cff: gid %d not covered by fdselect format 3: %w", gid, ErrCorruptTable)
+		return 0, fmt.Errorf("font: cff: gid %d not covered by fdselect format 3: %w", gid, ErrCorruptTable)
 	}
-	return 0, fmt.Errorf("cff: fdselect format %d unsupported: %w", cff.raw[off], ErrCorruptTable)
+	return 0, fmt.Errorf("font: cff: fdselect format %d unsupported: %w", cff.raw[off], ErrCorruptTable)
 }
 
 // writeCFFIndex serializes a list of object payloads as a CFF INDEX

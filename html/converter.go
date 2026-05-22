@@ -114,7 +114,7 @@ func (o *Options) defaults() Options {
 
 // errNoBaseFS is returned by readAsset when a relative or root-anchored path is
 // requested but the caller did not configure Options.BaseFS.
-var errNoBaseFS = errors.New("no BaseFS configured for local asset resolution")
+var errNoBaseFS = errors.New("html: no BaseFS configured for local asset resolution")
 
 // readAsset resolves p through baseFS. Path normalisation:
 //   - Backslashes are converted to forward slashes (fs.FS convention).
@@ -144,17 +144,17 @@ func readAsset(baseFS fs.FS, p string) ([]byte, error) {
 // the same on macOS / Linux).
 func normaliseFSPath(p string) (string, error) {
 	if p == "" {
-		return "", fmt.Errorf("empty path")
+		return "", fmt.Errorf("html: empty path")
 	}
 	fsPath := strings.ReplaceAll(p, `\`, "/")
 	fsPath = strings.TrimPrefix(fsPath, "./")
 	fsPath = strings.TrimPrefix(fsPath, "/")
 	if fsPath == "" {
-		return "", fmt.Errorf("empty path after normalisation: %q", p)
+		return "", fmt.Errorf("html: empty path after normalisation: %q", p)
 	}
 	fsPath = path.Clean(fsPath)
 	if !fs.ValidPath(fsPath) {
-		return "", fmt.Errorf("invalid path for BaseFS: %q", p)
+		return "", fmt.Errorf("html: invalid path for BaseFS: %q", p)
 	}
 	return fsPath, nil
 }
@@ -559,7 +559,7 @@ func formatAssetError(category string, err error, attrs []any) error {
 // Options.Logger but are not added to the joined return-error — the
 // caller already received the signal they wired URLPolicy to produce.
 // Use with errors.Is to test the cause.
-var ErrURLPolicyDenied = errors.New("folio/html: URL fetch blocked by URLPolicy")
+var ErrURLPolicyDenied = errors.New("html: URL fetch blocked by URLPolicy")
 
 // containingBlock tracks a positioned ancestor for absolute positioning resolution.
 type containingBlock struct {
@@ -690,18 +690,18 @@ func decodeFontDataURI(uri string) (font.Face, error) {
 	rest := strings.TrimPrefix(uri, "data:")
 	commaIdx := strings.IndexByte(rest, ',')
 	if commaIdx < 0 {
-		return nil, fmt.Errorf("invalid data URI: no comma")
+		return nil, fmt.Errorf("html: invalid data URI: no comma")
 	}
 	meta := rest[:commaIdx]
 	encoded := rest[commaIdx+1:]
 
 	if !strings.Contains(meta, ";base64") {
-		return nil, fmt.Errorf("font data URI must be base64-encoded")
+		return nil, fmt.Errorf("html: font data URI must be base64-encoded")
 	}
 
 	data, err := base64Decode(encoded)
 	if err != nil {
-		return nil, fmt.Errorf("font data URI base64: %w", err)
+		return nil, fmt.Errorf("html: font data URI base64: %w", err)
 	}
 
 	return font.ParseTTF(data)

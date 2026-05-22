@@ -16,14 +16,14 @@ import (
 func NewWebP(data []byte) (*Image, error) {
 	img, err := webp.Decode(bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("webp: %w", err)
+		return nil, fmt.Errorf("image: webp: %w", err)
 	}
 
 	bounds := img.Bounds()
 	w := bounds.Dx()
 	h := bounds.Dy()
 	if err := checkDimensions(w, h); err != nil {
-		return nil, fmt.Errorf("webp: %w", err)
+		return nil, fmt.Errorf("image: webp: %w", err)
 	}
 
 	// buildRGBMaybeAlpha walks the decoded image once: RGB bytes go

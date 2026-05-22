@@ -292,10 +292,10 @@ func buildImportCmd(name string, opts *ImportPageOpts) string {
 // Panics if f is nil or size is negative.
 func (p *Page) AddText(text string, f *font.Standard, size, x, y float64) {
 	if f == nil {
-		panic("folio: AddText called with nil font")
+		panic("document.AddText: nil font")
 	}
 	if size < 0 {
-		panic("folio: AddText called with negative font size")
+		panic("document.AddText: negative font size")
 	}
 	resName := p.standardFontResource(f)
 	p.ensureStream()
@@ -311,10 +311,10 @@ func (p *Page) AddText(text string, f *font.Standard, size, x, y float64) {
 // Panics if ef is nil or size is negative.
 func (p *Page) AddTextEmbedded(text string, ef *font.EmbeddedFont, size, x, y float64) {
 	if ef == nil {
-		panic("folio: AddTextEmbedded called with nil font")
+		panic("document.AddTextEmbedded: nil font")
 	}
 	if size < 0 {
-		panic("folio: AddTextEmbedded called with negative font size")
+		panic("document.AddTextEmbedded: negative font size")
 	}
 	resName := p.embeddedFontResource(ef)
 	encoded := ef.EncodeString(text)
@@ -370,10 +370,10 @@ func (p *Page) AddRectFilled(x, y, w, h float64, color [3]float64) {
 // Panics if img is nil or width/height is negative.
 func (p *Page) AddImage(img *folioimage.Image, x, y, width, height float64) {
 	if img == nil {
-		panic("folio: AddImage called with nil image")
+		panic("document.AddImage: nil image")
 	}
 	if width < 0 || height < 0 {
-		panic("folio: AddImage called with negative dimensions")
+		panic("document.AddImage: negative dimensions")
 	}
 	if width == 0 && height == 0 {
 		width = float64(img.Width())

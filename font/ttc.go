@@ -38,25 +38,25 @@ const ttcMagic = 0x74746366 // "ttcf"
 func extractTTCFont(data []byte, index int) ([]byte, error) {
 	dataLen := uint64(len(data))
 	if dataLen < 12 {
-		return nil, fmt.Errorf("ttc: header too short: %w", ErrTruncated)
+		return nil, fmt.Errorf("font: ttc: header too short: %w", ErrTruncated)
 	}
 	if binary.BigEndian.Uint32(data[0:4]) != ttcMagic {
-		return nil, fmt.Errorf("ttc: missing ttcf magic: %w", ErrUnknownFormat)
+		return nil, fmt.Errorf("font: ttc: missing ttcf magic: %w", ErrUnknownFormat)
 	}
 	numFonts := uint64(binary.BigEndian.Uint32(data[8:12]))
 	if numFonts < 1 {
-		return nil, fmt.Errorf("ttc: empty collection: %w", ErrCorruptTable)
+		return nil, fmt.Errorf("font: ttc: empty collection: %w", ErrCorruptTable)
 	}
 	if index < 0 || uint64(index) >= numFonts {
-		return nil, fmt.Errorf("ttc: font index %d out of range [0,%d): %w", index, numFonts, ErrCorruptTable)
+		return nil, fmt.Errorf("font: ttc: font index %d out of range [0,%d): %w", index, numFonts, ErrCorruptTable)
 	}
 	if dataLen < 12+numFonts*4 {
-		return nil, fmt.Errorf("ttc: offset table truncated: %w", ErrTruncated)
+		return nil, fmt.Errorf("font: ttc: offset table truncated: %w", ErrTruncated)
 	}
 
 	fontOffset := uint64(binary.BigEndian.Uint32(data[12+index*4:]))
 	if fontOffset+12 > dataLen {
-		return nil, fmt.Errorf("ttc: font %d offset out of range: %w", index, ErrTruncated)
+		return nil, fmt.Errorf("font: ttc: font %d offset out of range: %w", index, ErrTruncated)
 	}
 
 	// Offset Table (12 bytes): sfntVersion[4], numTables[2], searchRange[2],
@@ -64,7 +64,7 @@ func extractTTCFont(data []byte, index int) ([]byte, error) {
 	numTables := uint64(binary.BigEndian.Uint16(data[fontOffset+4:]))
 	dirSize := numTables * 16
 	if fontOffset+12+dirSize > dataLen {
-		return nil, fmt.Errorf("ttc: font %d directory truncated: %w", index, ErrTruncated)
+		return nil, fmt.Errorf("font: ttc: font %d directory truncated: %w", index, ErrTruncated)
 	}
 
 	// Snapshot each (tag, checksum, srcOffset, length) and accumulate the
@@ -85,7 +85,7 @@ func extractTTCFont(data []byte, index int) ([]byte, error) {
 		e.srcOff = uint64(binary.BigEndian.Uint32(data[base+8:]))
 		e.length = uint64(binary.BigEndian.Uint32(data[base+12:]))
 		if e.srcOff+e.length > dataLen {
-			return nil, fmt.Errorf("ttc: table %s extends beyond data: %w", string(e.tag[:]), ErrTruncated)
+			return nil, fmt.Errorf("font: ttc: table %s extends beyond data: %w", string(e.tag[:]), ErrTruncated)
 		}
 		entries[i] = e
 		// Tables in TTF are 4-byte aligned in the file.
@@ -95,7 +95,7 @@ func extractTTCFont(data []byte, index int) ([]byte, error) {
 	headerSize := 12 + dirSize
 	totalSize := headerSize + payload
 	if totalSize > uint64(^uint(0)>>1) {
-		return nil, fmt.Errorf("ttc: extracted size %d exceeds platform int range: %w", totalSize, ErrCorruptTable)
+		return nil, fmt.Errorf("font: ttc: extracted size %d exceeds platform int range: %w", totalSize, ErrCorruptTable)
 	}
 	out := make([]byte, totalSize)
 

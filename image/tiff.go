@@ -18,14 +18,14 @@ import (
 func NewTIFF(data []byte) (*Image, error) {
 	img, err := tiff.Decode(bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("tiff: %w", err)
+		return nil, fmt.Errorf("image: tiff: %w", err)
 	}
 
 	bounds := img.Bounds()
 	w := bounds.Dx()
 	h := bounds.Dy()
 	if err := checkDimensions(w, h); err != nil {
-		return nil, fmt.Errorf("tiff: %w", err)
+		return nil, fmt.Errorf("image: tiff: %w", err)
 	}
 
 	if isGrayscale(img) {

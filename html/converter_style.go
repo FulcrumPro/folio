@@ -134,36 +134,36 @@ func (c *converter) applyTagDefaults(n *html.Node, style *computedStyle) {
 	case atom.H1:
 		style.FontSize = 24 // 32px * 0.75
 		style.FontWeight = 700
-		style.MarginTop = 16.08 // 0.67em at 32px → 32*0.67*0.75
-		style.MarginBottom = 16.08
+		style.MarginTopLength = &cssLength{Value: 16.08, Unit: "pt"} // 0.67em at 32px → 32*0.67*0.75
+		style.MarginBottomLength = &cssLength{Value: 16.08, Unit: "pt"}
 	case atom.H2:
 		style.FontSize = 18 // 24px * 0.75
 		style.FontWeight = 700
-		style.MarginTop = 14.94 // 0.83em at 24px → 24*0.83*0.75
-		style.MarginBottom = 14.94
+		style.MarginTopLength = &cssLength{Value: 14.94, Unit: "pt"} // 0.83em at 24px → 24*0.83*0.75
+		style.MarginBottomLength = &cssLength{Value: 14.94, Unit: "pt"}
 	case atom.H3:
 		style.FontSize = 14.04 // 18.72px * 0.75
 		style.FontWeight = 700
-		style.MarginTop = 14.04 // 1em at 18.72px → 18.72*0.75
-		style.MarginBottom = 14.04
+		style.MarginTopLength = &cssLength{Value: 14.04, Unit: "pt"} // 1em at 18.72px → 18.72*0.75
+		style.MarginBottomLength = &cssLength{Value: 14.04, Unit: "pt"}
 	case atom.H4:
 		style.FontSize = 12 // 16px * 0.75
 		style.FontWeight = 700
-		style.MarginTop = 16.02 // 1.33em at 16px → 16*1.33*0.75
-		style.MarginBottom = 16.02
+		style.MarginTopLength = &cssLength{Value: 16.02, Unit: "pt"} // 1.33em at 16px → 16*1.33*0.75
+		style.MarginBottomLength = &cssLength{Value: 16.02, Unit: "pt"}
 	case atom.H5:
 		style.FontSize = 9.96 // 13.28px * 0.75
 		style.FontWeight = 700
-		style.MarginTop = 16.60 // 1.67em at 13.28px → 13.28*1.67*0.75
-		style.MarginBottom = 16.60
+		style.MarginTopLength = &cssLength{Value: 16.60, Unit: "pt"} // 1.67em at 13.28px → 13.28*1.67*0.75
+		style.MarginBottomLength = &cssLength{Value: 16.60, Unit: "pt"}
 	case atom.H6:
 		style.FontSize = 8.01 // 10.72px * 0.75
 		style.FontWeight = 700
-		style.MarginTop = 18.62 // 2.33em at 10.72px → 10.72*2.33*0.75
-		style.MarginBottom = 18.62
+		style.MarginTopLength = &cssLength{Value: 18.62, Unit: "pt"} // 2.33em at 10.72px → 10.72*2.33*0.75
+		style.MarginBottomLength = &cssLength{Value: 18.62, Unit: "pt"}
 	case atom.P:
-		style.MarginTop = 12 // 1em at 16px → 16*0.75
-		style.MarginBottom = 12
+		style.MarginTopLength = &cssLength{Value: 12, Unit: "pt"} // 1em at 16px → 16*0.75
+		style.MarginBottomLength = &cssLength{Value: 12, Unit: "pt"}
 	case atom.Span:
 		// CSS 2.1 §9.2.2: <span> is inline by default. Without this,
 		// the inherited Display="block" leaks through and walkChildren
@@ -205,11 +205,11 @@ func (c *converter) applyTagDefaults(n *html.Node, style *computedStyle) {
 	case atom.Pre:
 		style.FontFamily = "courier"
 		style.WhiteSpace = "pre"
-		style.MarginTop = 12
-		style.MarginBottom = 12
+		style.MarginTopLength = &cssLength{Value: 12, Unit: "pt"}
+		style.MarginBottomLength = &cssLength{Value: 12, Unit: "pt"}
 	case atom.Hr:
-		style.MarginTop = 6
-		style.MarginBottom = 6
+		style.MarginTopLength = &cssLength{Value: 6, Unit: "pt"}
+		style.MarginBottomLength = &cssLength{Value: 6, Unit: "pt"}
 	case atom.A:
 		style.Color = layout.RGB(0, 0, 0.933) // default link blue
 		style.TextDecoration |= layout.DecorationUnderline
@@ -220,27 +220,27 @@ func (c *converter) applyTagDefaults(n *html.Node, style *computedStyle) {
 		style.BorderSpacingH = 1.5 // 2px * 0.75
 		style.BorderSpacingV = 1.5
 	case atom.Ul, atom.Ol:
-		style.MarginTop = 12
-		style.MarginBottom = 12
+		style.MarginTopLength = &cssLength{Value: 12, Unit: "pt"}
+		style.MarginBottomLength = &cssLength{Value: 12, Unit: "pt"}
 	case atom.Blockquote:
-		style.MarginTop = 12
-		style.MarginBottom = 12
+		style.MarginTopLength = &cssLength{Value: 12, Unit: "pt"}
+		style.MarginBottomLength = &cssLength{Value: 12, Unit: "pt"}
 	case atom.Dl:
-		style.MarginTop = 12
-		style.MarginBottom = 12
+		style.MarginTopLength = &cssLength{Value: 12, Unit: "pt"}
+		style.MarginBottomLength = &cssLength{Value: 12, Unit: "pt"}
 	case atom.Dt:
 		style.FontWeight = 700
 	case atom.Dd:
-		style.MarginLeft = 30 // browser default ~40px → 30pt
+		style.MarginLeftLength = &cssLength{Value: 30, Unit: "pt"} // browser default ~40px → 30pt
 	case atom.Figure:
-		style.MarginTop = 12
-		style.MarginBottom = 12
+		style.MarginTopLength = &cssLength{Value: 12, Unit: "pt"}
+		style.MarginBottomLength = &cssLength{Value: 12, Unit: "pt"}
 	case atom.Figcaption:
 		style.FontStyle = "italic"
 		style.FontSize = style.FontSize * 0.9
 	case atom.Fieldset:
-		style.MarginTop = 9 // ~12px * 0.75
-		style.MarginBottom = 9
+		style.MarginTopLength = &cssLength{Value: 9, Unit: "pt"} // ~12px * 0.75
+		style.MarginBottomLength = &cssLength{Value: 9, Unit: "pt"}
 		style.Display = "block"
 	case atom.Legend:
 		style.FontWeight = 700

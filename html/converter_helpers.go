@@ -402,6 +402,38 @@ func getAttr(n *html.Node, name string) string {
 	return ""
 }
 
+// findHTMLLang walks the parsed document tree and returns the value of
+// the `lang` attribute on the document's root <html> element, or "" if
+// the attribute is absent. Called once at converter setup so the value
+// is available to loadFontFaces before any @font-face rule is parsed —
+// font.ParseFontForLanguage uses it to pick the appropriate face from
+// pan-CJK TTCs (#280).
+//
+// The walk is a simple depth-first search rather than a strict
+// "first child of DocumentNode" lookup because golang.org/x/net/html
+// inserts implicit nodes (Doctype, comments, errata <html> wrappers)
+// in shapes that are not always uniform across input. The first
+// ElementNode with atom.Html wins; subsequent ones (extremely rare —
+// malformed fragments) are ignored.
+func findHTMLLang(doc *html.Node) string {
+	var walk func(*html.Node) string
+	walk = func(n *html.Node) string {
+		if n == nil {
+			return ""
+		}
+		if n.Type == html.ElementNode && n.DataAtom == atom.Html {
+			return getAttr(n, "lang")
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			if v := walk(c); v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	return walk(doc)
+}
+
 // splitDeclarations splits a CSS style string into individual declarations.
 func splitDeclarations(style string) []string {
 	return strings.Split(style, ";")

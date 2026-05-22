@@ -330,28 +330,28 @@ var cssProperties = []cssProperty{
 		Name: "padding-top", Category: "BoxModel",
 		Values: []string{"<length>", "<percentage>"},
 		Apply: func(s *computedStyle, value string) {
-			s.PaddingTop = parseBoxSide(value, s.FontSize)
+			s.PaddingTop, s.PaddingTopLength = parseBoxSideBoth(value, s.FontSize)
 		},
 	},
 	{
 		Name: "padding-right", Category: "BoxModel",
 		Values: []string{"<length>", "<percentage>"},
 		Apply: func(s *computedStyle, value string) {
-			s.PaddingRight = parseBoxSide(value, s.FontSize)
+			s.PaddingRight, s.PaddingRightLength = parseBoxSideBoth(value, s.FontSize)
 		},
 	},
 	{
 		Name: "padding-bottom", Category: "BoxModel",
 		Values: []string{"<length>", "<percentage>"},
 		Apply: func(s *computedStyle, value string) {
-			s.PaddingBottom = parseBoxSide(value, s.FontSize)
+			s.PaddingBottom, s.PaddingBottomLength = parseBoxSideBoth(value, s.FontSize)
 		},
 	},
 	{
 		Name: "padding-left", Category: "BoxModel",
 		Values: []string{"<length>", "<percentage>"},
 		Apply: func(s *computedStyle, value string) {
-			s.PaddingLeft = parseBoxSide(value, s.FontSize)
+			s.PaddingLeft, s.PaddingLeftLength = parseBoxSideBoth(value, s.FontSize)
 		},
 	},
 	{
@@ -359,7 +359,7 @@ var cssProperties = []cssProperty{
 		Values: []string{"<length>", "<percentage>"},
 		Notes:  "margin-top, margin-left, margin-right also accept `auto`; margin-bottom does not.",
 		Apply: func(s *computedStyle, value string) {
-			s.MarginBottom = parseBoxSide(value, s.FontSize)
+			s.MarginBottom, s.MarginBottomLength = parseBoxSideBoth(value, s.FontSize)
 		},
 	},
 	{
@@ -1060,6 +1060,8 @@ var cssProperties = []cssProperty{
 		Apply: func(s *computedStyle, value string) {
 			s.MarginTop, s.MarginRight, s.MarginBottom, s.MarginLeft =
 				parseMarginShorthand(value, s.FontSize)
+			s.MarginTopLength, s.MarginRightLength, s.MarginBottomLength, s.MarginLeftLength =
+				parseMarginShorthandLengths(value, s.FontSize)
 			// Use splitTopLevelFields (paren-aware) so calc()/min()/max()/
 			// clamp() values stay as single tokens — otherwise the
 			// auto-flag positions could shift with respect to the parsed
@@ -1112,7 +1114,7 @@ var cssProperties = []cssProperty{
 			if strings.TrimSpace(strings.ToLower(value)) == "auto" {
 				s.MarginTopAuto = true
 			} else {
-				s.MarginTop = parseBoxSide(value, s.FontSize)
+				s.MarginTop, s.MarginTopLength = parseBoxSideBoth(value, s.FontSize)
 			}
 		},
 	},
@@ -1123,7 +1125,7 @@ var cssProperties = []cssProperty{
 			if strings.TrimSpace(strings.ToLower(value)) == "auto" {
 				s.MarginRightAuto = true
 			} else {
-				s.MarginRight = parseBoxSide(value, s.FontSize)
+				s.MarginRight, s.MarginRightLength = parseBoxSideBoth(value, s.FontSize)
 			}
 		},
 	},
@@ -1134,7 +1136,7 @@ var cssProperties = []cssProperty{
 			if strings.TrimSpace(strings.ToLower(value)) == "auto" {
 				s.MarginLeftAuto = true
 			} else {
-				s.MarginLeft = parseBoxSide(value, s.FontSize)
+				s.MarginLeft, s.MarginLeftLength = parseBoxSideBoth(value, s.FontSize)
 			}
 		},
 	},
@@ -1144,6 +1146,8 @@ var cssProperties = []cssProperty{
 		Apply: func(s *computedStyle, value string) {
 			s.PaddingTop, s.PaddingRight, s.PaddingBottom, s.PaddingLeft =
 				parseMarginShorthand(value, s.FontSize)
+			s.PaddingTopLength, s.PaddingRightLength, s.PaddingBottomLength, s.PaddingLeftLength =
+				parseMarginShorthandLengths(value, s.FontSize)
 		},
 	},
 

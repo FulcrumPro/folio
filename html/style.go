@@ -33,34 +33,18 @@ type computedStyle struct {
 	MarginTopAuto   bool // true if margin-top: auto (for flex layout)
 	MarginLeftAuto  bool // true if margin-left: auto (for centering)
 	MarginRightAuto bool // true if margin-right: auto (for centering)
-	MarginTop       float64
-	MarginRight     float64
-	MarginBottom    float64
-	MarginLeft      float64
 
-	PaddingTop    float64
-	PaddingRight  float64
-	PaddingBottom float64
-	PaddingLeft   float64
-
-	// Lazy-resolution sibling fields for margin / padding (#269).
+	// Margin / padding are stored as unresolved *cssLength values so that
+	// percent / calc / min / max / clamp expressions can be resolved
+	// against the containing-block width at consumer time (#269). The
+	// parser cannot eagerly resolve them — containing-block width is
+	// unknown when CSS is applied — so the helpers MarginTopAt /
+	// PaddingTopAt below take a container width argument.
 	//
-	// The legacy MarginTop / MarginRight / MarginBottom / MarginLeft and
-	// PaddingTop / PaddingRight / PaddingBottom / PaddingLeft above
-	// store an already-resolved float64 — but the parser must call
-	// toPoints(0, fontSize) at parse time because the containing-block
-	// dimension isn't known yet. The result: a `margin: 50%` declaration
-	// silently stores 0pt, and `padding: calc(10% + 5px)` stores 5pt
-	// (only the px term resolves). The *Length fields below carry the
-	// unresolved cssLength so consumers that DO know the containing
-	// block (the converter, layout pipeline) can resolve correctly via
-	// the MarginTopAt / PaddingTopAt helpers.
-	//
-	// During the migration the legacy float64 fields stay populated
-	// alongside *Length, so unmigrated consumers continue to read the
-	// (buggy-but-historical) eagerly-resolved value. A future PR
-	// removes the float64 fields once every consumer has moved to the
-	// helpers.
+	// Phase 1+2 stored both an eagerly-resolved float64 sibling and the
+	// *cssLength here. Phase 4 dropped the float64 fields; the helpers
+	// are now the only read path. A nil pointer means the side was not
+	// declared.
 	MarginTopLength    *cssLength
 	MarginRightLength  *cssLength
 	MarginBottomLength *cssLength
@@ -519,18 +503,12 @@ func (s *computedStyle) inherit() computedStyle {
 	return child
 }
 
-// hasPadding returns true if any padding is declared AND would
-// resolve to a non-zero value against a non-zero container. The
-// check intentionally returns true for `padding: 50%` (legacy
-// float64 resolves to 0, but the sibling carries a meaningful
-// non-zero value when given a container width) while returning
-// false for explicit-zero declarations like `padding: 0` or
-// `padding: 0%`, which add no layout effect and should not
-// trigger wrapper-emission code paths.
+// hasPadding returns true if any padding side is declared with a
+// meaningful (non-zero, or container-dependent) value. Returns false
+// for an absent declaration AND for explicit-zero declarations like
+// `padding: 0` or `padding: 0%`, which add no layout effect and
+// should not trigger wrapper-emission code paths.
 func (s *computedStyle) hasPadding() bool {
-	if s.PaddingTop > 0 || s.PaddingRight > 0 || s.PaddingBottom > 0 || s.PaddingLeft > 0 {
-		return true
-	}
 	return hasMeaningfulLength(s.PaddingTopLength) ||
 		hasMeaningfulLength(s.PaddingRightLength) ||
 		hasMeaningfulLength(s.PaddingBottomLength) ||
@@ -542,13 +520,10 @@ func (s *computedStyle) hasBorder() bool {
 	return s.BorderTopWidth > 0 || s.BorderRightWidth > 0 || s.BorderBottomWidth > 0 || s.BorderLeftWidth > 0
 }
 
-// hasMargin returns true if any margin is declared AND would
-// resolve to a non-zero value. See hasPadding for the
-// non-zero-declaration rationale.
+// hasMargin returns true if any margin side is declared with a
+// meaningful (non-zero, or container-dependent) value. See hasPadding
+// for the non-zero-declaration rationale.
 func (s *computedStyle) hasMargin() bool {
-	if s.MarginTop > 0 || s.MarginRight > 0 || s.MarginBottom > 0 || s.MarginLeft > 0 {
-		return true
-	}
 	return hasMeaningfulLength(s.MarginTopLength) ||
 		hasMeaningfulLength(s.MarginRightLength) ||
 		hasMeaningfulLength(s.MarginBottomLength) ||
@@ -575,66 +550,61 @@ func hasMeaningfulLength(l *cssLength) bool {
 	return l.Value != 0
 }
 
-// MarginTopAt resolves the top margin against containerWidth. When the
-// parser stored a *cssLength sibling (post #269 Phase 1) the percent /
-// calc / min / max / clamp tree is resolved against the actual
-// container; otherwise the helper falls back to the legacy eagerly-
-// resolved float64 (which currently returns 0pt for percent-only
-// values — the bug the migration is closing).
+// MarginTopAt resolves the top margin against containerWidth. The
+// stored *cssLength carries the unresolved percent / calc / min /
+// max / clamp tree from the parser; resolution against the actual
+// containing block happens here. A nil sibling means the side was
+// not declared and the helper returns 0.
 //
 // containerWidth is the width of the containing block, in points.
-// Consumers that don't know the container yet (page-time defaults,
-// margin collapse pre-flow, etc.) pass 0 and accept the
-// percent-resolves-to-zero behaviour for now; the legacy float64 was
-// already doing that silently.
+// Consumers that don't know the container yet (e.g. probe paths
+// pre-flow) may pass 0 and accept that percent declarations resolve
+// to 0pt.
 func (s *computedStyle) MarginTopAt(containerWidth float64) float64 {
-	return resolveBoxSide(s.MarginTopLength, s.MarginTop, containerWidth, s.FontSize)
+	return resolveBoxSide(s.MarginTopLength, containerWidth, s.FontSize)
 }
 
 // MarginRightAt — see MarginTopAt.
 func (s *computedStyle) MarginRightAt(containerWidth float64) float64 {
-	return resolveBoxSide(s.MarginRightLength, s.MarginRight, containerWidth, s.FontSize)
+	return resolveBoxSide(s.MarginRightLength, containerWidth, s.FontSize)
 }
 
 // MarginBottomAt — see MarginTopAt.
 func (s *computedStyle) MarginBottomAt(containerWidth float64) float64 {
-	return resolveBoxSide(s.MarginBottomLength, s.MarginBottom, containerWidth, s.FontSize)
+	return resolveBoxSide(s.MarginBottomLength, containerWidth, s.FontSize)
 }
 
 // MarginLeftAt — see MarginTopAt.
 func (s *computedStyle) MarginLeftAt(containerWidth float64) float64 {
-	return resolveBoxSide(s.MarginLeftLength, s.MarginLeft, containerWidth, s.FontSize)
+	return resolveBoxSide(s.MarginLeftLength, containerWidth, s.FontSize)
 }
 
 // PaddingTopAt — see MarginTopAt. Same contract for padding.
 func (s *computedStyle) PaddingTopAt(containerWidth float64) float64 {
-	return resolveBoxSide(s.PaddingTopLength, s.PaddingTop, containerWidth, s.FontSize)
+	return resolveBoxSide(s.PaddingTopLength, containerWidth, s.FontSize)
 }
 
 // PaddingRightAt — see MarginTopAt.
 func (s *computedStyle) PaddingRightAt(containerWidth float64) float64 {
-	return resolveBoxSide(s.PaddingRightLength, s.PaddingRight, containerWidth, s.FontSize)
+	return resolveBoxSide(s.PaddingRightLength, containerWidth, s.FontSize)
 }
 
 // PaddingBottomAt — see MarginTopAt.
 func (s *computedStyle) PaddingBottomAt(containerWidth float64) float64 {
-	return resolveBoxSide(s.PaddingBottomLength, s.PaddingBottom, containerWidth, s.FontSize)
+	return resolveBoxSide(s.PaddingBottomLength, containerWidth, s.FontSize)
 }
 
 // PaddingLeftAt — see MarginTopAt.
 func (s *computedStyle) PaddingLeftAt(containerWidth float64) float64 {
-	return resolveBoxSide(s.PaddingLeftLength, s.PaddingLeft, containerWidth, s.FontSize)
+	return resolveBoxSide(s.PaddingLeftLength, containerWidth, s.FontSize)
 }
 
-// resolveBoxSide picks the right resolution path for a margin/padding
-// side. When the parser stored a *cssLength (Phase 1+) we resolve it
-// against the supplied container; otherwise we fall back to the
-// legacy eager-resolved value, which preserves the historical
-// percent-becomes-zero behaviour for code paths that haven't yet
-// migrated.
-func resolveBoxSide(length *cssLength, legacy, containerWidth, fontSize float64) float64 {
-	if length != nil {
-		return length.toPoints(containerWidth, fontSize)
+// resolveBoxSide resolves a margin / padding side against the
+// supplied containing-block width. A nil length means the side was
+// not declared and resolves to 0.
+func resolveBoxSide(length *cssLength, containerWidth, fontSize float64) float64 {
+	if length == nil {
+		return 0
 	}
-	return legacy
+	return length.toPoints(containerWidth, fontSize)
 }

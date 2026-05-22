@@ -330,28 +330,28 @@ var cssProperties = []cssProperty{
 		Name: "padding-top", Category: "BoxModel",
 		Values: []string{"<length>", "<percentage>"},
 		Apply: func(s *computedStyle, value string) {
-			s.PaddingTop, s.PaddingTopLength = parseBoxSideBoth(value, s.FontSize)
+			s.PaddingTopLength = parseBoxSideLength(value, s.FontSize)
 		},
 	},
 	{
 		Name: "padding-right", Category: "BoxModel",
 		Values: []string{"<length>", "<percentage>"},
 		Apply: func(s *computedStyle, value string) {
-			s.PaddingRight, s.PaddingRightLength = parseBoxSideBoth(value, s.FontSize)
+			s.PaddingRightLength = parseBoxSideLength(value, s.FontSize)
 		},
 	},
 	{
 		Name: "padding-bottom", Category: "BoxModel",
 		Values: []string{"<length>", "<percentage>"},
 		Apply: func(s *computedStyle, value string) {
-			s.PaddingBottom, s.PaddingBottomLength = parseBoxSideBoth(value, s.FontSize)
+			s.PaddingBottomLength = parseBoxSideLength(value, s.FontSize)
 		},
 	},
 	{
 		Name: "padding-left", Category: "BoxModel",
 		Values: []string{"<length>", "<percentage>"},
 		Apply: func(s *computedStyle, value string) {
-			s.PaddingLeft, s.PaddingLeftLength = parseBoxSideBoth(value, s.FontSize)
+			s.PaddingLeftLength = parseBoxSideLength(value, s.FontSize)
 		},
 	},
 	{
@@ -359,7 +359,7 @@ var cssProperties = []cssProperty{
 		Values: []string{"<length>", "<percentage>"},
 		Notes:  "margin-top, margin-left, margin-right also accept `auto`; margin-bottom does not.",
 		Apply: func(s *computedStyle, value string) {
-			s.MarginBottom, s.MarginBottomLength = parseBoxSideBoth(value, s.FontSize)
+			s.MarginBottomLength = parseBoxSideLength(value, s.FontSize)
 		},
 	},
 	{
@@ -1058,8 +1058,6 @@ var cssProperties = []cssProperty{
 		Values: []string{"<length>", "<percentage>", "auto", "<1-4 of these>"},
 		Notes:  "auto keyword sets MarginTopAuto/LeftAuto/RightAuto per CSS shorthand position rules.",
 		Apply: func(s *computedStyle, value string) {
-			s.MarginTop, s.MarginRight, s.MarginBottom, s.MarginLeft =
-				parseMarginShorthand(value, s.FontSize)
 			s.MarginTopLength, s.MarginRightLength, s.MarginBottomLength, s.MarginLeftLength =
 				parseMarginShorthandLengths(value, s.FontSize)
 			// Use splitTopLevelFields (paren-aware) so calc()/min()/max()/
@@ -1114,7 +1112,7 @@ var cssProperties = []cssProperty{
 			if strings.TrimSpace(strings.ToLower(value)) == "auto" {
 				s.MarginTopAuto = true
 			} else {
-				s.MarginTop, s.MarginTopLength = parseBoxSideBoth(value, s.FontSize)
+				s.MarginTopLength = parseBoxSideLength(value, s.FontSize)
 			}
 		},
 	},
@@ -1125,7 +1123,7 @@ var cssProperties = []cssProperty{
 			if strings.TrimSpace(strings.ToLower(value)) == "auto" {
 				s.MarginRightAuto = true
 			} else {
-				s.MarginRight, s.MarginRightLength = parseBoxSideBoth(value, s.FontSize)
+				s.MarginRightLength = parseBoxSideLength(value, s.FontSize)
 			}
 		},
 	},
@@ -1136,7 +1134,7 @@ var cssProperties = []cssProperty{
 			if strings.TrimSpace(strings.ToLower(value)) == "auto" {
 				s.MarginLeftAuto = true
 			} else {
-				s.MarginLeft, s.MarginLeftLength = parseBoxSideBoth(value, s.FontSize)
+				s.MarginLeftLength = parseBoxSideLength(value, s.FontSize)
 			}
 		},
 	},
@@ -1144,8 +1142,6 @@ var cssProperties = []cssProperty{
 		Name: "padding", Category: "BoxModel",
 		Values: []string{"<length>", "<percentage>", "<1-4 of these>"},
 		Apply: func(s *computedStyle, value string) {
-			s.PaddingTop, s.PaddingRight, s.PaddingBottom, s.PaddingLeft =
-				parseMarginShorthand(value, s.FontSize)
 			s.PaddingTopLength, s.PaddingRightLength, s.PaddingBottomLength, s.PaddingLeftLength =
 				parseMarginShorthandLengths(value, s.FontSize)
 		},

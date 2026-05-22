@@ -718,12 +718,15 @@ func TestCSSPropertyParitySnapshot(t *testing.T) {
 			},
 		},
 		{
-			// padding shorthand fans to 4 sides. Px → pt at 0.75 ratio.
+			// padding shorthand fans to 4 sides. Px → pt at 0.75 ratio
+			// resolves through PaddingXxxAt; the stored *cssLength keeps
+			// the unresolved px form. Drive PaddingXxxAt(0) since px is
+			// container-independent.
 			name:     "padding/four-values",
 			property: "padding", value: "1px 2px 3px 4px", fontSize: 12,
 			expectField: func(s *computedStyle) bool {
-				return s.PaddingTop == 0.75 && s.PaddingRight == 1.5 &&
-					s.PaddingBottom == 2.25 && s.PaddingLeft == 3
+				return s.PaddingTopAt(0) == 0.75 && s.PaddingRightAt(0) == 1.5 &&
+					s.PaddingBottomAt(0) == 2.25 && s.PaddingLeftAt(0) == 3
 			},
 		},
 
@@ -770,7 +773,7 @@ func TestCSSPropertyParitySnapshot(t *testing.T) {
 		{
 			name:     "padding-top/8px",
 			property: "padding-top", value: "8px", fontSize: 12,
-			expectField: func(s *computedStyle) bool { return s.PaddingTop == 6 },
+			expectField: func(s *computedStyle) bool { return s.PaddingTopAt(0) == 6 },
 		},
 		{
 			name:     "margin-top/auto",
@@ -780,7 +783,7 @@ func TestCSSPropertyParitySnapshot(t *testing.T) {
 		{
 			name:     "margin-bottom/16px",
 			property: "margin-bottom", value: "16px", fontSize: 12,
-			expectField: func(s *computedStyle) bool { return s.MarginBottom == 12 },
+			expectField: func(s *computedStyle) bool { return s.MarginBottomAt(0) == 12 },
 		},
 
 		// Borders individual fields

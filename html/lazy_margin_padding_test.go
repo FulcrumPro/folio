@@ -6,48 +6,38 @@ package html
 import (
 	"math"
 	"testing"
+
+	gohtml "golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
-// TestParseBoxSideBothReturnsBothForms is the parser-side contract
-// for the #269 Phase 1 sibling-field migration. Every margin/padding
-// Apply must produce BOTH:
+// TestParseBoxSideLengthPreservesUnit is the parser-side contract
+// for the #269 lazy-resolution migration. Margin / padding Apply
+// sites store the *cssLength unresolved so that percent / calc /
+// min / max / clamp trees can be resolved against the containing
+// block at consumer time. The unit and value must round-trip from
+// the input declaration onto the stored cssLength.
 //
-//   - a legacy float64 resolved against zero (the existing 0pt-on-
-//     percent behaviour) for back-compat with unmigrated consumers
-//   - an unresolved *cssLength that preserves the percent / calc tree
-//     for layout-time resolution against the container width
-//
-// "auto" / unparseable input still yields (0, nil) so callers can
-// branch on the *cssLength being nil.
-func TestParseBoxSideBothReturnsBothForms(t *testing.T) {
+// "auto" / unparseable input yields nil so callers can branch on
+// "absent declaration".
+func TestParseBoxSideLengthPreservesUnit(t *testing.T) {
 	cases := []struct {
-		name       string
-		input      string
-		fontSize   float64
-		wantLegacy float64
-		wantUnit   string  // expected cssLength.Unit; "" means nil expected
-		wantValue  float64 // for non-nil, expected cssLength.Value
+		name      string
+		input     string
+		fontSize  float64
+		wantUnit  string  // "" means nil expected
+		wantValue float64 // for non-nil, expected cssLength.Value
 	}{
-		{"plain points", "10pt", 12, 10, "pt", 10},
-		// 16px → 12pt at 0.75 px/pt.
-		{"plain pixels", "16px", 12, 12, "px", 16},
-		// percent: legacy resolves against 0 (the bug); sibling
-		// retains the 50% form for layout-time resolution.
-		{"percent", "50%", 12, 0, "%", 50},
-		// em on the legacy path resolves against fontSize, so 1em
-		// at 12pt → 12pt. The sibling carries Unit "em" so a future
-		// consumer can re-resolve.
-		{"em", "1.5em", 12, 18, "em", 1.5},
-		// Unparseable inputs return (0, nil).
-		{"empty", "", 12, 0, "", 0},
-		{"auto keyword (parseLength rejects)", "auto", 12, 0, "", 0},
+		{"plain points", "10pt", 12, "pt", 10},
+		{"plain pixels", "16px", 12, "px", 16},
+		{"percent", "50%", 12, "%", 50},
+		{"em", "1.5em", 12, "em", 1.5},
+		{"empty", "", 12, "", 0},
+		{"auto keyword (parseLength rejects)", "auto", 12, "", 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			gotLegacy, gotLength := parseBoxSideBoth(tc.input, tc.fontSize)
-			if math.Abs(gotLegacy-tc.wantLegacy) > 0.001 {
-				t.Errorf("legacy float64 = %v, want %v", gotLegacy, tc.wantLegacy)
-			}
+			gotLength := parseBoxSideLength(tc.input, tc.fontSize)
 			if tc.wantUnit == "" {
 				if gotLength != nil {
 					t.Errorf("cssLength = %+v, want nil", gotLength)
@@ -117,9 +107,9 @@ func TestMarginTopAtResolvesPercentAgainstContainer(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(h.name+"/"+tc.name, func(t *testing.T) {
 				s := &computedStyle{FontSize: tc.fontSize}
-				_, length := parseBoxSideBoth(tc.value, tc.fontSize)
+				length := parseBoxSideLength(tc.value, tc.fontSize)
 				if length == nil {
-					t.Fatalf("parseBoxSideBoth returned nil cssLength for %q", tc.value)
+					t.Fatalf("parseBoxSideLength returned nil cssLength for %q", tc.value)
 				}
 				h.set(s, length)
 				got := h.helper(s, tc.containerWidth)
@@ -131,21 +121,15 @@ func TestMarginTopAtResolvesPercentAgainstContainer(t *testing.T) {
 	}
 }
 
-// TestMarginTopAtFallsBackToLegacyWhenLengthAbsent guards the Phase 1
-// migration invariant: a computedStyle that has only the legacy
-// float64 populated (e.g. heading default margins set in
-// converter_style.go, page-level margins from html/page.go, any
-// future code path that bypasses the Apply registry) must still
-// return the legacy value through the helper. Without this fallback
-// Phase 2 consumers would read zero for every unmigrated setter.
-func TestMarginTopAtFallsBackToLegacyWhenLengthAbsent(t *testing.T) {
-	s := &computedStyle{
-		FontSize:  12,
-		MarginTop: 42, // legacy float64 set directly
-		// MarginTopLength deliberately left nil.
-	}
-	if got := s.MarginTopAt(100); math.Abs(got-42) > 0.001 {
-		t.Errorf("helper did not fall back to legacy MarginTop: got %v, want 42", got)
+// TestMarginTopAtReturnsZeroWhenLengthAbsent guards the post-Phase 4
+// contract: with no declaration (MarginTopLength nil), the helper
+// returns 0. Pre-Phase 4 the helper fell back to a legacy float64;
+// that fallback path is gone and a nil sibling is now the sole
+// "absent declaration" signal.
+func TestMarginTopAtReturnsZeroWhenLengthAbsent(t *testing.T) {
+	s := &computedStyle{FontSize: 12}
+	if got := s.MarginTopAt(100); math.Abs(got) > 0.001 {
+		t.Errorf("helper with nil sibling returned %v, want 0", got)
 	}
 }
 
@@ -231,32 +215,31 @@ func TestMarginShorthandLengthExpansionOrder(t *testing.T) {
 	}
 }
 
-// TestAllHelpersFallBackToLegacyWhenLengthAbsent extends the
-// MarginTop-only fallback test to all eight helpers. A regression
-// where (say) MarginRightAt accidentally reads MarginTop's legacy
-// field would slip through the original single-side test.
-func TestAllHelpersFallBackToLegacyWhenLengthAbsent(t *testing.T) {
+// TestAllHelpersReturnZeroWhenLengthAbsent pins the post-Phase 4
+// contract for every one of the eight helpers: a nil sibling reads
+// as 0pt. A regression where (say) MarginRightAt accidentally
+// reads a different side's sibling would slip through a single-
+// side test.
+func TestAllHelpersReturnZeroWhenLengthAbsent(t *testing.T) {
 	type sideHelper func(*computedStyle, float64) float64
 	cases := []struct {
 		name   string
-		set    func(*computedStyle, float64)
 		helper sideHelper
 	}{
-		{"MarginTop", func(s *computedStyle, v float64) { s.MarginTop = v }, (*computedStyle).MarginTopAt},
-		{"MarginRight", func(s *computedStyle, v float64) { s.MarginRight = v }, (*computedStyle).MarginRightAt},
-		{"MarginBottom", func(s *computedStyle, v float64) { s.MarginBottom = v }, (*computedStyle).MarginBottomAt},
-		{"MarginLeft", func(s *computedStyle, v float64) { s.MarginLeft = v }, (*computedStyle).MarginLeftAt},
-		{"PaddingTop", func(s *computedStyle, v float64) { s.PaddingTop = v }, (*computedStyle).PaddingTopAt},
-		{"PaddingRight", func(s *computedStyle, v float64) { s.PaddingRight = v }, (*computedStyle).PaddingRightAt},
-		{"PaddingBottom", func(s *computedStyle, v float64) { s.PaddingBottom = v }, (*computedStyle).PaddingBottomAt},
-		{"PaddingLeft", func(s *computedStyle, v float64) { s.PaddingLeft = v }, (*computedStyle).PaddingLeftAt},
+		{"MarginTop", (*computedStyle).MarginTopAt},
+		{"MarginRight", (*computedStyle).MarginRightAt},
+		{"MarginBottom", (*computedStyle).MarginBottomAt},
+		{"MarginLeft", (*computedStyle).MarginLeftAt},
+		{"PaddingTop", (*computedStyle).PaddingTopAt},
+		{"PaddingRight", (*computedStyle).PaddingRightAt},
+		{"PaddingBottom", (*computedStyle).PaddingBottomAt},
+		{"PaddingLeft", (*computedStyle).PaddingLeftAt},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &computedStyle{FontSize: 12}
-			tc.set(s, 42)
-			if got := tc.helper(s, 100); math.Abs(got-42) > 0.001 {
-				t.Errorf("%s fallback returned %v, want 42", tc.name, got)
+			if got := tc.helper(s, 100); math.Abs(got) > 0.001 {
+				t.Errorf("%s with nil sibling returned %v, want 0", tc.name, got)
 			}
 		})
 	}
@@ -355,12 +338,11 @@ func TestPercentMarginResolvesAgainstContainerEndToEnd(t *testing.T) {
 // TestNarrowContainerWidthSubtractsPercentPadding closes a Phase 2
 // test-coverage gap: the bug-closing assertions above call helpers
 // directly, but the migrated consumer narrowContainerWidth has no
-// dedicated test. A regression that reverted the
+// dedicated test. A regression that bypassed the
 // `style.PaddingLeftAt(prev) + style.PaddingRightAt(prev)`
-// subtraction to the legacy `style.PaddingLeft + style.PaddingRight`
-// would silently re-introduce the 0pt-padding bug — narrowContainer
-// would shrink by 0 for percent padding and downstream layout would
-// give children a too-large container.
+// subtraction would silently re-introduce the 0pt-padding bug —
+// narrowContainer would shrink by 0 for percent padding and
+// downstream layout would give children a too-large container.
 //
 // The test sets padding: 25% on a style, drives narrowContainerWidth
 // with a 200pt parent container, and asserts c.containerWidth dropped
@@ -383,16 +365,13 @@ func TestNarrowContainerWidthSubtractsPercentPadding(t *testing.T) {
 
 // TestApplyDivStylesUsesPercentMargin exercises the migrated
 // applyDivStyles directly. The function reads style.MarginTopAt
-// against the supplied containerWidth — a regression that reverted
-// to style.MarginTop (legacy float64) would yield 0 for percent
-// declarations.
+// against the supplied containerWidth — a regression that bypassed
+// the helper would yield 0 for percent declarations.
 //
 // Cannot inspect Div.SpaceBefore directly (unexported field), so
-// the test asserts the equivalent: after applyDivStyles, calling
-// MarginTopAt with the same containerWidth must give a non-zero
-// answer, AND a hypothetical revert to legacy float64 would yield
-// 0 (verified by reading style.MarginTop after the parser stored
-// 0 for percent).
+// the test asserts the equivalent: after applyProperty stores the
+// parsed *cssLength, calling MarginTopAt with the container width
+// must produce the correct percent-resolved value.
 func TestApplyDivStylesUsesPercentMargin(t *testing.T) {
 	c := &converter{opts: (&Options{}).defaults()}
 	style := defaultStyle()
@@ -402,14 +381,6 @@ func TestApplyDivStylesUsesPercentMargin(t *testing.T) {
 
 	const containerWidth = 200
 
-	// Sanity precondition: legacy float64 must be 0 here, otherwise
-	// the test isn't actually exercising the lazy-resolution path.
-	if style.MarginTop != 0 {
-		t.Fatalf("test precondition broken: parser unexpectedly resolved percent to non-zero float64 (%v)", style.MarginTop)
-	}
-
-	// Phase 2 contract: applyDivStyles's reads against containerWidth
-	// must produce the correct percent-resolved value.
 	if got := style.MarginTopAt(containerWidth); math.Abs(got-100) > 0.001 {
 		t.Errorf("MarginTopAt(200) = %v, want 100; applyDivStyles would have emitted %v as SpaceBefore", got, got)
 	}
@@ -532,12 +503,12 @@ func TestConvertFlexResolvesMarginAgainstParent(t *testing.T) {
 	}
 }
 
-// TestHasMarginRecognizesPercent verifies the Phase 2 hasMargin/
-// hasPadding update: a `margin: 50%` declaration must make
-// hasMargin() return true, even though the legacy float64 fields
-// all hold 0pt (since parseBoxSide resolves percent against zero).
-// Without this the wrapper-emission fast paths in convertParagraph,
-// convertHeading, convertBlock would skip percent-margin elements.
+// TestHasMarginRecognizesPercent pins the hasMargin / hasPadding
+// contract: a `margin: 50%` declaration must make hasMargin() return
+// true. Pre-Phase 2 hasMargin only read the legacy float64 (which
+// the parser stored as 0pt for percent), so wrapper-emission fast
+// paths in convertParagraph, convertHeading, convertBlock would
+// skip percent-margin elements.
 func TestHasMarginRecognizesPercent(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -559,31 +530,30 @@ func TestHasMarginRecognizesPercent(t *testing.T) {
 	}
 }
 
-// TestZeroValueLengthResolvesToZero distinguishes a sibling of
-// {0, "px"} (resolved value 0) from a nil sibling (fall back to
-// legacy). A future optimization that treated zero-valued siblings
-// as "absent" would silently change behaviour for documents using
-// `margin-top: 0%` to reset an inherited margin.
+// TestZeroValueLengthResolvesToZero exercises the contract that a
+// stored zero-valued *cssLength (e.g. from `margin-top: 0%`)
+// resolves to 0pt — not nil-treated, not coerced. Distinguishes
+// the "declared zero" case from an "absent declaration" (nil
+// sibling) which also returns 0. Both legitimately resolve to 0pt
+// post-Phase 4; this test pins the parser-side path.
 func TestZeroValueLengthResolvesToZero(t *testing.T) {
-	s := &computedStyle{
-		FontSize:  12,
-		MarginTop: 42, // legacy says 42 — fallback would return this
-	}
-	_, length := parseBoxSideBoth("0%", 12)
+	s := &computedStyle{FontSize: 12}
+	length := parseBoxSideLength("0%", 12)
 	if length == nil {
-		t.Fatal("parseBoxSideBoth(0%) returned nil; expected zero-valued sibling")
+		t.Fatal("parseBoxSideLength(0%) returned nil; expected zero-valued sibling")
 	}
 	s.MarginTopLength = length
 	if got := s.MarginTopAt(200); math.Abs(got) > 0.001 {
-		t.Errorf("MarginTopAt with 0%% sibling returned %v, want 0 (must not fall back to legacy 42)", got)
+		t.Errorf("MarginTopAt with 0%% sibling returned %v, want 0", got)
 	}
 }
 
 // TestConvertPopulatesLengthSiblings verifies the end-to-end wire from
 // the CSS Apply registry: a margin / padding declaration in a
-// stylesheet should populate BOTH the legacy float64 AND the
-// *cssLength sibling on the resulting computedStyle. Without this,
-// Phase 2 consumer migrations would have nothing to read.
+// stylesheet populates the *cssLength sibling on the resulting
+// computedStyle. Helper reads via MarginTopAt / PaddingTopAt
+// then resolve against the actual containing block at consumer
+// time.
 //
 // The test reaches into the converter's internal style-application
 // path (computeStyle on a tiny synthetic node) rather than driving
@@ -662,5 +632,110 @@ func TestConvertPopulatesLengthSiblings(t *testing.T) {
 			}
 			tc.check(t, &style)
 		})
+	}
+}
+
+// TestHeadingDefaultMarginsSurviveMigration pins the heading-level
+// default top/bottom margins (h1..h6) that applyTagDefaults installs.
+// Phase 4 swapped each `style.MarginTop = N` write to
+// `style.MarginTopLength = &cssLength{Value: N, Unit: "pt"}` — a
+// subtle helper-side bug (wrong Unit string, wrong field, an off-by-
+// one transposition between Top and Bottom) would shift heading
+// metrics by fractions of a point and silently break document
+// rendering across every example. The test fails loudly if any
+// heading default no longer resolves to its documented value.
+//
+// The container width argument is irrelevant for pt-typed values but
+// the helper requires one; 100pt is arbitrary.
+func TestHeadingDefaultMarginsSurviveMigration(t *testing.T) {
+	cases := []struct {
+		tag    atom.Atom
+		name   string
+		top    float64
+		bottom float64
+	}{
+		{atom.H1, "h1", 16.08, 16.08},
+		{atom.H2, "h2", 14.94, 14.94},
+		{atom.H3, "h3", 14.04, 14.04},
+		{atom.H4, "h4", 16.02, 16.02},
+		{atom.H5, "h5", 16.60, 16.60},
+		{atom.H6, "h6", 18.62, 18.62},
+	}
+	c := &converter{opts: (&Options{}).defaults()}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			n := &gohtml.Node{Type: gohtml.ElementNode, DataAtom: tc.tag}
+			style := defaultStyle()
+			c.applyTagDefaults(n, &style)
+			if got := style.MarginTopAt(100); math.Abs(got-tc.top) > 0.001 {
+				t.Errorf("%s MarginTopAt(100) = %v, want %v", tc.name, got, tc.top)
+			}
+			if got := style.MarginBottomAt(100); math.Abs(got-tc.bottom) > 0.001 {
+				t.Errorf("%s MarginBottomAt(100) = %v, want %v", tc.name, got, tc.bottom)
+			}
+		})
+	}
+}
+
+// TestNonHeadingDefaultMarginsSurviveMigration extends the determinism
+// pin from TestHeadingDefaultMarginsSurviveMigration to every other
+// block-level tag whose applyTagDefaults branch installs a top/bottom
+// margin default. A subagent test review noted that the heading test
+// covered h1-h6 only, leaving p, pre, hr, ul, ol, blockquote, dl,
+// figure and fieldset unpinned. A Phase 4 regression that mistyped a
+// Unit string or wrote to the wrong sibling field on any of these
+// would shift the documented browser-default vertical rhythm without
+// any test catching it.
+//
+// The pt values mirror the literals stored at converter_style.go
+// pre-Phase-4; the migration preserved them verbatim and a future
+// rewrite must continue to.
+func TestNonHeadingDefaultMarginsSurviveMigration(t *testing.T) {
+	cases := []struct {
+		tag    atom.Atom
+		name   string
+		top    float64
+		bottom float64
+	}{
+		{atom.P, "p", 12, 12},
+		{atom.Pre, "pre", 12, 12},
+		{atom.Hr, "hr", 6, 6},
+		{atom.Ul, "ul", 12, 12},
+		{atom.Ol, "ol", 12, 12},
+		{atom.Blockquote, "blockquote", 12, 12},
+		{atom.Dl, "dl", 12, 12},
+		{atom.Figure, "figure", 12, 12},
+		{atom.Fieldset, "fieldset", 9, 9},
+	}
+	c := &converter{opts: (&Options{}).defaults()}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			n := &gohtml.Node{Type: gohtml.ElementNode, DataAtom: tc.tag}
+			style := defaultStyle()
+			c.applyTagDefaults(n, &style)
+			if got := style.MarginTopAt(100); math.Abs(got-tc.top) > 0.001 {
+				t.Errorf("%s MarginTopAt(100) = %v, want %v", tc.name, got, tc.top)
+			}
+			if got := style.MarginBottomAt(100); math.Abs(got-tc.bottom) > 0.001 {
+				t.Errorf("%s MarginBottomAt(100) = %v, want %v", tc.name, got, tc.bottom)
+			}
+		})
+	}
+}
+
+// TestDdDefaultMarginLeftSurvivesMigration pins the <dd> default
+// MarginLeft — the only MarginLeftLength default that
+// applyTagDefaults installs anywhere in converter_style.go. Without
+// this pin a regression that dropped the dd branch (or rewrote the
+// `MarginLeftLength` write to the wrong side) would silently flatten
+// definition-list indentation, and the heading / top-bottom tests
+// above would not catch it (they only inspect Top and Bottom).
+func TestDdDefaultMarginLeftSurvivesMigration(t *testing.T) {
+	c := &converter{opts: (&Options{}).defaults()}
+	n := &gohtml.Node{Type: gohtml.ElementNode, DataAtom: atom.Dd}
+	style := defaultStyle()
+	c.applyTagDefaults(n, &style)
+	if got := style.MarginLeftAt(100); math.Abs(got-30) > 0.001 {
+		t.Errorf("dd MarginLeftAt(100) = %v, want 30", got)
 	}
 }

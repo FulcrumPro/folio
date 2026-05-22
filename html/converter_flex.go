@@ -181,9 +181,17 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 			}
 		}
 
+		// Resolve the child's margins against the flex container's
+		// content-box width (the narrowed c.containerWidth). The
+		// child's containing block is the flex's content box per
+		// CSS Flexbox §4.
+		childMT := childStyle.MarginTopAt(c.containerWidth)
+		childMR := childStyle.MarginRightAt(c.containerWidth)
+		childMB := childStyle.MarginBottomAt(c.containerWidth)
+		childML := childStyle.MarginLeftAt(c.containerWidth)
+
 		// Check if child has any margin (including negative) that needs FlexItem handling.
-		hasMargins := childStyle.MarginTop != 0 || childStyle.MarginBottom != 0 ||
-			childStyle.MarginLeft != 0 || childStyle.MarginRight != 0
+		hasMargins := childMT != 0 || childMB != 0 || childML != 0 || childMR != 0
 
 		needsItem := childStyle.FlexGrow > 0 || childStyle.FlexShrink != 1 ||
 			effectiveBasis != nil || (childStyle.AlignSelf != "" && childStyle.AlignSelf != "auto") ||
@@ -216,8 +224,7 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 				item.SetMarginLeftAuto()
 			}
 			if hasMargins {
-				item.SetMargins(childStyle.MarginTop, childStyle.MarginRight,
-					childStyle.MarginBottom, childStyle.MarginLeft)
+				item.SetMargins(childMT, childMR, childMB, childML)
 				// Clear SpaceBefore/SpaceAfter on the element since the FlexItem's
 				// margins handle vertical spacing — otherwise margins are doubled.
 				if f, ok := elem.(*layout.Flex); ok {

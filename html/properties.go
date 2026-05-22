@@ -788,13 +788,13 @@ func parseDisplay(value string) string {
 	}
 }
 
-// parseBoxSide parses a single side of margin/padding (e.g. "10px").
-//
-// Returns the resolved-against-zero float64 value. Equivalent to the
-// first half of parseBoxSideBoth — kept for the border-width /
-// outline-width Apply sites where the legacy float64 is the only
-// stored form. Margin / padding Apply sites should use parseBoxSideBoth
-// so the *cssLength sibling is populated for the Phase 2 migration.
+// parseBoxSide parses a single length value into points, eagerly
+// resolving percent against zero. Used by border-width / outline-
+// width / column-gap / row-gap / etc. — Apply sites that store a
+// float64 and don't need layout-time re-resolution. Margin / padding
+// Apply sites use parseBoxSideLength so the *cssLength is preserved
+// for resolution against the containing block at consumer time
+// (#269).
 func parseBoxSide(value string, fontSize float64) float64 {
 	l := parseLength(value)
 	if l == nil {
@@ -803,52 +803,47 @@ func parseBoxSide(value string, fontSize float64) float64 {
 	return l.toPoints(0, fontSize)
 }
 
-// parseBoxSideBoth parses a single side of margin/padding and returns
-// BOTH forms: the legacy eagerly-resolved float64 (for back-compat
-// with unmigrated consumers) and the unresolved *cssLength (for the
-// Phase 2 migration toward layout-time resolution against the
-// containing block). #269 Phase 1.
+// parseBoxSideLength parses a single side of margin/padding and
+// returns the unresolved *cssLength so the percent / calc / min /
+// max / clamp tree can be resolved against the containing block at
+// consumer time (#269). A nil parseLength result (e.g. "auto" or
+// unparseable input) yields nil.
 //
-// A nil parseLength result (e.g. "auto" or unparseable input) yields
-// (0, nil) — callers that need to distinguish "absent" from "0pt"
-// can branch on the *cssLength being nil.
-func parseBoxSideBoth(value string, fontSize float64) (float64, *cssLength) {
-	l := parseLength(value)
-	if l == nil {
-		return 0, nil
-	}
-	return l.toPoints(0, fontSize), l
+// The fontSize parameter is accepted for symmetry with parseBoxSide
+// (which resolves px / em eagerly) but is not currently consulted —
+// parseLength only inspects the value's unit token. It's kept on the
+// signature so a future change that needs fontSize at parse time
+// doesn't require a call-site sweep.
+func parseBoxSideLength(value string, fontSize float64) *cssLength {
+	_ = fontSize
+	return parseLength(value)
 }
 
 // parseMarginShorthandLengths parses the CSS margin/padding shorthand
-// into four *cssLength values (top/right/bottom/left) using the same
-// 1/2/3/4-token expansion rules as parseMarginShorthand. The
-// *cssLength preserves percent / calc / min / max / clamp trees for
-// layout-time resolution against the containing block.
-//
-// Pairs with parseMarginShorthand at every call site — the legacy
-// float64s drive unmigrated consumers; the *cssLength values
-// populate the Phase 1 sibling fields.
+// into four *cssLength values (top/right/bottom/left) using the
+// standard 1/2/3/4-token expansion rules. The *cssLength preserves
+// percent / calc / min / max / clamp trees for layout-time
+// resolution against the containing block.
 func parseMarginShorthandLengths(value string, fontSize float64) (*cssLength, *cssLength, *cssLength, *cssLength) {
 	parts := splitTopLevelFields(value)
 	switch len(parts) {
 	case 1:
-		_, v := parseBoxSideBoth(parts[0], fontSize)
+		v := parseBoxSideLength(parts[0], fontSize)
 		return v, v, v, v
 	case 2:
-		_, tb := parseBoxSideBoth(parts[0], fontSize)
-		_, lr := parseBoxSideBoth(parts[1], fontSize)
+		tb := parseBoxSideLength(parts[0], fontSize)
+		lr := parseBoxSideLength(parts[1], fontSize)
 		return tb, lr, tb, lr
 	case 3:
-		_, tt := parseBoxSideBoth(parts[0], fontSize)
-		_, lr := parseBoxSideBoth(parts[1], fontSize)
-		_, bb := parseBoxSideBoth(parts[2], fontSize)
+		tt := parseBoxSideLength(parts[0], fontSize)
+		lr := parseBoxSideLength(parts[1], fontSize)
+		bb := parseBoxSideLength(parts[2], fontSize)
 		return tt, lr, bb, lr
 	case 4:
-		_, tt := parseBoxSideBoth(parts[0], fontSize)
-		_, rr := parseBoxSideBoth(parts[1], fontSize)
-		_, bb := parseBoxSideBoth(parts[2], fontSize)
-		_, ll := parseBoxSideBoth(parts[3], fontSize)
+		tt := parseBoxSideLength(parts[0], fontSize)
+		rr := parseBoxSideLength(parts[1], fontSize)
+		bb := parseBoxSideLength(parts[2], fontSize)
+		ll := parseBoxSideLength(parts[3], fontSize)
 		return tt, rr, bb, ll
 	default:
 		return nil, nil, nil, nil

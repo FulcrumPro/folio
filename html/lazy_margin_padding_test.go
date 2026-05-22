@@ -676,3 +676,66 @@ func TestHeadingDefaultMarginsSurviveMigration(t *testing.T) {
 		})
 	}
 }
+
+// TestNonHeadingDefaultMarginsSurviveMigration extends the determinism
+// pin from TestHeadingDefaultMarginsSurviveMigration to every other
+// block-level tag whose applyTagDefaults branch installs a top/bottom
+// margin default. A subagent test review noted that the heading test
+// covered h1-h6 only, leaving p, pre, hr, ul, ol, blockquote, dl,
+// figure and fieldset unpinned. A Phase 4 regression that mistyped a
+// Unit string or wrote to the wrong sibling field on any of these
+// would shift the documented browser-default vertical rhythm without
+// any test catching it.
+//
+// The pt values mirror the literals stored at converter_style.go
+// pre-Phase-4; the migration preserved them verbatim and a future
+// rewrite must continue to.
+func TestNonHeadingDefaultMarginsSurviveMigration(t *testing.T) {
+	cases := []struct {
+		tag    atom.Atom
+		name   string
+		top    float64
+		bottom float64
+	}{
+		{atom.P, "p", 12, 12},
+		{atom.Pre, "pre", 12, 12},
+		{atom.Hr, "hr", 6, 6},
+		{atom.Ul, "ul", 12, 12},
+		{atom.Ol, "ol", 12, 12},
+		{atom.Blockquote, "blockquote", 12, 12},
+		{atom.Dl, "dl", 12, 12},
+		{atom.Figure, "figure", 12, 12},
+		{atom.Fieldset, "fieldset", 9, 9},
+	}
+	c := &converter{opts: (&Options{}).defaults()}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			n := &gohtml.Node{Type: gohtml.ElementNode, DataAtom: tc.tag}
+			style := defaultStyle()
+			c.applyTagDefaults(n, &style)
+			if got := style.MarginTopAt(100); math.Abs(got-tc.top) > 0.001 {
+				t.Errorf("%s MarginTopAt(100) = %v, want %v", tc.name, got, tc.top)
+			}
+			if got := style.MarginBottomAt(100); math.Abs(got-tc.bottom) > 0.001 {
+				t.Errorf("%s MarginBottomAt(100) = %v, want %v", tc.name, got, tc.bottom)
+			}
+		})
+	}
+}
+
+// TestDdDefaultMarginLeftSurvivesMigration pins the <dd> default
+// MarginLeft — the only MarginLeftLength default that
+// applyTagDefaults installs anywhere in converter_style.go. Without
+// this pin a regression that dropped the dd branch (or rewrote the
+// `MarginLeftLength` write to the wrong side) would silently flatten
+// definition-list indentation, and the heading / top-bottom tests
+// above would not catch it (they only inspect Top and Bottom).
+func TestDdDefaultMarginLeftSurvivesMigration(t *testing.T) {
+	c := &converter{opts: (&Options{}).defaults()}
+	n := &gohtml.Node{Type: gohtml.ElementNode, DataAtom: atom.Dd}
+	style := defaultStyle()
+	c.applyTagDefaults(n, &style)
+	if got := style.MarginLeftAt(100); math.Abs(got-30) > 0.001 {
+		t.Errorf("dd MarginLeftAt(100) = %v, want 30", got)
+	}
+}

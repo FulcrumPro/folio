@@ -149,6 +149,193 @@ func TestMarginTopAtFallsBackToLegacyWhenLengthAbsent(t *testing.T) {
 	}
 }
 
+// TestApplyPopulatesLengthSiblingsAllSides closes the test review's
+// gap: TestConvertPopulatesLengthSiblings exercises only 3 of 9
+// Apply registry entries (margin shorthand, margin-top, padding
+// shorthand). A regression that dropped the sibling write on any of
+// the other six (margin-right/left/bottom, padding-top/right/bottom/
+// left) would not have been caught. This table covers all eight
+// individual properties — each declaration must populate its sibling
+// AND match Unit / Value of the declared input.
+func TestApplyPopulatesLengthSiblingsAllSides(t *testing.T) {
+	cases := []struct {
+		prop  string
+		value string
+		read  func(*computedStyle) *cssLength
+		wantU string
+		wantV float64
+	}{
+		{"margin-top", "50%", func(s *computedStyle) *cssLength { return s.MarginTopLength }, "%", 50},
+		{"margin-right", "25%", func(s *computedStyle) *cssLength { return s.MarginRightLength }, "%", 25},
+		{"margin-bottom", "10%", func(s *computedStyle) *cssLength { return s.MarginBottomLength }, "%", 10},
+		{"margin-left", "5%", func(s *computedStyle) *cssLength { return s.MarginLeftLength }, "%", 5},
+		{"padding-top", "33%", func(s *computedStyle) *cssLength { return s.PaddingTopLength }, "%", 33},
+		{"padding-right", "20%", func(s *computedStyle) *cssLength { return s.PaddingRightLength }, "%", 20},
+		{"padding-bottom", "15%", func(s *computedStyle) *cssLength { return s.PaddingBottomLength }, "%", 15},
+		{"padding-left", "8%", func(s *computedStyle) *cssLength { return s.PaddingLeftLength }, "%", 8},
+	}
+	for _, tc := range cases {
+		t.Run(tc.prop, func(t *testing.T) {
+			c := &converter{opts: (&Options{}).defaults()}
+			style := defaultStyle()
+			style.FontSize = 12
+			c.applyProperty(tc.prop, tc.value, &style)
+			got := tc.read(&style)
+			if got == nil {
+				t.Fatalf("%s did not populate sibling", tc.prop)
+			}
+			if got.Unit != tc.wantU || math.Abs(got.Value-tc.wantV) > 0.001 {
+				t.Errorf("%s sibling = {Value:%v Unit:%q}, want {Value:%v Unit:%q}",
+					tc.prop, got.Value, got.Unit, tc.wantV, tc.wantU)
+			}
+		})
+	}
+}
+
+// TestMarginShorthandLengthExpansionOrder pins the top/right/bottom/
+// left mapping the shorthand uses for 1/2/3/4 input tokens. A
+// transposition bug (e.g. 4-value mapping top→Top, right→Bottom,
+// bottom→Right, left→Left) would silently break documents using
+// 4-value shorthand. Today's TestConvertPopulatesLengthSiblings only
+// checks non-nil, so this gap is real.
+func TestMarginShorthandLengthExpansionOrder(t *testing.T) {
+	type quartet struct {
+		top, right, bottom, left float64
+	}
+	tests := []struct {
+		name  string
+		value string
+		want  quartet
+	}{
+		{"4 values map to top/right/bottom/left", "1% 2% 3% 4%", quartet{1, 2, 3, 4}},
+		{"3 values: top, lr, bottom", "1% 2% 3%", quartet{1, 2, 3, 2}},
+		{"2 values: tb, lr", "1% 2%", quartet{1, 2, 1, 2}},
+		{"1 value applies to all four", "5%", quartet{5, 5, 5, 5}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &converter{opts: (&Options{}).defaults()}
+			style := defaultStyle()
+			style.FontSize = 12
+			c.applyProperty("margin", tc.value, &style)
+			got := quartet{
+				top:    style.MarginTopLength.Value,
+				right:  style.MarginRightLength.Value,
+				bottom: style.MarginBottomLength.Value,
+				left:   style.MarginLeftLength.Value,
+			}
+			if got != tc.want {
+				t.Errorf("got %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAllHelpersFallBackToLegacyWhenLengthAbsent extends the
+// MarginTop-only fallback test to all eight helpers. A regression
+// where (say) MarginRightAt accidentally reads MarginTop's legacy
+// field would slip through the original single-side test.
+func TestAllHelpersFallBackToLegacyWhenLengthAbsent(t *testing.T) {
+	type sideHelper func(*computedStyle, float64) float64
+	cases := []struct {
+		name   string
+		set    func(*computedStyle, float64)
+		helper sideHelper
+	}{
+		{"MarginTop", func(s *computedStyle, v float64) { s.MarginTop = v }, (*computedStyle).MarginTopAt},
+		{"MarginRight", func(s *computedStyle, v float64) { s.MarginRight = v }, (*computedStyle).MarginRightAt},
+		{"MarginBottom", func(s *computedStyle, v float64) { s.MarginBottom = v }, (*computedStyle).MarginBottomAt},
+		{"MarginLeft", func(s *computedStyle, v float64) { s.MarginLeft = v }, (*computedStyle).MarginLeftAt},
+		{"PaddingTop", func(s *computedStyle, v float64) { s.PaddingTop = v }, (*computedStyle).PaddingTopAt},
+		{"PaddingRight", func(s *computedStyle, v float64) { s.PaddingRight = v }, (*computedStyle).PaddingRightAt},
+		{"PaddingBottom", func(s *computedStyle, v float64) { s.PaddingBottom = v }, (*computedStyle).PaddingBottomAt},
+		{"PaddingLeft", func(s *computedStyle, v float64) { s.PaddingLeft = v }, (*computedStyle).PaddingLeftAt},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &computedStyle{FontSize: 12}
+			tc.set(s, 42)
+			if got := tc.helper(s, 100); math.Abs(got-42) > 0.001 {
+				t.Errorf("%s fallback returned %v, want 42", tc.name, got)
+			}
+		})
+	}
+}
+
+// TestApplyReplacesLengthSiblingOnReApply pins cascade-replay
+// semantics: a stylesheet that declares margin-top twice — once with
+// a percent then with a plain length — must end up with the SECOND
+// declaration's sibling, not the first. A regression where Apply
+// kept the original sibling (e.g. "only-set-if-nil" guard) would
+// silently keep the percent in the cascade-replayed style.
+func TestApplyReplacesLengthSiblingOnReApply(t *testing.T) {
+	c := &converter{opts: (&Options{}).defaults()}
+	style := defaultStyle()
+	style.FontSize = 12
+	c.applyProperty("margin-top", "50%", &style)
+	if style.MarginTopLength == nil || style.MarginTopLength.Unit != "%" {
+		t.Fatal("first Apply did not set %-unit sibling")
+	}
+	c.applyProperty("margin-top", "10px", &style)
+	if style.MarginTopLength == nil {
+		t.Fatal("second Apply nil'd the sibling")
+	}
+	if style.MarginTopLength.Unit != "px" || math.Abs(style.MarginTopLength.Value-10) > 0.001 {
+		t.Errorf("second Apply did not replace sibling: got {Value:%v Unit:%q}, want {Value:10 Unit:px}",
+			style.MarginTopLength.Value, style.MarginTopLength.Unit)
+	}
+}
+
+// TestApplyMarginTopAutoLeavesLengthNil pins the contract that the
+// `auto` keyword on margin-top/right/left leaves the sibling nil
+// (the MarginTopAuto bool is the authoritative sentinel). A
+// regression that wrote a synthetic cssLength for "auto" could
+// produce inconsistent state between Auto flag and sibling.
+func TestApplyMarginTopAutoLeavesLengthNil(t *testing.T) {
+	for _, side := range []struct {
+		prop string
+		flag func(*computedStyle) bool
+		read func(*computedStyle) *cssLength
+	}{
+		{"margin-top", func(s *computedStyle) bool { return s.MarginTopAuto }, func(s *computedStyle) *cssLength { return s.MarginTopLength }},
+		{"margin-right", func(s *computedStyle) bool { return s.MarginRightAuto }, func(s *computedStyle) *cssLength { return s.MarginRightLength }},
+		{"margin-left", func(s *computedStyle) bool { return s.MarginLeftAuto }, func(s *computedStyle) *cssLength { return s.MarginLeftLength }},
+	} {
+		t.Run(side.prop, func(t *testing.T) {
+			c := &converter{opts: (&Options{}).defaults()}
+			style := defaultStyle()
+			style.FontSize = 12
+			c.applyProperty(side.prop, "auto", &style)
+			if !side.flag(&style) {
+				t.Errorf("%s: auto flag not set", side.prop)
+			}
+			if side.read(&style) != nil {
+				t.Errorf("%s auto: sibling = %+v, want nil", side.prop, side.read(&style))
+			}
+		})
+	}
+}
+
+// TestZeroValueLengthResolvesToZero distinguishes a sibling of
+// {0, "px"} (resolved value 0) from a nil sibling (fall back to
+// legacy). A future optimization that treated zero-valued siblings
+// as "absent" would silently change behaviour for documents using
+// `margin-top: 0%` to reset an inherited margin.
+func TestZeroValueLengthResolvesToZero(t *testing.T) {
+	s := &computedStyle{
+		FontSize:  12,
+		MarginTop: 42, // legacy says 42 — fallback would return this
+	}
+	_, length := parseBoxSideBoth("0%", 12)
+	if length == nil {
+		t.Fatal("parseBoxSideBoth(0%) returned nil; expected zero-valued sibling")
+	}
+	s.MarginTopLength = length
+	if got := s.MarginTopAt(200); math.Abs(got) > 0.001 {
+		t.Errorf("MarginTopAt with 0%% sibling returned %v, want 0 (must not fall back to legacy 42)", got)
+	}
+}
+
 // TestConvertPopulatesLengthSiblings verifies the end-to-end wire from
 // the CSS Apply registry: a margin / padding declaration in a
 // stylesheet should populate BOTH the legacy float64 AND the

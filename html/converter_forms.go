@@ -271,11 +271,11 @@ func (c *converter) convertFieldset(n *html.Node, style computedStyle) []layout.
 	div.SetBorders(layout.AllBorders(layout.SolidBorder(0.75, layout.ColorGray)))
 	div.SetBorderRadius(3)
 
-	if style.MarginTop > 0 {
-		div.SetSpaceBefore(style.MarginTop)
+	if mt := style.MarginTopAt(c.containerWidth); mt > 0 {
+		div.SetSpaceBefore(mt)
 	}
-	if style.MarginBottom > 0 {
-		div.SetSpaceAfter(style.MarginBottom)
+	if mb := style.MarginBottomAt(c.containerWidth); mb > 0 {
+		div.SetSpaceAfter(mb)
 	}
 
 	for child := n.FirstChild; child != nil; child = child.NextSibling {

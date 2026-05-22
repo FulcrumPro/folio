@@ -99,16 +99,18 @@ func (c *converter) convertTable(n *html.Node, style computedStyle) []layout.Ele
 	}
 
 	// Apply table-level margin/background/width via Div wrapper.
-	hasTableMargin := style.MarginTop > 0 || style.MarginBottom > 0
+	mt := style.MarginTopAt(parentContainerWidth)
+	mb := style.MarginBottomAt(parentContainerWidth)
+	hasTableMargin := mt > 0 || mb > 0
 	hasTableWidth := style.MaxWidth != nil
 	if hasTableMargin || style.BackgroundColor != nil || hasTableWidth {
 		div := layout.NewDiv()
 		div.Add(tbl)
-		if style.MarginTop > 0 {
-			div.SetSpaceBefore(style.MarginTop)
+		if mt > 0 {
+			div.SetSpaceBefore(mt)
 		}
-		if style.MarginBottom > 0 {
-			div.SetSpaceAfter(style.MarginBottom)
+		if mb > 0 {
+			div.SetSpaceAfter(mb)
 		}
 		if style.BackgroundColor != nil {
 			div.SetBackground(*style.BackgroundColor)
@@ -177,10 +179,10 @@ func (c *converter) convertCSSTable(n *html.Node, style computedStyle) []layout.
 				layoutCell.SetAlign(resolveTextAlign(cellStyle))
 				if cellStyle.hasPadding() {
 					layoutCell.SetPaddingSides(layout.Padding{
-						Top:    cellStyle.PaddingTop,
-						Right:  cellStyle.PaddingRight,
-						Bottom: cellStyle.PaddingBottom,
-						Left:   cellStyle.PaddingLeft,
+						Top:    cellStyle.PaddingTopAt(c.containerWidth),
+						Right:  cellStyle.PaddingRightAt(c.containerWidth),
+						Bottom: cellStyle.PaddingBottomAt(c.containerWidth),
+						Left:   cellStyle.PaddingLeftAt(c.containerWidth),
 					})
 				}
 				if cellStyle.BackgroundColor != nil {
@@ -215,14 +217,16 @@ func (c *converter) convertCSSTable(n *html.Node, style computedStyle) []layout.
 	}
 
 	// Wrap in Div for margin.
-	if style.MarginTop > 0 || style.MarginBottom > 0 {
+	mt := style.MarginTopAt(c.containerWidth)
+	mb := style.MarginBottomAt(c.containerWidth)
+	if mt > 0 || mb > 0 {
 		div := layout.NewDiv()
 		div.Add(tbl)
-		if style.MarginTop > 0 {
-			div.SetSpaceBefore(style.MarginTop)
+		if mt > 0 {
+			div.SetSpaceBefore(mt)
 		}
-		if style.MarginBottom > 0 {
-			div.SetSpaceAfter(style.MarginBottom)
+		if mb > 0 {
+			div.SetSpaceAfter(mb)
 		}
 		return []layout.Element{div}
 	}
@@ -363,10 +367,10 @@ func (c *converter) convertTableRowKind(n *html.Node, tbl *layout.Table, parentS
 		// Per-side cell padding (default 4pt uniform).
 		if cellStyle.hasPadding() {
 			cell.SetPaddingSides(layout.Padding{
-				Top:    cellStyle.PaddingTop,
-				Right:  cellStyle.PaddingRight,
-				Bottom: cellStyle.PaddingBottom,
-				Left:   cellStyle.PaddingLeft,
+				Top:    cellStyle.PaddingTopAt(c.containerWidth),
+				Right:  cellStyle.PaddingRightAt(c.containerWidth),
+				Bottom: cellStyle.PaddingBottomAt(c.containerWidth),
+				Left:   cellStyle.PaddingLeftAt(c.containerWidth),
 			})
 		} else {
 			cell.SetPadding(4)

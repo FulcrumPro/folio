@@ -86,10 +86,10 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 
 	if style.hasPadding() {
 		flex.SetPaddingAll(layout.Padding{
-			Top:    style.PaddingTop,
-			Right:  style.PaddingRight,
-			Bottom: style.PaddingBottom,
-			Left:   style.PaddingLeft,
+			Top:    style.PaddingTopAt(c.containerWidth),
+			Right:  style.PaddingRightAt(c.containerWidth),
+			Bottom: style.PaddingBottomAt(c.containerWidth),
+			Left:   style.PaddingLeftAt(c.containerWidth),
 		})
 	}
 	if style.hasBorder() {
@@ -98,11 +98,11 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 	if style.BackgroundColor != nil {
 		flex.SetBackground(*style.BackgroundColor)
 	}
-	if style.MarginTop > 0 {
-		flex.SetSpaceBefore(style.MarginTop)
+	if mt := style.MarginTopAt(c.containerWidth); mt > 0 {
+		flex.SetSpaceBefore(mt)
 	}
-	if style.MarginBottom > 0 {
-		flex.SetSpaceAfter(style.MarginBottom)
+	if mb := style.MarginBottomAt(c.containerWidth); mb > 0 {
+		flex.SetSpaceAfter(mb)
 	}
 
 	// Add children as flex items.

@@ -71,6 +71,12 @@ func cssLengthToUnitValue(l *cssLength, containerWidth, fontSize float64) layout
 
 // narrowContainerWidth saves the current containerWidth, narrows it based on
 // the element's padding/border/width, and returns a restore function.
+//
+// Padding is resolved against the SAVED prev (the parent's content-box
+// width) rather than the freshly-narrowed c.containerWidth — per CSS
+// 2.1 §8.4, padding/margin percentages resolve against the containing
+// block's width, which for a block element is the parent's content
+// box, not the element's own (post-Width) box.
 func (c *converter) narrowContainerWidth(style computedStyle) func() {
 	prev := c.containerWidth
 	if style.Width != nil {
@@ -79,7 +85,7 @@ func (c *converter) narrowContainerWidth(style computedStyle) func() {
 		}
 	}
 	if style.hasPadding() {
-		c.containerWidth -= style.PaddingLeft + style.PaddingRight
+		c.containerWidth -= style.PaddingLeftAt(prev) + style.PaddingRightAt(prev)
 	}
 	if style.hasBorder() {
 		c.containerWidth -= style.BorderLeftWidth + style.BorderRightWidth
@@ -235,20 +241,20 @@ func (c *converter) splitOnAreaBreaks(children []layout.Element, style computedS
 func applyDivStyles(div *layout.Div, style computedStyle, containerWidth float64) {
 	if style.hasPadding() {
 		div.SetPaddingAll(layout.Padding{
-			Top:    style.PaddingTop,
-			Right:  style.PaddingRight,
-			Bottom: style.PaddingBottom,
-			Left:   style.PaddingLeft,
+			Top:    style.PaddingTopAt(containerWidth),
+			Right:  style.PaddingRightAt(containerWidth),
+			Bottom: style.PaddingBottomAt(containerWidth),
+			Left:   style.PaddingLeftAt(containerWidth),
 		})
 	}
 	if style.hasBorder() {
 		div.SetBorders(buildCellBorders(style))
 	}
-	if style.MarginTop > 0 {
-		div.SetSpaceBefore(style.MarginTop)
+	if mt := style.MarginTopAt(containerWidth); mt > 0 {
+		div.SetSpaceBefore(mt)
 	}
-	if style.MarginBottom > 0 {
-		div.SetSpaceAfter(style.MarginBottom)
+	if mb := style.MarginBottomAt(containerWidth); mb > 0 {
+		div.SetSpaceAfter(mb)
 	}
 	// Horizontal alignment via auto margins.
 	if style.MarginLeftAuto && style.MarginRightAuto {
@@ -570,11 +576,11 @@ func (c *converter) convertBlockquote(n *html.Node, style computedStyle) []layou
 		Bottom: 3,
 		Left:   15,
 	})
-	if style.MarginTop > 0 {
-		div.SetSpaceBefore(style.MarginTop)
+	if mt := style.MarginTopAt(c.containerWidth); mt > 0 {
+		div.SetSpaceBefore(mt)
 	}
-	if style.MarginBottom > 0 {
-		div.SetSpaceAfter(style.MarginBottom)
+	if mb := style.MarginBottomAt(c.containerWidth); mb > 0 {
+		div.SetSpaceAfter(mb)
 	}
 	if style.BackgroundColor != nil {
 		div.SetBackground(*style.BackgroundColor)
@@ -585,10 +591,10 @@ func (c *converter) convertBlockquote(n *html.Node, style computedStyle) []layou
 	}
 	if style.hasPadding() {
 		div.SetPaddingAll(layout.Padding{
-			Top:    style.PaddingTop,
-			Right:  style.PaddingRight,
-			Bottom: style.PaddingBottom,
-			Left:   style.PaddingLeft,
+			Top:    style.PaddingTopAt(c.containerWidth),
+			Right:  style.PaddingRightAt(c.containerWidth),
+			Bottom: style.PaddingBottomAt(c.containerWidth),
+			Left:   style.PaddingLeftAt(c.containerWidth),
 		})
 	}
 
@@ -598,11 +604,11 @@ func (c *converter) convertBlockquote(n *html.Node, style computedStyle) []layou
 // convertDefinitionList converts a <dl> element into a series of term/definition pairs.
 func (c *converter) convertDefinitionList(n *html.Node, style computedStyle) []layout.Element {
 	div := layout.NewDiv()
-	if style.MarginTop > 0 {
-		div.SetSpaceBefore(style.MarginTop)
+	if mt := style.MarginTopAt(c.containerWidth); mt > 0 {
+		div.SetSpaceBefore(mt)
 	}
-	if style.MarginBottom > 0 {
-		div.SetSpaceAfter(style.MarginBottom)
+	if mb := style.MarginBottomAt(c.containerWidth); mb > 0 {
+		div.SetSpaceAfter(mb)
 	}
 
 	for child := n.FirstChild; child != nil; child = child.NextSibling {
@@ -636,7 +642,7 @@ func (c *converter) convertDefinitionList(n *html.Node, style computedStyle) []l
 			for _, ch := range children {
 				indent.Add(ch)
 			}
-			indent.SetPaddingAll(layout.Padding{Left: childStyle.MarginLeft})
+			indent.SetPaddingAll(layout.Padding{Left: childStyle.MarginLeftAt(c.containerWidth)})
 			div.Add(indent)
 
 		default:
@@ -654,18 +660,18 @@ func (c *converter) convertDefinitionList(n *html.Node, style computedStyle) []l
 // convertFigure converts a <figure> element, rendering <figcaption> as styled caption.
 func (c *converter) convertFigure(n *html.Node, style computedStyle) []layout.Element {
 	div := layout.NewDiv()
-	if style.MarginTop > 0 {
-		div.SetSpaceBefore(style.MarginTop)
+	if mt := style.MarginTopAt(c.containerWidth); mt > 0 {
+		div.SetSpaceBefore(mt)
 	}
-	if style.MarginBottom > 0 {
-		div.SetSpaceAfter(style.MarginBottom)
+	if mb := style.MarginBottomAt(c.containerWidth); mb > 0 {
+		div.SetSpaceAfter(mb)
 	}
 	if style.hasPadding() {
 		div.SetPaddingAll(layout.Padding{
-			Top:    style.PaddingTop,
-			Right:  style.PaddingRight,
-			Bottom: style.PaddingBottom,
-			Left:   style.PaddingLeft,
+			Top:    style.PaddingTopAt(c.containerWidth),
+			Right:  style.PaddingRightAt(c.containerWidth),
+			Bottom: style.PaddingBottomAt(c.containerWidth),
+			Left:   style.PaddingLeftAt(c.containerWidth),
 		})
 	}
 	if style.hasBorder() {

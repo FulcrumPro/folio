@@ -29,11 +29,15 @@ func (c *converter) convertParagraph(n *html.Node, style computedStyle) []layout
 		}
 		p := c.buildParagraphFromRuns(group, style)
 		// Only apply top margin to first paragraph, bottom margin to last.
-		if i == 0 && style.MarginTop > 0 {
-			p.SetSpaceBefore(style.MarginTop)
+		if i == 0 {
+			if mt := style.MarginTopAt(c.containerWidth); mt > 0 {
+				p.SetSpaceBefore(mt)
+			}
 		}
-		if i == len(groups)-1 && style.MarginBottom > 0 {
-			p.SetSpaceAfter(style.MarginBottom)
+		if i == len(groups)-1 {
+			if mb := style.MarginBottomAt(c.containerWidth); mb > 0 {
+				p.SetSpaceAfter(mb)
+			}
 		}
 		elems = append(elems, p)
 	}
@@ -178,8 +182,8 @@ func (c *converter) convertBr(style computedStyle) []layout.Element {
 // convertHr creates a horizontal rule using layout.LineSeparator.
 func (c *converter) convertHr(style computedStyle) []layout.Element {
 	hr := layout.NewLineSeparator()
-	hr.SetSpaceBefore(style.MarginTop)
-	hr.SetSpaceAfter(style.MarginBottom)
+	hr.SetSpaceBefore(style.MarginTopAt(c.containerWidth))
+	hr.SetSpaceAfter(style.MarginBottomAt(c.containerWidth))
 
 	// Apply border color if set via CSS.
 	if style.hasBorder() {

@@ -316,6 +316,69 @@ func TestApplyMarginTopAutoLeavesLengthNil(t *testing.T) {
 	}
 }
 
+// TestPercentMarginResolvesAgainstContainerEndToEnd is the
+// bug-closing assertion for #269: after applying `margin-top: 50%`
+// to a computedStyle through the parser, the converter-time helper
+// MUST resolve to 100pt against a 200pt container. Pre-Phase 2
+// every converter site read the legacy float64 directly (parser
+// stored 0 because containing-block width wasn't known at parse
+// time), so 50% silently became 0pt.
+//
+// The test asserts the helper output the converter sites now read.
+// Phase 2 migrated `applyDivStyles`, `narrowContainerWidth`, and
+// every other margin/padding read in html/ to call these helpers
+// against c.containerWidth — so a regression that reverts ANY site
+// to the legacy float64 path would surface as 0 here.
+func TestPercentMarginResolvesAgainstContainerEndToEnd(t *testing.T) {
+	const containerWidth = 200
+	c := &converter{
+		opts:           (&Options{}).defaults(),
+		containerWidth: containerWidth,
+	}
+	style := defaultStyle()
+	style.FontSize = 12
+	c.applyProperty("margin-top", "50%", &style)
+	c.applyProperty("margin-bottom", "25%", &style)
+	c.applyProperty("padding-left", "10%", &style)
+
+	if got := style.MarginTopAt(containerWidth); math.Abs(got-100) > 0.001 {
+		t.Errorf("MarginTopAt(200) = %v, want 100 (50%% of 200pt container)", got)
+	}
+	if got := style.MarginBottomAt(containerWidth); math.Abs(got-50) > 0.001 {
+		t.Errorf("MarginBottomAt(200) = %v, want 50 (25%% of 200pt container)", got)
+	}
+	if got := style.PaddingLeftAt(containerWidth); math.Abs(got-20) > 0.001 {
+		t.Errorf("PaddingLeftAt(200) = %v, want 20 (10%% of 200pt container)", got)
+	}
+}
+
+// TestHasMarginRecognizesPercent verifies the Phase 2 hasMargin/
+// hasPadding update: a `margin: 50%` declaration must make
+// hasMargin() return true, even though the legacy float64 fields
+// all hold 0pt (since parseBoxSide resolves percent against zero).
+// Without this the wrapper-emission fast paths in convertParagraph,
+// convertHeading, convertBlock would skip percent-margin elements.
+func TestHasMarginRecognizesPercent(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		prop  string
+		check func(*computedStyle) bool
+	}{
+		{"hasMargin via margin-top 50%", "margin-top", func(s *computedStyle) bool { return s.hasMargin() }},
+		{"hasPadding via padding-top 50%", "padding-top", func(s *computedStyle) bool { return s.hasPadding() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &converter{opts: (&Options{}).defaults()}
+			style := defaultStyle()
+			style.FontSize = 12
+			c.applyProperty(tc.prop, "50%", &style)
+			if !tc.check(&style) {
+				t.Errorf("expected helper to return true for percent declaration")
+			}
+		})
+	}
+}
+
 // TestZeroValueLengthResolvesToZero distinguishes a sibling of
 // {0, "px"} (resolved value 0) from a nil sibling (fall back to
 // legacy). A future optimization that treated zero-valued siblings

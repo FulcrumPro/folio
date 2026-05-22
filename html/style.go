@@ -519,9 +519,20 @@ func (s *computedStyle) inherit() computedStyle {
 	return child
 }
 
-// hasPadding returns true if any padding is set.
+// hasPadding returns true if any padding is declared, including
+// declarations whose resolved value depends on the containing block
+// width (percent / calc-with-percent). The check intentionally
+// returns true for declared `padding: 50%` even though the legacy
+// float64 resolves to 0 — the element still needs the wrapper
+// handling that hasPadding callers care about. Phase 1 #269 sibling
+// fields drive the "declared" branch; legacy float64s cover any
+// non-Apply setter path.
 func (s *computedStyle) hasPadding() bool {
-	return s.PaddingTop > 0 || s.PaddingRight > 0 || s.PaddingBottom > 0 || s.PaddingLeft > 0
+	if s.PaddingTop > 0 || s.PaddingRight > 0 || s.PaddingBottom > 0 || s.PaddingLeft > 0 {
+		return true
+	}
+	return s.PaddingTopLength != nil || s.PaddingRightLength != nil ||
+		s.PaddingBottomLength != nil || s.PaddingLeftLength != nil
 }
 
 // hasBorder returns true if any border is set.
@@ -529,9 +540,14 @@ func (s *computedStyle) hasBorder() bool {
 	return s.BorderTopWidth > 0 || s.BorderRightWidth > 0 || s.BorderBottomWidth > 0 || s.BorderLeftWidth > 0
 }
 
-// hasMargin returns true if any margin is set.
+// hasMargin returns true if any margin is declared. See hasPadding
+// for the percent-margin handling rationale.
 func (s *computedStyle) hasMargin() bool {
-	return s.MarginTop > 0 || s.MarginRight > 0 || s.MarginBottom > 0 || s.MarginLeft > 0
+	if s.MarginTop > 0 || s.MarginRight > 0 || s.MarginBottom > 0 || s.MarginLeft > 0 {
+		return true
+	}
+	return s.MarginTopLength != nil || s.MarginRightLength != nil ||
+		s.MarginBottomLength != nil || s.MarginLeftLength != nil
 }
 
 // MarginTopAt resolves the top margin against containerWidth. When the

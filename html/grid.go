@@ -109,13 +109,14 @@ func (c *converter) convertGrid(n *html.Node, style computedStyle) []layout.Elem
 		grid.SetAlignContent(layout.JustifyFlexStart)
 	}
 
-	// Container styling.
+	// Container styling. Percent / calc margins and paddings resolve
+	// against c.containerWidth (the parent's content-box width).
 	if style.hasPadding() {
 		grid.SetPaddingAll(layout.Padding{
-			Top:    style.PaddingTop,
-			Right:  style.PaddingRight,
-			Bottom: style.PaddingBottom,
-			Left:   style.PaddingLeft,
+			Top:    style.PaddingTopAt(c.containerWidth),
+			Right:  style.PaddingRightAt(c.containerWidth),
+			Bottom: style.PaddingBottomAt(c.containerWidth),
+			Left:   style.PaddingLeftAt(c.containerWidth),
 		})
 	}
 	if style.hasBorder() {
@@ -124,11 +125,11 @@ func (c *converter) convertGrid(n *html.Node, style computedStyle) []layout.Elem
 	if style.BackgroundColor != nil {
 		grid.SetBackground(*style.BackgroundColor)
 	}
-	if style.MarginTop > 0 {
-		grid.SetSpaceBefore(style.MarginTop)
+	if mt := style.MarginTopAt(c.containerWidth); mt > 0 {
+		grid.SetSpaceBefore(mt)
 	}
-	if style.MarginBottom > 0 {
-		grid.SetSpaceAfter(style.MarginBottom)
+	if mb := style.MarginBottomAt(c.containerWidth); mb > 0 {
+		grid.SetSpaceAfter(mb)
 	}
 	// Explicit container height. Without this, a grid container with
 	// height: Npx on CSS would grow with its content and never leave

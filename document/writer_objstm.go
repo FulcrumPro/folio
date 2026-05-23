@@ -102,7 +102,7 @@ func (w *Writer) writeXRefStreamWithObjStms(cw *countingWriter, opts WriteOption
 		}
 		stream, err := core.BuildObjStm(entries)
 		if err != nil {
-			return fmt.Errorf("document: build object stream: %w", err)
+			return fmt.Errorf("document: writer: build object stream: %w", err)
 		}
 
 		thisObjStmNum := nextObjNum

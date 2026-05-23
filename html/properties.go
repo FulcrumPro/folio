@@ -574,7 +574,9 @@ func parseCalcLeaf(s string) *cssLength {
 // (px, em, pt, rem, mm, cm, in) — mixed-dimension calc cannot be reduced
 // to a fraction without knowing the resolution context (gradient line
 // length or background box dimensions), which the position parsers do
-// not have at parse time. True lazy resolution against those dimensions
+// not have at parse time. The same restriction applies to plain length
+// values such as 100px or 1em: the helper rejects them as not-a-fraction.
+// True lazy resolution against gradient-line / background-box dimensions
 // is deferred future work; see issues #265 and #266.
 //
 // Dimensionless leaves (Unit "num") are accepted so multipliers and

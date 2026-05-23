@@ -566,6 +566,75 @@ func parseCalcLeaf(s string) *cssLength {
 	return nil
 }
 
+// percentFraction returns the [0..1] fraction value of a percent-only
+// cssLength tree. Examples: 50% -> 0.5, calc(50% - 10%) -> 0.4,
+// calc(50% * 2) -> 1.0, min(40%, 60%) -> 0.4.
+//
+// Returns (0, false) when the tree contains any leaf with a length unit
+// (px, em, pt, rem, mm, cm, in) — mixed-dimension calc cannot be reduced
+// to a fraction without knowing the resolution context (gradient line
+// length or background box dimensions), which the position parsers do
+// not have at parse time. True lazy resolution against those dimensions
+// is deferred future work; see issues #265 and #266.
+//
+// Dimensionless leaves (Unit "num") are accepted so multipliers and
+// divisors inside calc work, e.g. calc(50% * 2) and calc(60% / 2).
+func percentFraction(l *cssLength) (float64, bool) {
+	if l == nil {
+		return 0, false
+	}
+	if !isPercentOnly(l) {
+		return 0, false
+	}
+	// Resolve with relativeTo=100 so that a leaf "50%" evaluates to 50,
+	// then divide by 100 to get the fraction. fontSize is irrelevant for
+	// percent / num leaves and is passed as 0.
+	return l.toPoints(100, 0) / 100, true
+}
+
+// isPercentOnly reports whether every leaf in the cssLength tree is
+// either a percent ("%") or a dimensionless number ("num"). Used by
+// percentFraction to gate length-aware reduction in contexts where the
+// resolution dimension is unknown.
+func isPercentOnly(l *cssLength) bool {
+	if l == nil {
+		return false
+	}
+	if l.calc != nil {
+		return calcExprIsPercentOnly(l.calc)
+	}
+	if len(l.minArgs) > 0 {
+		for _, a := range l.minArgs {
+			if !isPercentOnly(a) {
+				return false
+			}
+		}
+		return true
+	}
+	if len(l.maxArgs) > 0 {
+		for _, a := range l.maxArgs {
+			if !isPercentOnly(a) {
+				return false
+			}
+		}
+		return true
+	}
+	return l.Unit == "%" || l.Unit == "num"
+}
+
+func calcExprIsPercentOnly(e *calcExpr) bool {
+	if e == nil {
+		return false
+	}
+	if e.leaf != nil {
+		return isPercentOnly(e.leaf)
+	}
+	if e.left == nil || e.right == nil {
+		return false
+	}
+	return calcExprIsPercentOnly(e.left) && calcExprIsPercentOnly(e.right)
+}
+
 // parseFontSize parses a CSS font-size into points.
 // Handles absolute keywords, lengths, and percentages.
 func parseFontSize(value string, parentSize float64) float64 {

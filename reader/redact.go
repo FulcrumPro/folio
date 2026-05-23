@@ -80,7 +80,7 @@ func RedactRegions(r *PdfReader, marks []RedactionMark, opts *RedactOptions) (*M
 	// Create a writable copy of the input PDF.
 	m, err := Merge(r)
 	if err != nil {
-		return nil, fmt.Errorf("redact: copy PDF: %w", err)
+		return nil, fmt.Errorf("reader: redact: copy PDF: %w", err)
 	}
 
 	// Group marks by page.
@@ -98,11 +98,11 @@ func RedactRegions(r *PdfReader, marks []RedactionMark, opts *RedactOptions) (*M
 		// Get the page's content stream and font cache.
 		page, err := r.Page(pageIdx)
 		if err != nil {
-			return nil, fmt.Errorf("redact: page %d: %w", pageIdx, err)
+			return nil, fmt.Errorf("reader: redact: page %d: %w", pageIdx, err)
 		}
 		data, err := page.ContentStream()
 		if err != nil {
-			return nil, fmt.Errorf("redact: page %d content: %w", pageIdx, err)
+			return nil, fmt.Errorf("reader: redact: page %d content: %w", pageIdx, err)
 		}
 		resources, _ := page.Resources()
 		fonts := buildFontCache(resources, r.resolver)
@@ -142,7 +142,7 @@ func RedactText(r *PdfReader, targets []string, opts *RedactOptions) (*Modifier,
 	for pageIdx := range r.PageCount() {
 		marks, err := findTextMarks(r, pageIdx, targets)
 		if err != nil {
-			return nil, fmt.Errorf("redact: scan page %d: %w", pageIdx, err)
+			return nil, fmt.Errorf("reader: redact: scan page %d: %w", pageIdx, err)
 		}
 		allMarks = append(allMarks, marks...)
 	}
@@ -161,7 +161,7 @@ func RedactPattern(r *PdfReader, pattern *regexp.Regexp, opts *RedactOptions) (*
 	for pageIdx := range r.PageCount() {
 		marks, err := findPatternMarks(r, pageIdx, pattern)
 		if err != nil {
-			return nil, fmt.Errorf("redact: scan page %d: %w", pageIdx, err)
+			return nil, fmt.Errorf("reader: redact: scan page %d: %w", pageIdx, err)
 		}
 		allMarks = append(allMarks, marks...)
 	}

@@ -41,7 +41,7 @@ type hhea struct {
 // Minimum length is 36 bytes.
 func parseHhea(data []byte) (hhea, error) {
 	if uint64(len(data)) < 36 {
-		return hhea{}, fmt.Errorf("hhea: table truncated (%d < 36 bytes): %w", len(data), ErrTruncated)
+		return hhea{}, fmt.Errorf("font: hhea: table truncated (%d < 36 bytes): %w", len(data), ErrTruncated)
 	}
 	return hhea{
 		ascender:         int16(binary.BigEndian.Uint16(data[4:6])),

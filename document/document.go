@@ -309,7 +309,7 @@ func (d *Document) PageCount() int {
 // Returns an error if the index is out of range.
 func (d *Document) Page(index int) (*Page, error) {
 	if index < 0 || index >= len(d.pages) {
-		return nil, fmt.Errorf("page index %d out of range [0, %d)", index, len(d.pages))
+		return nil, fmt.Errorf("document: page index %d out of range [0, %d)", index, len(d.pages))
 	}
 	return d.pages[index], nil
 }
@@ -318,7 +318,7 @@ func (d *Document) Page(index int) (*Page, error) {
 // Returns an error if the index is out of range.
 func (d *Document) RemovePage(index int) error {
 	if index < 0 || index >= len(d.pages) {
-		return fmt.Errorf("page index %d out of range [0, %d)", index, len(d.pages))
+		return fmt.Errorf("document: page index %d out of range [0, %d)", index, len(d.pages))
 	}
 	d.pages = slices.Delete(d.pages, index, index+1)
 	return nil

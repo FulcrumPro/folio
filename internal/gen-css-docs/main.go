@@ -58,5 +58,5 @@ func findRepoRoot() (string, error) {
 		}
 		dir = parent
 	}
-	return "", fmt.Errorf("go.mod not found in any parent of cwd")
+	return "", fmt.Errorf("gen-css-docs: go.mod not found in any parent of cwd")
 }

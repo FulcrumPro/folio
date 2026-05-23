@@ -35,10 +35,10 @@ const maxJPEGSegments = 10000
 func NewJPEG(data []byte) (*Image, error) {
 	w, h, ncomp, hasAdobe, err := parseJPEGHeader(data)
 	if err != nil {
-		return nil, fmt.Errorf("jpeg: %w", err)
+		return nil, fmt.Errorf("image: jpeg: %w", err)
 	}
 	if err := checkDimensions(w, h); err != nil {
-		return nil, fmt.Errorf("jpeg: %w", err)
+		return nil, fmt.Errorf("image: jpeg: %w", err)
 	}
 
 	var cs string
@@ -50,7 +50,7 @@ func NewJPEG(data []byte) (*Image, error) {
 	case 4:
 		cs = "DeviceCMYK"
 	default:
-		return nil, fmt.Errorf("jpeg: unsupported component count %d", ncomp)
+		return nil, fmt.Errorf("image: jpeg: unsupported component count %d", ncomp)
 	}
 
 	return &Image{
@@ -87,18 +87,18 @@ func LoadJPEG(path string) (*Image, error) {
 // the inverted-CMYK convention and emit a PDF /Decode array accordingly.
 func parseJPEGHeader(data []byte) (width, height, numComponents int, hasAdobe bool, err error) {
 	if len(data) < 2 || binary.BigEndian.Uint16(data[0:2]) != markerSOI {
-		return 0, 0, 0, false, fmt.Errorf("not a JPEG file")
+		return 0, 0, 0, false, fmt.Errorf("image: not a JPEG file")
 	}
 
 	pos := 2
 	for segments := 0; pos < len(data)-1; segments++ {
 		if segments > maxJPEGSegments {
-			return 0, 0, 0, false, fmt.Errorf("too many segments (>%d)", maxJPEGSegments)
+			return 0, 0, 0, false, fmt.Errorf("image: too many segments (>%d)", maxJPEGSegments)
 		}
 
 		// Find marker (0xFF followed by non-zero byte).
 		if data[pos] != 0xFF {
-			return 0, 0, 0, false, fmt.Errorf("expected marker at offset %d", pos)
+			return 0, 0, 0, false, fmt.Errorf("image: expected marker at offset %d", pos)
 		}
 
 		// Skip padding 0xFF bytes.
@@ -117,7 +117,7 @@ func parseJPEGHeader(data []byte) (width, height, numComponents int, hasAdobe bo
 			// SOF layout: length(2) + precision(1) + height(2) + width(2) + ncomp(1)
 			// The ncomp byte lives at data[pos+7], so we need pos+8 ≤ len(data).
 			if pos+8 > len(data) {
-				return 0, 0, 0, false, fmt.Errorf("truncated SOF segment")
+				return 0, 0, 0, false, fmt.Errorf("image: truncated SOF segment")
 			}
 			height = int(binary.BigEndian.Uint16(data[pos+3 : pos+5]))
 			width = int(binary.BigEndian.Uint16(data[pos+5 : pos+7]))
@@ -137,7 +137,7 @@ func parseJPEGHeader(data []byte) (width, height, numComponents int, hasAdobe bo
 		}
 		segLen := int(binary.BigEndian.Uint16(data[pos : pos+2]))
 		if segLen < 2 {
-			return 0, 0, 0, false, fmt.Errorf("invalid segment length %d at offset %d", segLen, pos)
+			return 0, 0, 0, false, fmt.Errorf("image: invalid segment length %d at offset %d", segLen, pos)
 		}
 
 		// APP14 Adobe marker: 2-byte length, then "Adobe" + 7-byte body.
@@ -154,5 +154,5 @@ func parseJPEGHeader(data []byte) (width, height, numComponents int, hasAdobe bo
 		pos += segLen
 	}
 
-	return 0, 0, 0, false, fmt.Errorf("no SOF marker found")
+	return 0, 0, 0, false, fmt.Errorf("image: no SOF marker found")
 }

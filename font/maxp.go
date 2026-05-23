@@ -27,11 +27,11 @@ type maxp struct {
 // Minimum length is 6 bytes.
 func parseMaxp(data []byte) (maxp, error) {
 	if uint64(len(data)) < 6 {
-		return maxp{}, fmt.Errorf("maxp: table truncated (%d < 6 bytes): %w", len(data), ErrTruncated)
+		return maxp{}, fmt.Errorf("font: maxp: table truncated (%d < 6 bytes): %w", len(data), ErrTruncated)
 	}
 	n := binary.BigEndian.Uint16(data[4:6])
 	if n == 0 {
-		return maxp{}, fmt.Errorf("maxp: numGlyphs is zero: %w", ErrCorruptTable)
+		return maxp{}, fmt.Errorf("font: maxp: numGlyphs is zero: %w", ErrCorruptTable)
 	}
 	return maxp{numGlyphs: n}, nil
 }

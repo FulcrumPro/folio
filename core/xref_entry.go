@@ -46,16 +46,16 @@ type XRefStreamEntry struct {
 func EncodeXRefStreamEntry(dst []byte, e XRefStreamEntry, widths [3]int) error {
 	total := widths[0] + widths[1] + widths[2]
 	if len(dst) != total {
-		return fmt.Errorf("xref entry: dst length %d, want %d", len(dst), total)
+		return fmt.Errorf("core: xref entry: dst length %d, want %d", len(dst), total)
 	}
 	if err := putUintBE(dst[:widths[0]], uint64(e.Type)); err != nil {
-		return fmt.Errorf("xref entry field 1: %w", err)
+		return fmt.Errorf("core: xref entry field 1: %w", err)
 	}
 	if err := putUintBE(dst[widths[0]:widths[0]+widths[1]], e.Field2); err != nil {
-		return fmt.Errorf("xref entry field 2: %w", err)
+		return fmt.Errorf("core: xref entry field 2: %w", err)
 	}
 	if err := putUintBE(dst[widths[0]+widths[1]:], e.Field3); err != nil {
-		return fmt.Errorf("xref entry field 3: %w", err)
+		return fmt.Errorf("core: xref entry field 3: %w", err)
 	}
 	return nil
 }
@@ -68,14 +68,14 @@ func EncodeXRefStreamEntry(dst []byte, e XRefStreamEntry, widths [3]int) error {
 func putUintBE(dst []byte, v uint64) error {
 	if len(dst) == 0 {
 		if v != 0 {
-			return fmt.Errorf("value %d does not fit in 0 bytes", v)
+			return fmt.Errorf("core: value %d does not fit in 0 bytes", v)
 		}
 		return nil
 	}
 	if len(dst) < 8 {
 		limit := uint64(1) << (uint(len(dst)) * 8)
 		if v >= limit {
-			return fmt.Errorf("value %d does not fit in %d bytes", v, len(dst))
+			return fmt.Errorf("core: value %d does not fit in %d bytes", v, len(dst))
 		}
 	}
 	for i := len(dst) - 1; i >= 0; i-- {

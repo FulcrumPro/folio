@@ -16,5 +16,5 @@ import (
 // Use base64 data URIs (`<img src="data:image/png;base64,...">`) for inline
 // assets in browser builds.
 func httpGetBytes(_ *http.Client, url string, _ int64) ([]byte, error) {
-	return nil, fmt.Errorf("HTTP fetch not supported in WASM: %s", url)
+	return nil, fmt.Errorf("html: HTTP fetch not supported in WASM: %s", url)
 }

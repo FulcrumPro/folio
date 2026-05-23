@@ -16,14 +16,14 @@ import (
 func NewGIF(data []byte) (*Image, error) {
 	img, err := gif.Decode(bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("gif: %w", err)
+		return nil, fmt.Errorf("image: gif: %w", err)
 	}
 
 	bounds := img.Bounds()
 	w := bounds.Dx()
 	h := bounds.Dy()
 	if err := checkDimensions(w, h); err != nil {
-		return nil, fmt.Errorf("gif: %w", err)
+		return nil, fmt.Errorf("image: gif: %w", err)
 	}
 
 	// GIF returns *goimage.Paletted; buildRGBMaybeAlpha's generic path

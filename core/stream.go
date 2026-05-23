@@ -63,7 +63,7 @@ func (s *PdfStream) WriteTo(w io.Writer) (int64, error) {
 	if s.compress {
 		compressed, err := DeflateStreamData(s.Data)
 		if err != nil {
-			return 0, fmt.Errorf("flate compress: %w", err)
+			return 0, fmt.Errorf("core: flate compress: %w", err)
 		}
 		streamData = compressed
 		s.Dict.Set("Filter", NewPdfName("FlateDecode"))
@@ -119,12 +119,12 @@ func DeflateStreamData(data []byte) ([]byte, error) {
 func InflateStreamData(data []byte) ([]byte, error) {
 	r, err := zlib.NewReader(bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("inflate: %w", err)
+		return nil, fmt.Errorf("core: inflate: %w", err)
 	}
 	defer func() { _ = r.Close() }()
 	out, err := io.ReadAll(r)
 	if err != nil {
-		return nil, fmt.Errorf("inflate: %w", err)
+		return nil, fmt.Errorf("core: inflate: %w", err)
 	}
 	return out, nil
 }

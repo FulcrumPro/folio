@@ -60,21 +60,21 @@ func ParseFont(data []byte) (Face, error) {
 // can match failure modes with errors.Is.
 func ParseFontForLanguage(data []byte, lang string) (Face, error) {
 	if len(data) < 4 {
-		return nil, fmt.Errorf("font data too short to determine format: %w", ErrTruncated)
+		return nil, fmt.Errorf("font: data too short to determine format: %w", ErrTruncated)
 	}
 	sig := binary.BigEndian.Uint32(data[0:4])
 	switch sig {
 	case woffMagic:
 		ttfData, err := decodeWOFF(data)
 		if err != nil {
-			return nil, fmt.Errorf("decode WOFF: %w", err)
+			return nil, fmt.Errorf("font: decode WOFF: %w", err)
 		}
 		return ParseTTF(ttfData)
 	case ttcMagic:
 		idx := max(pickFaceForLanguage(data, lang), 0)
 		ttfData, err := extractTTCFont(data, idx)
 		if err != nil {
-			return nil, fmt.Errorf("decode TTC: %w", err)
+			return nil, fmt.Errorf("font: decode TTC: %w", err)
 		}
 		return ParseTTF(ttfData)
 	// When adding a magic to this switch, also extend
@@ -85,7 +85,7 @@ func ParseFontForLanguage(data []byte, lang string) (Face, error) {
 		0x74727565: // "true" (legacy Apple TrueType)
 		return ParseTTF(data)
 	}
-	return nil, fmt.Errorf("unknown font magic 0x%08X: %w", sig, ErrUnknownFormat)
+	return nil, fmt.Errorf("font: unknown font magic 0x%08X: %w", sig, ErrUnknownFormat)
 }
 
 // LoadFont reads and parses a font file from disk, auto-detecting the format.
@@ -111,7 +111,7 @@ func LoadFont(path string) (Face, error) {
 func LoadFontForLanguage(path, lang string) (Face, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read font file: %w", err)
+		return nil, fmt.Errorf("font: read font file: %w", err)
 	}
 	return ParseFontForLanguage(data, lang)
 }

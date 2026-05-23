@@ -446,38 +446,38 @@ func parseOneXrefSection(tok *Tokenizer, table *xrefTable, data []byte) (*core.P
 func parseXrefEntry(line string) (xrefEntry, error) {
 	line = strings.TrimRight(line, "\r\n ")
 	if len(line) < 18 {
-		return xrefEntry{}, fmt.Errorf("xref entry too short (%d chars): %q", len(line), line)
+		return xrefEntry{}, fmt.Errorf("reader: xref entry too short (%d chars): %q", len(line), line)
 	}
 
 	// Bounds are guaranteed by the len(line) >= 18 check above, but we
 	// validate explicitly to guard against future changes and make the
 	// invariant clear to readers.
 	if len(line) < 10 {
-		return xrefEntry{}, fmt.Errorf("xref entry too short for offset field: %q", line)
+		return xrefEntry{}, fmt.Errorf("reader: xref entry too short for offset field: %q", line)
 	}
 	offsetStr := strings.TrimSpace(line[0:10])
 	if len(line) < 16 {
-		return xrefEntry{}, fmt.Errorf("xref entry too short for generation field: %q", line)
+		return xrefEntry{}, fmt.Errorf("reader: xref entry too short for generation field: %q", line)
 	}
 	genStr := strings.TrimSpace(line[11:16])
 	if len(line) < 18 {
-		return xrefEntry{}, fmt.Errorf("xref entry too short for type field: %q", line)
+		return xrefEntry{}, fmt.Errorf("reader: xref entry too short for type field: %q", line)
 	}
 	typeChar := line[17]
 
 	offset, err := strconv.ParseInt(offsetStr, 10, 64)
 	if err != nil {
-		return xrefEntry{}, fmt.Errorf("invalid offset %q", offsetStr)
+		return xrefEntry{}, fmt.Errorf("reader: invalid offset %q", offsetStr)
 	}
 	if offset < 0 {
-		return xrefEntry{}, fmt.Errorf("negative offset %d", offset)
+		return xrefEntry{}, fmt.Errorf("reader: negative offset %d", offset)
 	}
 	gen, err := strconv.Atoi(genStr)
 	if err != nil {
-		return xrefEntry{}, fmt.Errorf("invalid generation %q", genStr)
+		return xrefEntry{}, fmt.Errorf("reader: invalid generation %q", genStr)
 	}
 	if gen < 0 {
-		return xrefEntry{}, fmt.Errorf("negative generation %d", gen)
+		return xrefEntry{}, fmt.Errorf("reader: negative generation %d", gen)
 	}
 
 	return xrefEntry{

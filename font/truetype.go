@@ -56,7 +56,7 @@ type sfntFace struct {
 func ParseTTF(data []byte) (Face, error) {
 	pf, err := parseAllTables(data)
 	if err != nil {
-		return nil, fmt.Errorf("parse font: %w", err)
+		return nil, fmt.Errorf("font: parse font: %w", err)
 	}
 	return &sfntFace{
 		pf:      pf,
@@ -68,7 +68,7 @@ func ParseTTF(data []byte) (Face, error) {
 func LoadTTF(path string) (Face, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read font file: %w", err)
+		return nil, fmt.Errorf("font: read font file: %w", err)
 	}
 	return ParseTTF(data)
 }

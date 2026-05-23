@@ -133,7 +133,7 @@ func (w *Writer) WriteToWithOptions(out io.Writer, opts WriteOptions) (int64, er
 		// §7.5.8.3: type-2 xref entries (compressed objects) require an
 		// xref stream to express. Refuse the contradictory combination
 		// instead of silently upgrading.
-		return 0, fmt.Errorf("writer: UseObjectStreams requires UseXRefStream")
+		return 0, fmt.Errorf("document: writer: UseObjectStreams requires UseXRefStream")
 	}
 	if opts.UseObjectStreams && w.encryptor != nil {
 		// Refuse before the encryption walk runs. EncryptObject mutates
@@ -142,7 +142,7 @@ func (w *Writer) WriteToWithOptions(out io.Writer, opts WriteOptions) (int64, er
 		// would double-encrypt. Phase 1 does not support per-objstm
 		// encryption (§7.6.1 requires the entire object stream to be
 		// encrypted as a unit, not the individual entries).
-		return 0, fmt.Errorf("writer: object streams are not supported with encryption in phase 1")
+		return 0, fmt.Errorf("document: writer: object streams are not supported with encryption in phase 1")
 	}
 	if opts.OrphanSweep && w.encryptor != nil {
 		// Same defense as the objstm refusal above: refuse before the
@@ -151,7 +151,7 @@ func (w *Writer) WriteToWithOptions(out io.Writer, opts WriteOptions) (int64, er
 		// object on its number (§7.6.3.3); a sweep that renumbers
 		// objects in an encrypted document would silently invalidate
 		// the keys for every renumbered entry.
-		return 0, fmt.Errorf("writer: orphan sweep is not supported on encrypted documents")
+		return 0, fmt.Errorf("document: writer: orphan sweep is not supported on encrypted documents")
 	}
 	if opts.RecompressStreams && w.encryptor != nil {
 		// Same defense as the sweep refusal above: rewriting payload
@@ -159,17 +159,17 @@ func (w *Writer) WriteToWithOptions(out io.Writer, opts WriteOptions) (int64, er
 		// (encrypted ciphertext decrypts only against the bytes that
 		// were encrypted). Refuse before any mutation so a retry
 		// without RecompressStreams is unaffected.
-		return 0, fmt.Errorf("writer: stream recompression is not supported on encrypted documents")
+		return 0, fmt.Errorf("document: writer: stream recompression is not supported on encrypted documents")
 	}
 	if opts.DeduplicateObjects && w.encryptor != nil {
 		// Same defense: dedup renumbers survivors, which would
 		// invalidate per-object encryption keys (§7.6.3.3).
-		return 0, fmt.Errorf("writer: object deduplication is not supported on encrypted documents")
+		return 0, fmt.Errorf("document: writer: object deduplication is not supported on encrypted documents")
 	}
 	if opts.CleanContentStreams && w.encryptor != nil {
 		// Same defense as RecompressStreams: rewriting payload bytes
 		// interacts badly with the encryption walk.
-		return 0, fmt.Errorf("writer: content stream cleanup is not supported on encrypted documents")
+		return 0, fmt.Errorf("document: writer: content stream cleanup is not supported on encrypted documents")
 	}
 	// Order: sweep → cleanup → dedup → recompress → encrypt → serialize.
 	// - Sweep first so later passes do not waste effort on orphans.
@@ -198,7 +198,7 @@ func (w *Writer) WriteToWithOptions(out io.Writer, opts WriteOptions) (int64, er
 	if w.encryptor != nil {
 		for _, obj := range w.objects {
 			if err := w.encryptor.EncryptObject(obj.Object, obj.ObjectNumber, obj.GenerationNumber); err != nil {
-				return 0, fmt.Errorf("encrypt object %d: %w", obj.ObjectNumber, err)
+				return 0, fmt.Errorf("document: encrypt object %d: %w", obj.ObjectNumber, err)
 			}
 		}
 	}
@@ -318,7 +318,7 @@ func (w *Writer) writeXRefStreamTrailer(cw *countingWriter, offsets []int64) err
 	subsections := []core.XRefStreamSubsection{{First: 0, Entries: entries}}
 	stream, err := core.BuildXRefStream(subsections, size, extras)
 	if err != nil {
-		return fmt.Errorf("build xref stream: %w", err)
+		return fmt.Errorf("document: build xref stream: %w", err)
 	}
 
 	if _, err := fmt.Fprintf(cw, "%d 0 obj\n", xrefStreamObjNum); err != nil {

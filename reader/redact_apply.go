@@ -60,7 +60,7 @@ func buildRedactionOverlay(rects []Box, opts *RedactOptions) *core.PdfStream {
 // content and adds the redaction overlay.
 func applyRedaction(m *Modifier, pageIdx int, rewritten []byte, overlay *core.PdfStream, opts *RedactOptions) error {
 	if pageIdx < 0 || pageIdx >= len(m.pageDicts) {
-		return fmt.Errorf("redact: page index %d out of range", pageIdx)
+		return fmt.Errorf("reader: redact: page index %d out of range", pageIdx)
 	}
 	pageDict := m.pageDicts[pageIdx]
 

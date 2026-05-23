@@ -87,7 +87,7 @@ func NewEncryptor(rev EncryptionRevision, userPassword, ownerPassword string, pe
 
 	fileID, err := randomBytes(16)
 	if err != nil {
-		return nil, fmt.Errorf("encrypt: generate file ID: %w", err)
+		return nil, fmt.Errorf("core: encrypt: generate file ID: %w", err)
 	}
 
 	p := permBits(perms)
@@ -100,7 +100,7 @@ func NewEncryptor(rev EncryptionRevision, userPassword, ownerPassword string, pe
 	case RevisionAES256:
 		return newEncryptorR6(userPassword, ownerPassword, p, fileID)
 	default:
-		return nil, fmt.Errorf("encrypt: unsupported revision %d", rev)
+		return nil, fmt.Errorf("core: encrypt: unsupported revision %d", rev)
 	}
 }
 
@@ -143,7 +143,7 @@ func (e *Encryptor) walkEncrypt(obj PdfObject, objNum, genNum int) error {
 	case *PdfString:
 		enc, err := e.EncryptBytes(objNum, genNum, []byte(o.value))
 		if err != nil {
-			return fmt.Errorf("encrypt string (obj %d): %w", objNum, err)
+			return fmt.Errorf("core: encrypt string (obj %d): %w", objNum, err)
 		}
 		o.value = string(enc)
 		o.encoding = StringHexadecimal // binary data must be hex-encoded
@@ -171,7 +171,7 @@ func (e *Encryptor) walkEncrypt(obj PdfObject, objNum, genNum int) error {
 		if o.compress {
 			compressed, err := DeflateStreamData(data)
 			if err != nil {
-				return fmt.Errorf("compress stream (obj %d): %w", objNum, err)
+				return fmt.Errorf("core: compress stream (obj %d): %w", objNum, err)
 			}
 			data = compressed
 			o.Dict.Set("Filter", NewPdfName("FlateDecode"))
@@ -179,7 +179,7 @@ func (e *Encryptor) walkEncrypt(obj PdfObject, objNum, genNum int) error {
 		}
 		enc, err := e.EncryptBytes(objNum, genNum, data)
 		if err != nil {
-			return fmt.Errorf("encrypt stream (obj %d): %w", objNum, err)
+			return fmt.Errorf("core: encrypt stream (obj %d): %w", objNum, err)
 		}
 		o.Data = enc
 	}
@@ -513,7 +513,7 @@ func buildPermsBlock(p int32) ([]byte, error) {
 	buf[9], buf[10], buf[11] = 'a', 'd', 'b'
 	// Bytes 12-15: random.
 	if _, err := rand.Read(buf[12:16]); err != nil {
-		return nil, fmt.Errorf("encrypt: random bytes for perms block: %w", err)
+		return nil, fmt.Errorf("core: encrypt: random bytes for perms block: %w", err)
 	}
 	return buf, nil
 }

@@ -95,7 +95,9 @@ func TestPercentFractionRejectsPureLength(t *testing.T) {
 // the parts list produced by parseLinearGradient for
 // "linear-gradient(red, blue calc(50% - 10%), green)". The middle stop
 // must land at 0.4 with a non-zero blue color, not be dropped or fall
-// through to the black default.
+// through to the black default. The neighbour stops (red, green) must
+// also retain their parsed colors so that calc-position handling does
+// not leak into surrounding stops.
 func TestParseGradientStopsWithCalcPosition(t *testing.T) {
 	parts := []string{"red", "blue calc(50% - 10%)", "green"}
 	stops := parseGradientStops(parts)
@@ -108,6 +110,16 @@ func TestParseGradientStopsWithCalcPosition(t *testing.T) {
 	// Blue is sRGB (0, 0, 1). Confirm parseColor ran on "blue" only.
 	if stops[1].Color.R != 0 || stops[1].Color.G != 0 || stops[1].Color.B == 0 {
 		t.Errorf("middle stop color = %+v, want blue (R=0 G=0 B=1)", stops[1].Color)
+	}
+	// Neighbour stops must keep their colors. Compare against the same
+	// parseColor path the parser uses for the rest of the value.
+	wantRed, _ := parseColor("red")
+	if stops[0].Color != wantRed {
+		t.Errorf("first stop color = %+v, want %+v (red)", stops[0].Color, wantRed)
+	}
+	wantGreen, _ := parseColor("green")
+	if stops[2].Color != wantGreen {
+		t.Errorf("last stop color = %+v, want %+v (green)", stops[2].Color, wantGreen)
 	}
 }
 
@@ -167,5 +179,190 @@ func TestParseBgPositionWithCalc(t *testing.T) {
 			t.Errorf("parseBgPosition(%q) = [%v, %v], want [%v, %v]",
 				tt.input, pos[0], pos[1], tt.wantX, tt.wantY)
 		}
+	}
+}
+
+// TestPercentFractionAcceptsSingleLeafCalc exercises the parser's
+// single-leaf calc form (no operator). The distinction from the plain
+// "<num>%" fast path inside parseLength matters: this path goes through
+// the calc dispatch and produces a calcExpr leaf wrapper. The helper
+// must still reduce it to the same fraction.
+func TestPercentFractionAcceptsSingleLeafCalc(t *testing.T) {
+	tests := []struct {
+		input string
+		want  float64
+	}{
+		{"calc(50%)", 0.5},
+		{"calc(0%)", 0.0},
+		{"calc(100%)", 1.0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			l := parseLength(tt.input)
+			if l == nil {
+				t.Fatalf("parseLength(%q) returned nil", tt.input)
+			}
+			got, ok := percentFraction(l)
+			if !ok {
+				t.Fatalf("percentFraction(%q): ok=false, want ok=true", tt.input)
+			}
+			if math.Abs(got-tt.want) > 1e-9 {
+				t.Errorf("percentFraction(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPercentFractionAcceptsNestedCalc pins the end-to-end shape for a
+// calc expression containing a parenthesised sub-expression.
+// parseCalcExpr strips a top-level (...) wrapper after the operator
+// passes, so calc(2 * (50% - 10%)) reduces to the same fraction as the
+// flat form calc(2 * 50% - 2 * 10%). The helper must walk into the
+// nested tree and return 0.8.
+func TestPercentFractionAcceptsNestedCalc(t *testing.T) {
+	const input = "calc(2 * (50% - 10%))"
+	l := parseLength(input)
+	if l == nil {
+		t.Fatalf("parseLength(%q) returned nil", input)
+	}
+	got, ok := percentFraction(l)
+	if !ok {
+		t.Fatalf("percentFraction(%q): ok=false, want ok=true", input)
+	}
+	if math.Abs(got-0.8) > 1e-9 {
+		t.Errorf("percentFraction(%q) = %v, want 0.8", input, got)
+	}
+}
+
+// TestPercentFractionRejectsBareNumberAsPx pins the bare-number-as-px
+// convention from parsePlainLength: parseLength("1.5") returns a
+// cssLength tagged with Unit "px", not "num". percentFraction must
+// reject it because px is a length unit, not a fraction component.
+// This is a distinct code path from the explicit "10px" test in
+// TestPercentFractionRejectsPureLength.
+func TestPercentFractionRejectsBareNumberAsPx(t *testing.T) {
+	l := parseLength("1.5")
+	switch {
+	case l == nil:
+		t.Fatalf(`parseLength("1.5") returned nil`)
+	case l.Unit != "px":
+		t.Fatalf(`parseLength("1.5").Unit = %q, want "px" (bare-number convention)`, l.Unit)
+	}
+	got, ok := percentFraction(l)
+	if ok {
+		t.Errorf(`percentFraction("1.5") = (%v, true), want (_, false)`, got)
+	}
+}
+
+// TestPercentFractionNilSafe guards the nil-check at the helper's entry.
+// Position parsers may hand a nil cssLength to percentFraction when an
+// earlier parse step failed; the helper must not panic.
+func TestPercentFractionNilSafe(t *testing.T) {
+	got, ok := percentFraction(nil)
+	if ok {
+		t.Errorf("percentFraction(nil) = (%v, true), want (0, false)", got)
+	}
+	if got != 0 {
+		t.Errorf("percentFraction(nil) value = %v, want 0", got)
+	}
+}
+
+// TestPercentFractionNegativeResult pins pass-through behaviour for
+// negative fractions. Per CSS Images L3 §3.4.3, negative gradient stop
+// positions are spec-valid (they extrapolate the gradient). A future
+// "clamp to [0, 1]" decision should be intentional, not an accidental
+// side-effect of the helper.
+func TestPercentFractionNegativeResult(t *testing.T) {
+	const input = "calc(0% - 10%)"
+	l := parseLength(input)
+	if l == nil {
+		t.Fatalf("parseLength(%q) returned nil", input)
+	}
+	got, ok := percentFraction(l)
+	if !ok {
+		t.Fatalf("percentFraction(%q): ok=false, want ok=true", input)
+	}
+	if math.Abs(got-(-0.1)) > 1e-9 {
+		t.Errorf("percentFraction(%q) = %v, want -0.1", input, got)
+	}
+}
+
+// TestParseGradientStopsLengthPositionDrops pins the documented plain-
+// length limitation: "blue 100px" cannot be reduced to a fraction
+// without the gradient line length. The token is rejected as a
+// position, the whole field is treated as a color, parseColor fails on
+// "blue 100px", and the stop falls back to default Position=0. See the
+// existing TestParseGradientStopsMixedUnitCalcFallsBack reproducer-pin
+// for the same shape with mixed-unit calc.
+func TestParseGradientStopsLengthPositionDrops(t *testing.T) {
+	parts := []string{"red", "blue 100px", "green"}
+	stops := parseGradientStops(parts)
+	if len(stops) != 3 {
+		t.Fatalf("got %d stops, want 3", len(stops))
+	}
+	if stops[1].Position != 0 {
+		t.Errorf("middle stop position = %v, want 0 (default for unparseable)",
+			stops[1].Position)
+	}
+}
+
+// TestParseBgPositionSingleAxisY exercises the y-axis branch of
+// parseBgPosition with a calc value. The existing TestParseBgPositionWithCalc
+// only covers calc on the x axis; this test pairs a plain percent x
+// with a single-leaf calc y so the calc dispatch runs on parts[1].
+func TestParseBgPositionSingleAxisY(t *testing.T) {
+	pos := parseBgPosition("50% calc(30%)")
+	if math.Abs(pos[0]-0.5) > 1e-9 || math.Abs(pos[1]-0.3) > 1e-9 {
+		t.Errorf("parseBgPosition(%q) = [%v, %v], want [0.5, 0.3]",
+			"50% calc(30%)", pos[0], pos[1])
+	}
+}
+
+// TestParseBgPositionKeywordPlusCalc pins the keyword + calc interplay
+// on both axes. The keyword resolves through toFrac's switch, the calc
+// resolves through the percent-only calc path, and the two compose
+// positionally.
+func TestParseBgPositionKeywordPlusCalc(t *testing.T) {
+	tests := []struct {
+		input string
+		wantX float64
+		wantY float64
+	}{
+		{"left calc(20%)", 0, 0.2},
+		{"center calc(30%)", 0.5, 0.3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			pos := parseBgPosition(tt.input)
+			if math.Abs(pos[0]-tt.wantX) > 1e-9 || math.Abs(pos[1]-tt.wantY) > 1e-9 {
+				t.Errorf("parseBgPosition(%q) = [%v, %v], want [%v, %v]",
+					tt.input, pos[0], pos[1], tt.wantX, tt.wantY)
+			}
+		})
+	}
+}
+
+// TestParseBgPositionBothAxesMixedUnit exercises mixed-unit rejection
+// on both axes simultaneously. Each axis independently fails the
+// percent-only check and falls back to 0; neither axis "rescues" the
+// other.
+func TestParseBgPositionBothAxesMixedUnit(t *testing.T) {
+	pos := parseBgPosition("calc(50% + 10px) calc(50% - 10px)")
+	if pos[0] != 0 || pos[1] != 0 {
+		t.Errorf("parseBgPosition(%q) = [%v, %v], want [0, 0]",
+			"calc(50% + 10px) calc(50% - 10px)", pos[0], pos[1])
+	}
+}
+
+// TestParseBgPositionLengthDrops pins the documented plain-length spec
+// gap on background-position. The x-axis "100px" is rejected as
+// unparseable and falls back to 0; the y-axis "50%" still resolves to
+// 0.5. Resolving plain lengths requires the background box dimensions
+// (see issue #266).
+func TestParseBgPositionLengthDrops(t *testing.T) {
+	pos := parseBgPosition("100px 50%")
+	if math.Abs(pos[0]-0) > 1e-9 || math.Abs(pos[1]-0.5) > 1e-9 {
+		t.Errorf("parseBgPosition(%q) = [%v, %v], want [0, 0.5]",
+			"100px 50%", pos[0], pos[1])
 	}
 }

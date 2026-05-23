@@ -631,8 +631,11 @@ func parseGradientDirection(dir string) float64 {
 // all percent or dimensionless (e.g. calc(50% - 10%), min(40%, 60%)).
 // Mixed-unit calc such as calc(50% + 10px) is currently rejected —
 // reducing it to a fraction requires the gradient line length, which is
-// not known until render time. Lazy resolution against the gradient
-// line is the deferred fix (option (c) in issue #265).
+// not known until render time. The same gap applies to plain length
+// stop positions such as "blue 100px" or "red 1em": they fall back to
+// the default position (0) instead of being resolved against the
+// gradient line. Lazy resolution against the gradient line is the
+// deferred fix (option (c) in issue #265).
 func parseGradientStops(parts []string) []layout.GradientStop {
 	var stops []layout.GradientStop
 	for _, p := range parts {
@@ -704,9 +707,12 @@ func parseGradientStops(parts []string) []layout.GradientStop {
 // calc/min/max/clamp tree whose leaves are all percent or dimensionless
 // (e.g. calc(50% - 10%) -> 0.4). Mixed-unit calc such as
 // calc(50% + 10px) is currently rejected and the axis falls back to its
-// default (0 for x, 0.5 for y in single-axis cases). Reducing
-// mixed-unit calc to a fraction requires the background box dimensions,
-// which are not known until render time. Lazy resolution against those
+// default (0 for x, 0.5 for y in single-axis cases). The same gap
+// applies to plain length axis values such as "100px 50%" or "1em 1em":
+// the length axis falls back to its default rather than being resolved
+// against the background box. Reducing mixed-unit calc or plain
+// lengths to a fraction requires the background box dimensions, which
+// are not known until render time. Lazy resolution against those
 // dimensions is the deferred fix (option (c) in issue #266).
 func parseBgPosition(val string) [2]float64 {
 	val = strings.TrimSpace(strings.ToLower(val))

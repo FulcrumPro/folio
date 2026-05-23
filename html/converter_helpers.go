@@ -623,7 +623,16 @@ func parseGradientDirection(dir string) float64 {
 	}
 }
 
-// parseGradientStops parses a slice of "color [position]" strings into GradientStops.
+// parseGradientStops parses a slice of "color [position]" strings into
+// GradientStops.
+//
+// Calc support level is "restricted calc": a position token may be a
+// plain percent ("50%") or a calc/min/max/clamp tree whose leaves are
+// all percent or dimensionless (e.g. calc(50% - 10%), min(40%, 60%)).
+// Mixed-unit calc such as calc(50% + 10px) is currently rejected —
+// reducing it to a fraction requires the gradient line length, which is
+// not known until render time. Lazy resolution against the gradient
+// line is the deferred fix (option (c) in issue #265).
 func parseGradientStops(parts []string) []layout.GradientStop {
 	var stops []layout.GradientStop
 	for _, p := range parts {
@@ -632,17 +641,39 @@ func parseGradientStops(parts []string) []layout.GradientStop {
 			continue
 		}
 
-		// Try to split into color + position.
-		// The position is the last token if it ends with %.
+		// Split on whitespace at paren depth 0 so calc/min/max/clamp
+		// values stay a single token (e.g. "calc(50% - 10%)" with its
+		// internal spaces is one token, not three).
 		stop := layout.GradientStop{}
-		tokens := strings.Fields(p)
+		tokens := splitTopLevelFields(p)
 
 		if len(tokens) >= 2 {
 			last := tokens[len(tokens)-1]
+			positionMatched := false
+
+			// Plain "<num>%" first — keeps the fast path for the
+			// common case and avoids parseLength's calc dispatch.
 			if strings.HasSuffix(last, "%") {
 				if v, err := strconv.ParseFloat(strings.TrimSuffix(last, "%"), 64); err == nil {
 					stop.Position = v / 100
+					positionMatched = true
 				}
+			}
+
+			// Calc/min/max/clamp: parse the token and accept only
+			// percent-only trees. Mixed-unit trees fall through and
+			// the whole field is treated as a color, matching the
+			// pre-calc behaviour.
+			if !positionMatched {
+				if l := parseLength(last); l != nil {
+					if frac, ok := percentFraction(l); ok {
+						stop.Position = frac
+						positionMatched = true
+					}
+				}
+			}
+
+			if positionMatched {
 				colorStr := strings.Join(tokens[:len(tokens)-1], " ")
 				if clr, ok := parseColor(colorStr); ok {
 					stop.Color = clr
@@ -667,13 +698,25 @@ func parseGradientStops(parts []string) []layout.GradientStop {
 
 // parseBgPosition converts CSS background-position keywords to [x, y]
 // fractions in [0, 1].
+//
+// Calc support level is "restricted calc": each axis may be a plain
+// percent, a keyword (left/center/right/top/bottom), or a
+// calc/min/max/clamp tree whose leaves are all percent or dimensionless
+// (e.g. calc(50% - 10%) -> 0.4). Mixed-unit calc such as
+// calc(50% + 10px) is currently rejected and the axis falls back to its
+// default (0 for x, 0.5 for y in single-axis cases). Reducing
+// mixed-unit calc to a fraction requires the background box dimensions,
+// which are not known until render time. Lazy resolution against those
+// dimensions is the deferred fix (option (c) in issue #266).
 func parseBgPosition(val string) [2]float64 {
 	val = strings.TrimSpace(strings.ToLower(val))
 	if val == "" {
 		return [2]float64{0, 0}
 	}
 
-	parts := strings.Fields(val)
+	// splitTopLevelFields keeps calc()/min()/max()/clamp() values as a
+	// single token even when they contain internal whitespace.
+	parts := splitTopLevelFields(val)
 
 	toFrac := func(s string) (float64, bool) {
 		switch s {
@@ -691,6 +734,13 @@ func parseBgPosition(val string) [2]float64 {
 		if strings.HasSuffix(s, "%") {
 			if v, err := strconv.ParseFloat(strings.TrimSuffix(s, "%"), 64); err == nil {
 				return v / 100, true
+			}
+		}
+		// Calc/min/max/clamp: accept only percent-only trees. Mixed-unit
+		// trees fall back to the default (caller decides).
+		if l := parseLength(s); l != nil {
+			if frac, ok := percentFraction(l); ok {
+				return frac, true
 			}
 		}
 		return 0, false

@@ -234,6 +234,28 @@ func TestPercentFractionAcceptsNestedCalc(t *testing.T) {
 	}
 }
 
+// TestPercentFractionAcceptsRightSideParenCalc is the mirror of
+// TestPercentFractionAcceptsNestedCalc with the parenthesised sub-tree
+// on the left of the operator: calc((50% - 10%) * 2). This form used
+// to fail to parse because parseCalcExpr did not reset its paren-depth
+// counter between the +/- scan and the * / / scan, hiding the top-level
+// '*'. The fix lets parseLength produce a percent-only tree and the
+// helper must reduce it to 0.8.
+func TestPercentFractionAcceptsRightSideParenCalc(t *testing.T) {
+	const input = "calc((50% - 10%) * 2)"
+	l := parseLength(input)
+	if l == nil {
+		t.Fatalf("parseLength(%q) returned nil", input)
+	}
+	got, ok := percentFraction(l)
+	if !ok {
+		t.Fatalf("percentFraction(%q): ok=false, want ok=true", input)
+	}
+	if math.Abs(got-0.8) > 1e-9 {
+		t.Errorf("percentFraction(%q) = %v, want 0.8", input, got)
+	}
+}
+
 // TestPercentFractionRejectsBareNumberAsPx pins the bare-number-as-px
 // convention from parsePlainLength: parseLength("1.5") returns a
 // cssLength tagged with Unit "px", not "num". percentFraction must

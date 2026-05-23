@@ -501,6 +501,12 @@ func parseCalcExpr(s string) *calcExpr {
 	}
 
 	// Try * and / (higher precedence).
+	// Reset depth: the +/- scan above walks past every ')' and '(' in the
+	// string, and the loop bound i > 0 skips index 0, so an opening paren
+	// at s[0] is never matched and leaves depth at a stale non-zero value.
+	// Without this reset, expressions like "(50% - 10%) * 2" hide their
+	// top-level '*' behind a phantom paren depth and fail to parse.
+	depth = 0
 	for i := len(s) - 1; i > 0; i-- {
 		ch := s[i]
 		switch ch {

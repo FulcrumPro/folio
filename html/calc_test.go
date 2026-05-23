@@ -134,3 +134,76 @@ func TestCalcComplexExpression(t *testing.T) {
 		t.Errorf("calc(100%% - 40px - 40px) at 500pt = %.1f, want 440", got)
 	}
 }
+
+// TestCalcParenLeftOperandTimes pins the right-side parenthesised form
+// that exposed the depth-reset bug in parseCalcExpr: the +/- scan walks
+// past every '(' and ')' but its lower bound is i > 0, so an opening
+// paren at s[0] is never decremented. The leftover depth was carried
+// into the '*' / '/' scan and hid the top-level operator. Without the
+// fix this test returns nil.
+func TestCalcParenLeftOperandTimes(t *testing.T) {
+	l := parseLength("calc((50% - 10%) * 2)")
+	if l == nil || l.calc == nil {
+		t.Fatal("expected calc")
+	}
+	// (50% - 10%) of 100pt = 40, * 2 = 80
+	got := l.toPoints(100, 12)
+	if math.Abs(got-80) > 0.1 {
+		t.Errorf("calc((50%% - 10%%) * 2) at 100pt = %.1f, want 80", got)
+	}
+}
+
+// TestCalcParenLeftOperandAddPx covers the same shape with px leaves to
+// confirm the fix is not percent-specific.
+func TestCalcParenLeftOperandAddPx(t *testing.T) {
+	l := parseLength("calc((10px + 5px) * 2)")
+	if l == nil || l.calc == nil {
+		t.Fatal("expected calc")
+	}
+	// (10px + 5px) = 15px = 11.25pt, * 2 = 22.5pt (30px equivalent).
+	got := l.toPoints(0, 12)
+	if math.Abs(got-22.5) > 0.1 {
+		t.Errorf("calc((10px + 5px) * 2) = %.1f, want 22.5", got)
+	}
+}
+
+// TestCalcParenLeftOperandDivide pins the '/' branch of the same scan.
+func TestCalcParenLeftOperandDivide(t *testing.T) {
+	l := parseLength("calc((100% - 20%) / 4)")
+	if l == nil || l.calc == nil {
+		t.Fatal("expected calc")
+	}
+	// (100% - 20%) of 100pt = 80, / 4 = 20.
+	got := l.toPoints(100, 12)
+	if math.Abs(got-20) > 0.1 {
+		t.Errorf("calc((100%% - 20%%) / 4) at 100pt = %.1f, want 20", got)
+	}
+}
+
+// TestCalcParenRightOperandTimes is the mirrored form previously used as
+// a workaround. It must still parse correctly after the fix — regression
+// guard against breaking the form that did work.
+func TestCalcParenRightOperandTimes(t *testing.T) {
+	l := parseLength("calc(2 * (50% - 10%))")
+	if l == nil || l.calc == nil {
+		t.Fatal("expected calc")
+	}
+	got := l.toPoints(100, 12)
+	if math.Abs(got-80) > 0.1 {
+		t.Errorf("calc(2 * (50%% - 10%%)) at 100pt = %.1f, want 80", got)
+	}
+}
+
+// TestCalcDoubleParenLeftOperand pins a deeper nesting on the left side.
+// parseCalcExpr's recursive call on the left operand must strip both
+// paren layers and still produce a percent-only subtree.
+func TestCalcDoubleParenLeftOperand(t *testing.T) {
+	l := parseLength("calc(((50% - 10%)) * 2)")
+	if l == nil || l.calc == nil {
+		t.Fatal("expected calc")
+	}
+	got := l.toPoints(100, 12)
+	if math.Abs(got-80) > 0.1 {
+		t.Errorf("calc(((50%% - 10%%)) * 2) at 100pt = %.1f, want 80", got)
+	}
+}

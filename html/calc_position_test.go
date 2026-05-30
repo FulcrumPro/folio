@@ -157,27 +157,39 @@ func TestParseGradientStopsMixedUnitCalcFallsBack(t *testing.T) {
 }
 
 // TestParseBgPositionWithCalc covers the percent-only calc path and the
-// single-axis fallback. Mixed-unit calc must fall back to the existing
-// "unparseable axis -> default" behaviour.
+// single-axis fallback. The lazy-resolution migration changes the
+// mixed-unit row: x now resolves to (container - image) * 0.5 + 10px's
+// point value at draw time, rather than dropping to 0 at parse time.
+// The percent-only rows are unchanged in intent; this test resolves
+// each axis against a 100pt "(container - image)" surrogate so the
+// recovered fraction matches the pre-migration expectations.
+//
+// Migrated from the [2]float64 return shape. The mixed-unit row is
+// rewritten to assert the new resolved-point semantics (60pt with the
+// codebase's px-to-pt convention of 0.75: 100*0.5 + 10*0.75 = 57.5).
 func TestParseBgPositionWithCalc(t *testing.T) {
 	tests := []struct {
-		input string
-		wantX float64
-		wantY float64
+		input         string
+		wantX         float64
+		wantY         float64
+		containerSize float64
+		fontSize      float64
 	}{
-		{"calc(50% - 10%) 50%", 0.4, 0.5},
-		{"calc(30%)", 0.3, 0.5},
-		{"min(40%, 60%) 50%", 0.4, 0.5},
-		{"clamp(10%, 50%, 90%) 25%", 0.5, 0.25},
-		// Mixed-unit calc on x: x falls back to 0 (existing
-		// behaviour for unparseable), y still resolves.
-		{"calc(50% + 10px) 50%", 0, 0.5},
+		{"calc(50% - 10%) 50%", 40, 50, 100, 0},
+		{"calc(30%)", 30, 50, 100, 0},
+		{"min(40%, 60%) 50%", 40, 50, 100, 0},
+		{"clamp(10%, 50%, 90%) 25%", 50, 25, 100, 0},
+		// Mixed-unit calc on x: now resolves lazily. 50% of 100 + 10px
+		// in points = 50 + 7.5 = 57.5. Y is plain 50% = 50.
+		{"calc(50% + 10px) 50%", 57.5, 50, 100, 0},
 	}
 	for _, tt := range tests {
 		pos := parseBgPosition(tt.input)
-		if math.Abs(pos[0]-tt.wantX) > 1e-9 || math.Abs(pos[1]-tt.wantY) > 1e-9 {
-			t.Errorf("parseBgPosition(%q) = [%v, %v], want [%v, %v]",
-				tt.input, pos[0], pos[1], tt.wantX, tt.wantY)
+		gotX := pos[0].Resolve(tt.containerSize, tt.fontSize)
+		gotY := pos[1].Resolve(tt.containerSize, tt.fontSize)
+		if math.Abs(gotX-tt.wantX) > 1e-9 || math.Abs(gotY-tt.wantY) > 1e-9 {
+			t.Errorf("parseBgPosition(%q).Resolve(%v, %v) = [%v, %v], want [%v, %v]",
+				tt.input, tt.containerSize, tt.fontSize, gotX, gotY, tt.wantX, tt.wantY)
 		}
 	}
 }
@@ -332,18 +344,24 @@ func TestParseGradientStopsLengthPositionDrops(t *testing.T) {
 // parseBgPosition with a calc value. The existing TestParseBgPositionWithCalc
 // only covers calc on the x axis; this test pairs a plain percent x
 // with a single-leaf calc y so the calc dispatch runs on parts[1].
+// Migrated to the resolved-points shape: a 100pt container makes the
+// recovered fractions match the pre-migration expectations.
 func TestParseBgPositionSingleAxisY(t *testing.T) {
 	pos := parseBgPosition("50% calc(30%)")
-	if math.Abs(pos[0]-0.5) > 1e-9 || math.Abs(pos[1]-0.3) > 1e-9 {
+	gotX := pos[0].Resolve(100, 0) / 100
+	gotY := pos[1].Resolve(100, 0) / 100
+	if math.Abs(gotX-0.5) > 1e-9 || math.Abs(gotY-0.3) > 1e-9 {
 		t.Errorf("parseBgPosition(%q) = [%v, %v], want [0.5, 0.3]",
-			"50% calc(30%)", pos[0], pos[1])
+			"50% calc(30%)", gotX, gotY)
 	}
 }
 
 // TestParseBgPositionKeywordPlusCalc pins the keyword + calc interplay
-// on both axes. The keyword resolves through toFrac's switch, the calc
-// resolves through the percent-only calc path, and the two compose
-// positionally.
+// on both axes. The keyword resolves through parseAxis's switch to a
+// percent constant (bgPosZero / bgPosHalf / bgPosFull), the calc
+// resolves through parseLength, and the two compose positionally.
+// Migrated from the [2]float64 return shape; a 100pt container surrogate
+// recovers the original fractions.
 func TestParseBgPositionKeywordPlusCalc(t *testing.T) {
 	tests := []struct {
 		input string
@@ -356,35 +374,42 @@ func TestParseBgPositionKeywordPlusCalc(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
 			pos := parseBgPosition(tt.input)
-			if math.Abs(pos[0]-tt.wantX) > 1e-9 || math.Abs(pos[1]-tt.wantY) > 1e-9 {
+			gotX := pos[0].Resolve(100, 0) / 100
+			gotY := pos[1].Resolve(100, 0) / 100
+			if math.Abs(gotX-tt.wantX) > 1e-9 || math.Abs(gotY-tt.wantY) > 1e-9 {
 				t.Errorf("parseBgPosition(%q) = [%v, %v], want [%v, %v]",
-					tt.input, pos[0], pos[1], tt.wantX, tt.wantY)
+					tt.input, gotX, gotY, tt.wantX, tt.wantY)
 			}
 		})
 	}
 }
 
-// TestParseBgPositionBothAxesMixedUnit exercises mixed-unit rejection
-// on both axes simultaneously. Each axis independently fails the
-// percent-only check and falls back to 0; neither axis "rescues" the
-// other.
+// TestParseBgPositionBothAxesMixedUnit exercises mixed-unit calc on
+// both axes simultaneously. After the lazy-resolution migration both
+// axes resolve at draw time: 50% of a 100pt (container - image) box
+// plus / minus 10px (= 7.5pt). Migrated from the
+// "both axes fall back to 0" assertion that captured the old behaviour.
 func TestParseBgPositionBothAxesMixedUnit(t *testing.T) {
 	pos := parseBgPosition("calc(50% + 10px) calc(50% - 10px)")
-	if pos[0] != 0 || pos[1] != 0 {
-		t.Errorf("parseBgPosition(%q) = [%v, %v], want [0, 0]",
-			"calc(50% + 10px) calc(50% - 10px)", pos[0], pos[1])
+	gotX := pos[0].Resolve(100, 0)
+	gotY := pos[1].Resolve(100, 0)
+	if math.Abs(gotX-57.5) > 1e-9 || math.Abs(gotY-42.5) > 1e-9 {
+		t.Errorf("parseBgPosition(%q).Resolve(100, 0) = [%v, %v], want [57.5, 42.5]",
+			"calc(50% + 10px) calc(50% - 10px)", gotX, gotY)
 	}
 }
 
-// TestParseBgPositionLengthDrops pins the documented plain-length spec
-// gap on background-position. The x-axis "100px" is rejected as
-// unparseable and falls back to 0; the y-axis "50%" still resolves to
-// 0.5. Resolving plain lengths requires the background box dimensions
-// (see issue #266).
+// TestParseBgPositionLengthDrops formerly pinned the plain-length spec
+// gap. The gap is closed by lazy resolution: the x-axis "100px" now
+// resolves to 75pt (px-to-pt 0.75) at draw time and the y-axis "50%"
+// resolves to half of (container - image). The test name is kept for
+// git-blame continuity but the assertion now confirms the closure.
 func TestParseBgPositionLengthDrops(t *testing.T) {
 	pos := parseBgPosition("100px 50%")
-	if math.Abs(pos[0]-0) > 1e-9 || math.Abs(pos[1]-0.5) > 1e-9 {
-		t.Errorf("parseBgPosition(%q) = [%v, %v], want [0, 0.5]",
-			"100px 50%", pos[0], pos[1])
+	gotX := pos[0].Resolve(200, 0)
+	gotY := pos[1].Resolve(100, 0)
+	if math.Abs(gotX-75) > 1e-9 || math.Abs(gotY-50) > 1e-9 {
+		t.Errorf("parseBgPosition(%q) = [%v, %v], want [75, 50]",
+			"100px 50%", gotX, gotY)
 	}
 }

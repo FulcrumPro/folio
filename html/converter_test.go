@@ -8290,6 +8290,14 @@ func TestParseRadialGradient(t *testing.T) {
 	}
 }
 
+// TestParseBgPosition was migrated from the original [2]float64 fraction
+// assertion to the new [2]layout.ResolvableLength shape. The expected
+// fractions are recovered by Resolve(100, 0) on each axis — percent
+// leaves multiply Value/100 by 100, so a 50% axis resolves to 50 and
+// the test reads back the original 0.5 fraction by dividing by 100.
+// Plain-length axes (none of the inputs below use them) would not
+// round-trip through this helper; the dedicated bg_position_lazy_test
+// covers those cases.
 func TestParseBgPosition(t *testing.T) {
 	tests := []struct {
 		input string
@@ -8305,9 +8313,11 @@ func TestParseBgPosition(t *testing.T) {
 	}
 	for _, tt := range tests {
 		pos := parseBgPosition(tt.input)
-		if pos[0] != tt.wantX || pos[1] != tt.wantY {
+		gotX := pos[0].Resolve(100, 0) / 100
+		gotY := pos[1].Resolve(100, 0) / 100
+		if math.Abs(gotX-tt.wantX) > 1e-9 || math.Abs(gotY-tt.wantY) > 1e-9 {
 			t.Errorf("parseBgPosition(%q) = [%v, %v], want [%v, %v]",
-				tt.input, pos[0], pos[1], tt.wantX, tt.wantY)
+				tt.input, gotX, gotY, tt.wantX, tt.wantY)
 		}
 	}
 }

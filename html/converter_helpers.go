@@ -699,83 +699,91 @@ func parseGradientStops(parts []string) []layout.GradientStop {
 	return stops
 }
 
-// parseBgPosition converts CSS background-position keywords to [x, y]
-// fractions in [0, 1].
+// bgPosZero / bgPosHalf / bgPosFull are the percent constants that back
+// the background-position keywords (left/top -> 0%, center -> 50%,
+// right/bottom -> 100%). Storing them as cssLength preserves the percent
+// semantics at draw time: 100% on a 200pt container with a 100pt image
+// resolves to (200-100) * 1.0 = 100, which places the image's right
+// edge against the container's right edge, matching the CSS "100% 100%"
+// spec.
+var (
+	bgPosZero = &cssLength{Value: 0, Unit: "%"}
+	bgPosHalf = &cssLength{Value: 50, Unit: "%"}
+	bgPosFull = &cssLength{Value: 100, Unit: "%"}
+)
+
+// parseBgPosition parses the CSS background-position value into a pair
+// of layout.ResolvableLength values. Resolution against the background
+// box (and any em/rem inputs against font-size) happens lazily at draw
+// time so plain lengths and mixed-unit calc — e.g. "100px 50%" or
+// "calc(50% + 10px)" — produce the correct offset without needing the
+// box dimensions at parse time.
 //
-// Calc support level is "restricted calc": each axis may be a plain
-// percent, a keyword (left/center/right/top/bottom), or a
-// calc/min/max/clamp tree whose leaves are all percent or dimensionless
-// (e.g. calc(50% - 10%) -> 0.4). Mixed-unit calc such as
-// calc(50% + 10px) is currently rejected and the axis falls back to its
-// default (0 for x, 0.5 for y in single-axis cases). The same gap
-// applies to plain length axis values such as "100px 50%" or "1em 1em":
-// the length axis falls back to its default rather than being resolved
-// against the background box. Reducing mixed-unit calc or plain
-// lengths to a fraction requires the background box dimensions, which
-// are not known until render time. Lazy resolution against those
-// dimensions is the deferred fix (option (c) in issue #266).
-func parseBgPosition(val string) [2]float64 {
+// Each axis may be a keyword (left/center/right/top/bottom), a plain
+// percent, a plain length, or a calc/min/max/clamp tree. Single-axis
+// inputs default the missing axis to center. An unrecognised token
+// drops both axes to their default (matching the prior fraction return
+// of [0, 0] / [center, center] in the single-keyword case).
+//
+// The same lazy-resolution refactor is tracked for gradient stops in
+// issue #318; gradient stops still parse to fractions because the
+// gradient line length lives behind a different rendering boundary.
+func parseBgPosition(val string) [2]layout.ResolvableLength {
 	val = strings.TrimSpace(strings.ToLower(val))
+	def := [2]layout.ResolvableLength{bgPosZero, bgPosZero}
 	if val == "" {
-		return [2]float64{0, 0}
+		return def
 	}
 
 	// splitTopLevelFields keeps calc()/min()/max()/clamp() values as a
 	// single token even when they contain internal whitespace.
 	parts := splitTopLevelFields(val)
 
-	toFrac := func(s string) (float64, bool) {
+	// parseAxis maps a single axis token to a *cssLength. Keywords map
+	// to the bgPosZero/Half/Full percent constants; everything else is
+	// routed through parseLength which already understands plain
+	// lengths, percents, and the calc/min/max/clamp family.
+	parseAxis := func(s string) (*cssLength, bool) {
 		switch s {
-		case "left":
-			return 0, true
+		case "left", "top":
+			return bgPosZero, true
 		case "center":
-			return 0.5, true
-		case "right":
-			return 1, true
-		case "top":
-			return 0, true
-		case "bottom":
-			return 1, true
+			return bgPosHalf, true
+		case "right", "bottom":
+			return bgPosFull, true
 		}
-		if strings.HasSuffix(s, "%") {
-			if v, err := strconv.ParseFloat(strings.TrimSuffix(s, "%"), 64); err == nil {
-				return v / 100, true
-			}
-		}
-		// Calc/min/max/clamp: accept only percent-only trees. Mixed-unit
-		// trees fall back to the default (caller decides).
 		if l := parseLength(s); l != nil {
-			if frac, ok := percentFraction(l); ok {
-				return frac, true
-			}
+			return l, true
 		}
-		return 0, false
+		return nil, false
 	}
 
 	if len(parts) == 1 {
 		if parts[0] == "center" {
-			return [2]float64{0.5, 0.5}
+			return [2]layout.ResolvableLength{bgPosHalf, bgPosHalf}
 		}
-		if f, ok := toFrac(parts[0]); ok {
-			// Single keyword: "left" = 0, 0.5; "top" = 0.5, 0
+		if l, ok := parseAxis(parts[0]); ok {
+			// Single keyword/value: "top"/"bottom" target the y-axis
+			// (x defaults to center); everything else targets x
+			// (y defaults to center).
 			switch parts[0] {
 			case "top", "bottom":
-				return [2]float64{0.5, f}
+				return [2]layout.ResolvableLength{bgPosHalf, l}
 			default:
-				return [2]float64{f, 0.5}
+				return [2]layout.ResolvableLength{l, bgPosHalf}
 			}
 		}
-		return [2]float64{0, 0}
+		return def
 	}
 
-	x, y := 0.0, 0.0
-	if f, ok := toFrac(parts[0]); ok {
-		x = f
+	x, y := layout.ResolvableLength(bgPosZero), layout.ResolvableLength(bgPosZero)
+	if l, ok := parseAxis(parts[0]); ok {
+		x = l
 	}
-	if f, ok := toFrac(parts[1]); ok {
-		y = f
+	if l, ok := parseAxis(parts[1]); ok {
+		y = l
 	}
-	return [2]float64{x, y}
+	return [2]layout.ResolvableLength{x, y}
 }
 
 // resolveBackgroundImage resolves a background-image CSS value into a layout.BackgroundImage.
@@ -841,6 +849,7 @@ func (c *converter) resolveBackgroundImage(style computedStyle) *layout.Backgrou
 		Image:    img,
 		Size:     size,
 		Position: parseBgPosition(style.BackgroundPosition),
+		FontSize: style.FontSize,
 		Repeat:   repeat,
 	}
 

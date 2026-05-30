@@ -1007,6 +1007,29 @@ func drawRoundedBorders(stream *content.Stream, borders CellBorders, x, y, w, h 
 	drawCellBorders(stream, borders, x, y, w, h)
 }
 
+// resolveBgPositionAxis resolves a single axis of background-position to
+// a point offset from the container's leading edge. containerSize is the
+// background box dimension on this axis; imageSize is the rendered
+// image dimension on the same axis. fontSize feeds em/rem resolution.
+//
+// Per CSS background-position semantics, percent values measure against
+// (container - image): "50%" centres the image. Plain lengths are raw
+// offsets from the container edge. Mixed-unit calc such as
+// calc(50% - 10px) splits the difference — percent leaves resolve
+// against (container - image) and length leaves contribute their raw
+// point value. The ResolvableLength contract (percent leaf reads the
+// container argument; length leaf ignores it) makes this fall out
+// naturally by passing (container - image) as the resolution dimension.
+//
+// A nil position (e.g. a parser fallback) maps to 0, matching the
+// previous fraction-default behaviour.
+func resolveBgPositionAxis(l ResolvableLength, containerSize, imageSize, fontSize float64) float64 {
+	if l == nil {
+		return 0
+	}
+	return l.Resolve(containerSize-imageSize, fontSize)
+}
+
 // drawBackgroundImage draws a background image into a container area.
 // (x, y) is bottom-left corner, w and h are the container dimensions.
 func drawBackgroundImage(ctx DrawContext, bg *BackgroundImage, x, y, w, h, radius float64) {
@@ -1089,13 +1112,28 @@ func drawBackgroundImage(ctx DrawContext, bg *BackgroundImage, x, y, w, h, radiu
 	}
 
 	// Compute initial position based on background-position.
-	posX := bg.Position[0] // 0-1
-	posY := bg.Position[1] // 0-1
+	//
+	// CSS background-position semantics treat percent and length values
+	// differently. A percent like "50%" centres the corresponding image
+	// edge fraction over the same container edge fraction, which works
+	// out to (container - image) * percent. A plain length like "50px"
+	// is a raw offset from the container's left/top edge. For calc that
+	// mixes both — e.g. calc(50% - 10px) — CSS computes the percent
+	// against (container - image) and adds the length on top. The
+	// resolver here passes (w - drawW) / (h - drawH) as the container
+	// dimension so percent leaves naturally pick up the right factor;
+	// plain-length leaves return their raw point value because they
+	// don't read the container argument.
+	posX := resolveBgPositionAxis(bg.Position[0], w, drawW, bg.FontSize)
+	posY := resolveBgPositionAxis(bg.Position[1], h, drawH, bg.FontSize)
 
 	// Origin position: the offset of the image's top-left within the container.
 	// PDF y-axis: y is bottom-left; image placed from bottom-left.
-	startX := x + posX*(w-drawW)
-	startY := y + (1-posY)*(h-drawH) // posY=0 → top → y + (h - drawH)
+	startX := x + posX
+	// posY is the distance from the container's top edge to the image's
+	// top edge. In PDF coords (y bottom-left), that means subtracting
+	// posY + drawH from the container's top.
+	startY := y + h - drawH - posY
 
 	switch repeat {
 	case "no-repeat":

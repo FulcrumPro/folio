@@ -5,14 +5,29 @@ package layout
 
 import folioimage "github.com/carlos7ags/folio/image"
 
+// ResolvableLength is a length that resolves lazily against a container
+// dimension at draw time. Defined in layout (rather than imported from
+// html) so the layout package stays free of html-parsing concerns; the
+// html package's cssLength satisfies this interface. Used by
+// BackgroundImage.Position so that plain lengths and mixed-unit calc on
+// background-position can be resolved against the background box, which
+// is only known at draw time. See issue #266.
+type ResolvableLength interface {
+	// Resolve returns the length in PDF points. Percent leaves evaluate
+	// against container; em / rem leaves against fontSize. Plain length
+	// leaves (px, pt, mm, in, cm) ignore both arguments.
+	Resolve(container, fontSize float64) float64
+}
+
 // BackgroundImage describes a background image for a Div container.
 type BackgroundImage struct {
-	Image    *folioimage.Image // the image to draw
-	Size     string            // "auto", "cover", "contain"
-	SizeW    float64           // explicit width (0 = auto)
-	SizeH    float64           // explicit height (0 = auto)
-	Position [2]float64        // x%, y% (0-1 each)
-	Repeat   string            // "no-repeat", "repeat", "repeat-x", "repeat-y"
+	Image    *folioimage.Image   // the image to draw
+	Size     string              // "auto", "cover", "contain"
+	SizeW    float64             // explicit width (0 = auto)
+	SizeH    float64             // explicit height (0 = auto)
+	Position [2]ResolvableLength // x, y; resolved against the background box at draw time
+	FontSize float64             // font-size in points, for em/rem resolution of Position
+	Repeat   string              // "no-repeat", "repeat", "repeat-x", "repeat-y"
 }
 
 // Padding defines the padding on each side of a container.

@@ -389,6 +389,15 @@ func (e *calcExpr) resolve(relativeTo, fontSize float64) float64 {
 	return 0
 }
 
+// Resolve satisfies layout.ResolvableLength so cssLength values can feed
+// background-position lazy resolution at draw time. It is a thin alias
+// for toPoints; container maps to the percent-resolution dimension and
+// fontSize feeds em / rem leaves. See layout.ResolvableLength for the
+// background-position semantic (container is (box - image) on each axis).
+func (l *cssLength) Resolve(container, fontSize float64) float64 {
+	return l.toPoints(container, fontSize)
+}
+
 // toPoints converts a CSS length to PDF points.
 // relativeTo is used for percentage values.
 func (l *cssLength) toPoints(relativeTo, fontSize float64) float64 {

@@ -139,6 +139,60 @@ if a.Type == b.Type && a.Pt(width) == b.Pt(width) { ... }
 No in-tree consumer compared `UnitValue` for equality, so the change
 is contained to consumers that did so deliberately.
 
+### `layout.BackgroundImage.Position` is now `[2]layout.ResolvableLength`
+
+The field was `[2]float64`, resolved eagerly at parse time. It is now
+`[2]layout.ResolvableLength`, resolved at draw time against the
+background box. The struct also gains a sibling `FontSize float64`
+field so `em` / `rem` leaves in `background-position` resolve against
+the originating element's font size.
+
+`ResolvableLength` is a one-method interface:
+
+```go
+type ResolvableLength interface {
+    Resolve(container, fontSize float64) float64
+}
+```
+
+Out-of-tree code that constructs `BackgroundImage` directly must
+implement it for each axis. A pt-typed wrapper is the smallest viable
+shape:
+
+```go
+type ptLen float64
+
+func (p ptLen) Resolve(_, _ float64) float64 { return float64(p) }
+
+// before
+bg := &layout.BackgroundImage{
+    Image:    img,
+    Position: [2]float64{10, 20},
+}
+
+// after
+bg := &layout.BackgroundImage{
+    Image:    img,
+    Position: [2]layout.ResolvableLength{ptLen(10), ptLen(20)},
+    FontSize: 12, // only consulted by em / rem leaves
+}
+```
+
+The HTML converter constructs `BackgroundImage` internally and routes
+its own parsed `cssLength` through `Position`, so callers that go
+through `html.Convert` / `html.ConvertFull` see no source change.
+
+### `html.ErrURLPolicyDenied` message text changed
+
+The exported `var` identity is unchanged, so `errors.Is(err,
+html.ErrURLPolicyDenied)` continues to work. The wrapped error message
+changed from `"folio/html: ..."` to `"html: ..."` as part of the
+package-prefix standardization. Callers that compared `err.Error()`
+verbatim against the old string need to update their assertion. The
+same standardization touches ~130 internal helper errors across the
+tree; none are exported, so the impact is limited to test fixtures
+that string-matched against the previous messages.
+
 ### Visual changes
 
 Several v0.8.0 fixes change the visible output of affected documents.

@@ -21,10 +21,14 @@ import (
 //     fetch timeout is transient/infrastructure. Inspect Unwrap for the
 //     underlying cause (errors.Is against fs.ErrNotExist, ErrURLPolicyDenied,
 //     net errors, etc.).
+//   - *LimitError — conversion hit a configured resource ceiling
+//     (Options.MaxElements / MaxDepth). A client/input fault: the input was
+//     too large or too deeply nested to convert within the configured
+//     budget. Conversion fails closed before exhausting memory or stack.
 //
-// Any error that is neither of these should be treated as an internal
-// folio fault. AssetError values surface only when Options.StrictAssets is
-// set; otherwise asset failures are logged through Options.Logger and the
+// Any error that is none of these should be treated as an internal folio
+// fault. AssetError values surface only when Options.StrictAssets is set;
+// otherwise asset failures are logged through Options.Logger and the
 // conversion continues with degraded output.
 
 // ParseError indicates the input HTML could not be parsed into a document
@@ -129,3 +133,47 @@ func formatAssetError(category string, err error, attrs []any) error {
 // caller already received the signal they wired URLPolicy to produce.
 // Use with errors.Is to test the cause.
 var ErrURLPolicyDenied = errors.New("html: URL fetch blocked by URLPolicy")
+
+// LimitKind identifies which resource ceiling a LimitError reports.
+type LimitKind int
+
+const (
+	// LimitElements reports that Options.MaxElements was exceeded — the
+	// input produced more layout elements than the configured budget.
+	LimitElements LimitKind = iota
+	// LimitDepth reports that Options.MaxDepth was exceeded — the input
+	// nested elements more deeply than the configured budget.
+	LimitDepth
+)
+
+func (k LimitKind) String() string {
+	switch k {
+	case LimitDepth:
+		return "depth"
+	default:
+		return "elements"
+	}
+}
+
+// LimitError indicates conversion was aborted because a configured resource
+// ceiling (Options.MaxElements or Options.MaxDepth) was crossed. It is a
+// terminal, input-side fault with no wrapped cause: the conversion stops and
+// returns this error instead of continuing to allocate, so a very large or
+// deeply-nested (e.g. programmatically-expanded) template cannot exhaust
+// memory or the goroutine stack. Test for it with
+// errors.As(err, new(*html.LimitError)).
+type LimitError struct {
+	// Kind is the ceiling that was crossed.
+	Kind LimitKind
+	// Limit is the configured maximum (the value of MaxElements or MaxDepth).
+	Limit int
+}
+
+func (e *LimitError) Error() string {
+	switch e.Kind {
+	case LimitDepth:
+		return fmt.Sprintf("folio/html: nesting depth exceeded limit of %d", e.Limit)
+	default:
+		return fmt.Sprintf("folio/html: element count exceeded limit of %d", e.Limit)
+	}
+}

@@ -81,6 +81,22 @@ type Options struct {
 	// development and CI to surface broken paths in the local feedback
 	// loop instead of letting them silently degrade the output.
 	StrictAssets bool
+
+	// MaxElements caps the number of HTML nodes converted into layout
+	// elements. 0 (the default) means unlimited. It guards against
+	// resource exhaustion from very large or programmatically-expanded
+	// input (e.g. a small template rendered against a huge dataset): once
+	// the cap is crossed, Convert/ConvertFull stop walking the tree and
+	// return a *LimitError (Kind LimitElements) instead of continuing to
+	// allocate. Recommended for any path that converts untrusted HTML.
+	MaxElements int
+
+	// MaxDepth caps the nesting depth of converted elements. 0 (the
+	// default) means unlimited. It guards against pathologically nested
+	// input that would otherwise grow the conversion recursion (and the
+	// goroutine stack) without bound. Exceeding it returns a *LimitError
+	// (Kind LimitDepth).
+	MaxDepth int
 }
 
 // URLPolicy controls whether the HTML converter may fetch a remote URL.
@@ -109,6 +125,8 @@ func (o *Options) defaults() Options {
 	out.Client = o.Client
 	out.Logger = o.Logger
 	out.StrictAssets = o.StrictAssets
+	out.MaxElements = o.MaxElements
+	out.MaxDepth = o.MaxDepth
 	return out
 }
 
@@ -408,6 +426,9 @@ func ConvertFull(htmlStr string, opts *Options) (*ConvertResult, error) {
 	c.loadFontFaces(ss.fontFaces)
 
 	elems := c.walkChildren(doc, style)
+	if c.limitErr != nil {
+		return nil, c.limitErr
+	}
 	result := &ConvertResult{Elements: elems, Absolutes: c.absolutes, Metadata: c.metadata}
 	result.PageConfig = pageConfig
 
@@ -468,6 +489,9 @@ func Convert(htmlStr string, opts *Options) ([]layout.Element, error) {
 	c.loadFontFaces(ss.fontFaces)
 
 	elems := c.walkChildren(doc, style)
+	if c.limitErr != nil {
+		return nil, c.limitErr
+	}
 	if len(c.strictErrs) > 0 {
 		return elems, errors.Join(c.strictErrs...)
 	}
@@ -503,6 +527,16 @@ type converter struct {
 	// the end of the run. When StrictAssets is false this slice is never
 	// appended to — reportAssetError still calls Logger.Warn.
 	strictErrs []error
+
+	// Resource guards (Options.MaxElements / MaxDepth). nodeCount counts
+	// the nodes converted so far; depth tracks the current nesting level
+	// (incremented on convertNode entry, decremented on exit). limitErr is
+	// set the first time a ceiling is crossed; once set, convertNode and
+	// walkChildren unwind without further work and Convert / ConvertFull
+	// return it. Both ceilings are disabled when their Option is 0.
+	nodeCount int
+	depth     int
+	limitErr  error
 }
 
 // reportAssetError records a single asset-load failure. The event is always
@@ -978,6 +1012,9 @@ func (c *converter) walkChildren(n *html.Node, parentStyle computedStyle) []layo
 	}
 
 	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		if c.limitErr != nil {
+			break
+		}
 		if c.isInlineFlowChild(child, parentStyle) {
 			inlineBuf = append(inlineBuf, child)
 			continue
@@ -1073,6 +1110,26 @@ func collapseMargins(prevAfter float64, e layout.Element) float64 {
 
 // convertNode converts a single HTML node into zero or more layout elements.
 func (c *converter) convertNode(n *html.Node, parentStyle computedStyle) []layout.Element {
+	// Resource guards. convertNode is the single chokepoint every element
+	// node flows through (walkChildren and the flex/grid/table child loops
+	// all call it), so counting and depth-checking here bounds every
+	// conversion path. Once a ceiling trips, limitErr is set and the walk
+	// unwinds without further allocation.
+	if c.limitErr != nil {
+		return nil
+	}
+	c.nodeCount++
+	if c.opts.MaxElements > 0 && c.nodeCount > c.opts.MaxElements {
+		c.limitErr = &LimitError{Kind: LimitElements, Limit: c.opts.MaxElements}
+		return nil
+	}
+	c.depth++
+	defer func() { c.depth-- }()
+	if c.opts.MaxDepth > 0 && c.depth > c.opts.MaxDepth {
+		c.limitErr = &LimitError{Kind: LimitDepth, Limit: c.opts.MaxDepth}
+		return nil
+	}
+
 	switch n.Type {
 	case html.TextNode:
 		return c.convertText(n, parentStyle)

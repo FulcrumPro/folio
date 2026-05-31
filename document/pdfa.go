@@ -287,13 +287,18 @@ func (d *Document) validatePdfA(allPages []*Page) error {
 }
 
 // buildXMPMetadata generates the XMP metadata stream for PDF/A identification.
-func buildXMPMetadata(info Info, level PdfALevel, xmpSchemas []XMPSchema, xmpProperties []XMPPropertyBlock, addObject func(core.PdfObject) *core.PdfIndirectReference) *core.PdfIndirectReference {
+func buildXMPMetadata(info Info, level PdfALevel, xmpSchemas []XMPSchema, xmpProperties []XMPPropertyBlock, deterministic bool, addObject func(core.PdfObject) *core.PdfIndirectReference) *core.PdfIndirectReference {
 	part := pdfAPartNumber(level)
 	conf := pdfALevelString(level)
 
-	now := time.Now()
+	// Prefer the caller-supplied creation date. In deterministic mode the
+	// wall-clock fallback is suppressed so an unset date resolves to the zero
+	// time (a fixed value) rather than time.Now, keeping output reproducible.
+	var now time.Time
 	if !info.CreationDate.IsZero() {
 		now = info.CreationDate
+	} else if !deterministic {
+		now = time.Now()
 	}
 	dateStr := now.Format("2006-01-02T15:04:05-07:00")
 

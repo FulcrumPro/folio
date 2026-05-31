@@ -53,17 +53,20 @@ func buildAttachments(
 	catalog *core.PdfDictionary,
 	addObject func(core.PdfObject) *core.PdfIndirectReference,
 	fallbackDate time.Time,
+	deterministic bool,
 ) {
 	afArray := core.NewPdfArray()
 	namesArr := core.NewPdfArray()
 
 	for _, att := range attachments {
 		// Resolve the file timestamp: per-file override → document date → now.
+		// In deterministic mode the wall-clock fallback is suppressed so a
+		// missing date resolves to the zero time (a fixed value) instead.
 		ts := att.CreationDate
 		if ts.IsZero() {
 			ts = fallbackDate
 		}
-		if ts.IsZero() {
+		if ts.IsZero() && !deterministic {
 			ts = time.Now()
 		}
 		dateStr := ts.Format("D:20060102150405")

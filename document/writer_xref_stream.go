@@ -402,7 +402,7 @@ func (w *Writer) buildTrailerDict() *core.PdfDictionary {
 func (w *Writer) deterministicFileID() []byte {
 	h := md5.New()
 	for _, obj := range w.objects {
-		fmt.Fprintf(h, "%d %d obj\n", obj.ObjectNumber, obj.GenerationNumber)
+		_, _ = fmt.Fprintf(h, "%d %d obj\n", obj.ObjectNumber, obj.GenerationNumber)
 		_, _ = obj.Object.WriteTo(h)
 		_, _ = io.WriteString(h, "\nendobj\n")
 	}

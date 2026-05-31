@@ -368,7 +368,7 @@ func ConvertFull(htmlStr string, opts *Options) (*ConvertResult, error) {
 	o := opts.defaults()
 	doc, err := html.Parse(strings.NewReader(htmlStr))
 	if err != nil {
-		return nil, err
+		return nil, &ParseError{Err: err}
 	}
 
 	style := defaultStyle()
@@ -433,7 +433,7 @@ func Convert(htmlStr string, opts *Options) ([]layout.Element, error) {
 	o := opts.defaults()
 	doc, err := html.Parse(strings.NewReader(htmlStr))
 	if err != nil {
-		return nil, err
+		return nil, &ParseError{Err: err}
 	}
 
 	style := defaultStyle()
@@ -524,42 +524,6 @@ func (c *converter) reportAssetError(category string, err error, attrs ...any) {
 		c.strictErrs = append(c.strictErrs, formatAssetError(category, err, attrs))
 	}
 }
-
-// formatAssetError builds the wrapped error stored in strictErrs. Attrs
-// are inlined into the message as space-separated key=value pairs so the
-// joined error from errors.Join is self-describing without forcing
-// callers to walk a structured tree. The message is built as a plain
-// string before wrapping with %w so user-controlled attr values
-// containing % characters are not interpreted as format verbs (e.g. a
-// path like C:\Users\foo%bar.ttf must not corrupt the formatted output).
-// An odd-length attrs slice records the unpaired key with !BADKEY=
-// matching slog's convention; this is a programming error in the caller
-// and never happens in code under our control.
-func formatAssetError(category string, err error, attrs []any) error {
-	var b strings.Builder
-	b.WriteString("folio/html: ")
-	b.WriteString(category)
-	b.WriteString(" load failed")
-	for i := 0; i < len(attrs); i += 2 {
-		b.WriteString(" ")
-		fmt.Fprintf(&b, "%v=", attrs[i])
-		if i+1 < len(attrs) {
-			fmt.Fprintf(&b, "%v", attrs[i+1])
-		} else {
-			b.WriteString("!BADKEY")
-		}
-	}
-	return fmt.Errorf("%s: %w", b.String(), err)
-}
-
-// ErrURLPolicyDenied wraps a URLPolicy rejection so that asset-loading
-// code paths can distinguish a policy decision (the caller's intent)
-// from a network or filesystem failure. When Options.StrictAssets is
-// true, errors matching ErrURLPolicyDenied are still logged via
-// Options.Logger but are not added to the joined return-error — the
-// caller already received the signal they wired URLPolicy to produce.
-// Use with errors.Is to test the cause.
-var ErrURLPolicyDenied = errors.New("html: URL fetch blocked by URLPolicy")
 
 // containingBlock tracks a positioned ancestor for absolute positioning resolution.
 type containingBlock struct {

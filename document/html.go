@@ -5,6 +5,7 @@ package document
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"html/template"
 
@@ -20,9 +21,18 @@ import (
 // If the HTML contains @page CSS rules, the page size and margins are applied
 // to the document.
 //
-// opts may be nil for default settings.
+// opts may be nil for default settings. It is equivalent to
+// AddHTMLWithContext with a background context.
 func (d *Document) AddHTML(htmlStr string, opts *foliohtml.Options) error {
-	result, err := foliohtml.ConvertFull(htmlStr, opts)
+	return d.AddHTMLWithContext(context.Background(), htmlStr, opts)
+}
+
+// AddHTMLWithContext is the context-aware variant of AddHTML. It threads ctx
+// through the HTML conversion, checking it at element boundaries during the
+// tree walk and returning ctx.Err() if the context is done, so a runaway
+// conversion can be bounded by a deadline.
+func (d *Document) AddHTMLWithContext(ctx context.Context, htmlStr string, opts *foliohtml.Options) error {
+	result, err := foliohtml.ConvertFullWithContext(ctx, htmlStr, opts)
 	if err != nil {
 		return err
 	}

@@ -6,6 +6,7 @@
 package document
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"io"
@@ -32,6 +33,12 @@ type Writer struct {
 	encryptor  *core.Encryptor            // nil if no encryption
 	encryptRef *core.PdfIndirectReference // /Encrypt entry in trailer
 	fileID     []byte                     // 16-byte file identifier for /ID in trailer
+
+	// ctx bounds serialization when set by the document layer. It is
+	// checked at object boundaries in writeObjectBodies so a cancelled
+	// render stops emitting instead of writing the whole file. nil means
+	// no cancellation.
+	ctx context.Context
 }
 
 // NewWriter creates a Writer targeting the given PDF version.

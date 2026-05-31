@@ -4,6 +4,7 @@
 package layout
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -113,6 +114,14 @@ type Renderer struct {
 	runningStrings map[string]string
 	// Per-page snapshot of running string values at the end of each page.
 	pageStrings []map[string]string
+
+	// ctx bounds the layout pass when set via RenderContext. It is stored
+	// on this short-lived, per-render struct (never shared or persisted) so
+	// the pagination loops can check it at page and element boundaries. nil
+	// means no cancellation. ctxErr records the first ctx.Err() seen and
+	// aborts the remaining layout; RenderContext returns it.
+	ctx    context.Context
+	ctxErr error
 }
 
 // MarginBox holds the content template for a CSS margin box.
@@ -399,4 +408,36 @@ func (r *Renderer) AddAbsoluteOnPage(e Element, x, y, width float64, pageIndex i
 // method for height-aware layout with content splitting across pages.
 func (r *Renderer) Render() []PageResult {
 	return r.renderWithPlans()
+}
+
+// RenderContext is the context-aware variant of Render. It checks ctx at
+// page and element boundaries during layout and returns ctx.Err()
+// (context.Canceled or context.DeadlineExceeded) if the context is done,
+// with a nil page slice in that case. With a background context it behaves
+// exactly like Render.
+func (r *Renderer) RenderContext(ctx context.Context) ([]PageResult, error) {
+	r.ctx = ctx
+	pages := r.renderWithPlans()
+	if r.ctxErr != nil {
+		return nil, r.ctxErr
+	}
+	return pages, nil
+}
+
+// cancelled reports whether the bound context (if any) is done, recording
+// the first error so the in-progress layout can unwind. It is nil-safe:
+// with no context set it always returns false, so Render incurs no context
+// overhead.
+func (r *Renderer) cancelled() bool {
+	if r.ctxErr != nil {
+		return true
+	}
+	if r.ctx == nil {
+		return false
+	}
+	if err := r.ctx.Err(); err != nil {
+		r.ctxErr = err
+		return true
+	}
+	return false
 }

@@ -4,6 +4,7 @@
 package html
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -381,8 +382,18 @@ type AbsoluteItem struct {
 }
 
 // ConvertFull parses an HTML string and returns both normal-flow elements
-// and absolutely positioned items.
+// and absolutely positioned items. It is equivalent to
+// ConvertFullWithContext with a background context.
 func ConvertFull(htmlStr string, opts *Options) (*ConvertResult, error) {
+	return ConvertFullWithContext(context.Background(), htmlStr, opts)
+}
+
+// ConvertFullWithContext is the context-aware variant of ConvertFull. It
+// checks ctx at element boundaries while walking the HTML tree and returns
+// ctx.Err() (context.Canceled or context.DeadlineExceeded) if the context
+// is done, letting callers bound the conversion of pathological input with
+// a deadline or cancellation. A nil result is returned on cancellation.
+func ConvertFullWithContext(ctx context.Context, htmlStr string, opts *Options) (*ConvertResult, error) {
 	o := opts.defaults()
 	doc, err := html.Parse(strings.NewReader(htmlStr))
 	if err != nil {
@@ -402,7 +413,7 @@ func ConvertFull(htmlStr string, opts *Options) (*ConvertResult, error) {
 	}
 	ss := parseStyleBlocks(doc, o, logStylesheetErr)
 
-	c := &converter{opts: o, logger: logger, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth, counters: make(map[string][]int), urlPolicy: o.URLPolicy, strictErrs: stylesheetErrs}
+	c := &converter{opts: o, logger: logger, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth, counters: make(map[string][]int), urlPolicy: o.URLPolicy, strictErrs: stylesheetErrs, ctx: ctx}
 
 	// Parse @page config early so containerWidth reflects the actual page size
 	// (e.g. landscape pages have a wider containerWidth).
@@ -426,6 +437,9 @@ func ConvertFull(htmlStr string, opts *Options) (*ConvertResult, error) {
 	c.loadFontFaces(ss.fontFaces)
 
 	elems := c.walkChildren(doc, style)
+	if c.ctxErr != nil {
+		return nil, c.ctxErr
+	}
 	if c.limitErr != nil {
 		return nil, c.limitErr
 	}
@@ -449,8 +463,16 @@ func ConvertFull(htmlStr string, opts *Options) (*ConvertResult, error) {
 
 // Convert parses an HTML string and returns a slice of layout elements
 // suitable for passing to a layout.Renderer. Only a subset of HTML is
-// supported — see package documentation for details.
+// supported — see package documentation for details. It is equivalent to
+// ConvertWithContext with a background context.
 func Convert(htmlStr string, opts *Options) ([]layout.Element, error) {
+	return ConvertWithContext(context.Background(), htmlStr, opts)
+}
+
+// ConvertWithContext is the context-aware variant of Convert. It checks ctx
+// at element boundaries while walking the HTML tree and returns ctx.Err()
+// if the context is done.
+func ConvertWithContext(ctx context.Context, htmlStr string, opts *Options) ([]layout.Element, error) {
 	o := opts.defaults()
 	doc, err := html.Parse(strings.NewReader(htmlStr))
 	if err != nil {
@@ -470,7 +492,7 @@ func Convert(htmlStr string, opts *Options) ([]layout.Element, error) {
 	}
 	ss := parseStyleBlocks(doc, o, logStylesheetErr)
 
-	c := &converter{opts: o, logger: logger, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth, counters: make(map[string][]int), urlPolicy: o.URLPolicy, strictErrs: stylesheetErrs}
+	c := &converter{opts: o, logger: logger, rootFontSize: o.DefaultFontSize, sheet: ss, embeddedFonts: make(map[string]*font.EmbeddedFont), containerWidth: o.PageWidth, counters: make(map[string][]int), urlPolicy: o.URLPolicy, strictErrs: stylesheetErrs, ctx: ctx}
 
 	// Update containerWidth if @page specifies a different page size.
 	if len(ss.pageRules) > 0 {
@@ -489,6 +511,9 @@ func Convert(htmlStr string, opts *Options) ([]layout.Element, error) {
 	c.loadFontFaces(ss.fontFaces)
 
 	elems := c.walkChildren(doc, style)
+	if c.ctxErr != nil {
+		return nil, c.ctxErr
+	}
 	if c.limitErr != nil {
 		return nil, c.limitErr
 	}
@@ -537,6 +562,15 @@ type converter struct {
 	nodeCount int
 	depth     int
 	limitErr  error
+
+	// ctx bounds the conversion walk. It is stored on this short-lived,
+	// per-conversion worker (never shared or persisted) so convertNode can
+	// check it at element boundaries without threading it through every
+	// recursive signature. nil means no cancellation (Convert/ConvertFull
+	// use context.Background). ctxErr records the first ctx.Err() seen and
+	// aborts the remaining walk; Convert/ConvertFull return it.
+	ctx    context.Context
+	ctxErr error
 }
 
 // reportAssetError records a single asset-load failure. The event is always
@@ -1012,7 +1046,7 @@ func (c *converter) walkChildren(n *html.Node, parentStyle computedStyle) []layo
 	}
 
 	for child := n.FirstChild; child != nil; child = child.NextSibling {
-		if c.limitErr != nil {
+		if c.limitErr != nil || c.ctxErr != nil {
 			break
 		}
 		if c.isInlineFlowChild(child, parentStyle) {
@@ -1110,14 +1144,21 @@ func collapseMargins(prevAfter float64, e layout.Element) float64 {
 
 // convertNode converts a single HTML node into zero or more layout elements.
 func (c *converter) convertNode(n *html.Node, parentStyle computedStyle) []layout.Element {
-	// Resource guards. convertNode is the single chokepoint every element
+	// Boundary guards. convertNode is the single chokepoint every element
 	// node flows through (walkChildren and the flex/grid/table child loops
-	// all call it), so counting and depth-checking here bounds every
-	// conversion path. Once a ceiling trips, limitErr is set and the walk
-	// unwinds without further allocation.
-	if c.limitErr != nil {
+	// all call it), so checking here bounds every conversion path. Once
+	// either ctxErr or limitErr is set the walk unwinds without further work.
+	if c.ctxErr != nil || c.limitErr != nil {
 		return nil
 	}
+	// Cancellation check at this element boundary.
+	if c.ctx != nil {
+		if err := c.ctx.Err(); err != nil {
+			c.ctxErr = err
+			return nil
+		}
+	}
+	// Resource guards (Options.MaxElements / MaxDepth).
 	c.nodeCount++
 	if c.opts.MaxElements > 0 && c.nodeCount > c.opts.MaxElements {
 		c.limitErr = &LimitError{Kind: LimitElements, Limit: c.opts.MaxElements}

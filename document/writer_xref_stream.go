@@ -270,6 +270,12 @@ func writeHeader(cw *countingWriter, version string) error {
 func (w *Writer) writeObjectBodies(cw *countingWriter) ([]int64, error) {
 	offsets := make([]int64, len(w.objects))
 	for i, obj := range w.objects {
+		// Cancellation check at the object boundary during serialization.
+		if w.ctx != nil {
+			if err := w.ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		offsets[i] = cw.n
 		if _, err := fmt.Fprintf(cw, "%d %d obj\n", obj.ObjectNumber, obj.GenerationNumber); err != nil {
 			return nil, err

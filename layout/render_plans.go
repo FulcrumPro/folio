@@ -123,6 +123,12 @@ func (r *Renderer) renderWithPlans() []PageResult {
 	_ = pageIdx // used in flushPage closure
 
 	for len(queue) > 0 {
+		// Cancellation check at the element boundary — the pagination loop
+		// is where a runaway document burns CPU, so this is what lets a
+		// caller's deadline actually abort the work.
+		if r.cancelled() {
+			return nil
+		}
 		elem := queue[0]
 		queue = queue[1:]
 
@@ -269,6 +275,10 @@ func (r *Renderer) renderWithPlans() []PageResult {
 	// substitution.
 	totalPages := len(records)
 	for _, rec := range records {
+		// Cancellation check at the page boundary during the emission pass.
+		if r.cancelled() {
+			return nil
+		}
 		stream := content.NewStream()
 		page := &PageResult{Stream: stream}
 		ctx := DrawContext{

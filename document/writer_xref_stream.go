@@ -4,6 +4,7 @@
 package document
 
 import (
+	"crypto/md5"
 	"fmt"
 	"io"
 
@@ -122,6 +123,24 @@ type WriteOptions struct {
 	// payload bytes after the encryption walk would emit ciphertext
 	// that decrypts to the wrong plaintext.
 	CleanContentStreams bool
+
+	// Deterministic makes the writer produce byte-identical output for
+	// identical input documents. It derives the trailer /ID from a digest
+	// of the serialized object set instead of random bytes — matching the
+	// content-based file-identifier scheme ISO 32000-1 §14.4 describes —
+	// and routes every metadata timestamp that would otherwise default to
+	// the wall clock (XMP CreateDate/ModifyDate, embedded-file dates)
+	// through Document.Info.CreationDate, falling back to the zero time
+	// rather than time.Now when CreationDate is unset. Setting
+	// Document.Info.CreationDate (and ModDate) is therefore recommended so
+	// the recorded dates are meaningful rather than the year-zero default.
+	//
+	// An explicit Document.SetFileID overrides the derived /ID. A non-PDF/A
+	// document that would otherwise carry no /ID gains one. Encrypted
+	// documents are excluded: the standard security handler mints a random
+	// file identifier and derives the encryption key from it (§7.6.3.3), so
+	// their output is never byte-stable; the /ID is left to the handler.
+	Deterministic bool
 }
 
 // WriteToWithOptions is the option-aware variant of WriteTo. WriteTo is
@@ -201,6 +220,16 @@ func (w *Writer) WriteToWithOptions(out io.Writer, opts WriteOptions) (int64, er
 				return 0, fmt.Errorf("document: encrypt object %d: %w", obj.ObjectNumber, err)
 			}
 		}
+	}
+
+	// Deterministic /ID: when requested and no explicit identifier was set
+	// (via SetFileID), derive a stable /ID from the final object set — after
+	// the optimization passes above have settled object content and numbers
+	// — so identical inputs yield byte-identical output. Encryption supplies
+	// its own random /ID and key, so deterministic output is unavailable for
+	// encrypted documents and the derivation is skipped there.
+	if opts.Deterministic && len(w.fileID) == 0 && w.encryptor == nil {
+		w.fileID = w.deterministicFileID()
 	}
 
 	cw := &countingWriter{w: out}
@@ -354,4 +383,22 @@ func (w *Writer) buildTrailerDict() *core.PdfDictionary {
 		d.Set("ID", core.NewPdfArray(id, id))
 	}
 	return d
+}
+
+// deterministicFileID derives a stable 16-byte file identifier by hashing
+// the serialized form of every registered object in order. Because the
+// object set, object numbers, and each object's serialization are fully
+// determined by the document content — PdfDictionary preserves insertion
+// order, so there is no map-iteration nondeterminism — identical input
+// documents produce an identical identifier. MD5 yields exactly the 16
+// bytes a /ID entry expects (ISO 32000-1 §14.4); it is used here only as a
+// content digest, not for any security property.
+func (w *Writer) deterministicFileID() []byte {
+	h := md5.New()
+	for _, obj := range w.objects {
+		fmt.Fprintf(h, "%d %d obj\n", obj.ObjectNumber, obj.GenerationNumber)
+		_, _ = obj.Object.WriteTo(h)
+		_, _ = io.WriteString(h, "\nendobj\n")
+	}
+	return h.Sum(nil)
 }

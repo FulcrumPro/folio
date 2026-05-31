@@ -94,6 +94,7 @@ type Document struct {
 	pageLabels    []PageLabelRange
 	autoBookmarks bool // if true, generate outlines from layout headings
 	attachments   []FileAttachment
+	fileID        []byte // explicit trailer /ID set via SetFileID; nil means none
 }
 
 // NewDocument creates a new PDF document with the given page size.
@@ -580,6 +581,18 @@ func (d *Document) ToBytesWithOptions(opts WriteOptions) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// SetFileID sets the file identifier written to the trailer /ID array
+// (ISO 32000-1 §14.4). When set it overrides both the random identifier
+// PDF/A output would otherwise generate and the content digest
+// [WriteOptions].Deterministic would derive, giving callers full control
+// of the /ID for reproducible or externally-tracked output. A non-PDF/A
+// document that would otherwise carry no /ID gains one. The identifier is
+// conventionally 16 bytes; other lengths are written verbatim. Passing nil
+// or an empty slice clears any previously set identifier.
+func (d *Document) SetFileID(id []byte) {
+	d.fileID = id
+}
+
 // WriteTo serializes the complete PDF document to w using the
 // historical default writer options.
 func (d *Document) WriteTo(w io.Writer) (int64, error) {
@@ -597,6 +610,9 @@ func (d *Document) WriteToWithOptions(w io.Writer, opts WriteOptions) (int64, er
 		version = pdfVersionForPdfA(d.pdfA.Level)
 	}
 	writer := NewWriter(version)
+	if len(d.fileID) > 0 {
+		writer.SetFileID(d.fileID)
+	}
 
 	catalog := core.NewPdfDictionary()
 	catalog.Set("Type", core.NewPdfName("Catalog"))
@@ -950,12 +966,17 @@ func (d *Document) WriteToWithOptions(w io.Writer, opts WriteOptions) (int64, er
 		}
 
 		// /ID in the trailer is required for all PDF/A levels (ISO 19005 §6.1.3).
-		if err := writer.GenerateFileID(); err != nil {
-			return 0, err
+		// An explicit SetFileID (propagated above) or deterministic mode (which
+		// derives the /ID from document content in the writer) already supplies
+		// one; only mint a random identifier when neither applies.
+		if len(d.fileID) == 0 && !opts.Deterministic {
+			if err := writer.GenerateFileID(); err != nil {
+				return 0, err
+			}
 		}
 
 		// XMP metadata stream (required for PDF/A).
-		xmpRef := buildXMPMetadata(d.Info, d.pdfA.Level, d.pdfA.XMPSchemas, d.pdfA.XMPProperties, writer.AddObject)
+		xmpRef := buildXMPMetadata(d.Info, d.pdfA.Level, d.pdfA.XMPSchemas, d.pdfA.XMPProperties, opts.Deterministic, writer.AddObject)
 		catalog.Set("Metadata", xmpRef)
 
 		// Output intent (required for PDF/A).
@@ -965,7 +986,7 @@ func (d *Document) WriteToWithOptions(w io.Writer, opts WriteOptions) (int64, er
 
 	// File attachments (PDF/A-3B only; validated in validatePdfA).
 	if len(d.attachments) > 0 {
-		buildAttachments(d.attachments, catalog, writer.AddObject, d.Info.CreationDate)
+		buildAttachments(d.attachments, catalog, writer.AddObject, d.Info.CreationDate, opts.Deterministic)
 	}
 
 	// Viewer preferences.

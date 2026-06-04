@@ -129,7 +129,18 @@ type Renderer struct {
 type MarginBox struct {
 	Content  string     // template string with placeholders
 	FontSize float64    // font size in points (0 = default 9pt)
-	Color    [3]float64 // RGB color (0-1 each; all zero = default gray)
+	Color    [3]float64 // RGB color (0-1 each)
+	// HasColor is true only when the source CSS explicitly set a `color`
+	// declaration. It distinguishes an explicit `color: black` ({0,0,0})
+	// from an unset color: when false the renderer applies the default
+	// gray; when true it honours Color verbatim (including pure black).
+	HasColor bool
+	// Embedded is the document's default body font, used to draw the
+	// margin-box text. When non-nil the renderer emits the text with this
+	// embedded font (Identity-H GID encoding), so the glyphs are subset
+	// and embedded — required for PDF/A. When nil the renderer falls back
+	// to the built-in standard Helvetica (acceptable for non-PDF/A docs).
+	Embedded *font.EmbeddedFont
 }
 
 // MarginBoxSet holds margin boxes for a page variant.
@@ -214,6 +225,7 @@ func (r *Renderer) drawMarginBoxes(ctx *DrawContext, pageIdx int, margins Margin
 	contentWidth := r.pageWidth - margins.Left - margins.Right
 
 	for name, box := range boxes {
+		box := box
 		text := box.Content
 		if text == "" {
 			continue
@@ -234,14 +246,29 @@ func (r *Renderer) drawMarginBoxes(ctx *DrawContext, pageIdx int, margins Margin
 			fontSize = 9.0
 		}
 
-		// Use box-specific color, or default to gray.
+		// Use box-specific color when the CSS explicitly set one (HasColor),
+		// otherwise default to gray. The HasColor flag is required so an
+		// explicit `color: black` ({0,0,0}) is honoured rather than being
+		// mistaken for "unset" and forced to gray.
 		textColor := Color{R: 0.4, G: 0.4, B: 0.4}
-		if box.Color != [3]float64{0, 0, 0} {
+		if box.HasColor {
 			textColor = Color{R: box.Color[0], G: box.Color[1], B: box.Color[2]}
 		}
 
-		resName := registerFont(ctx.Page, Word{Font: f, FontSize: fontSize})
-		textWidth := f.MeasureString(text, fontSize)
+		// Choose the drawing word: an embedded font (PDF/A-safe, Identity-H
+		// GID encoding) when one was stamped on the box, otherwise the
+		// built-in standard Helvetica. Width is measured with the same font
+		// so alignment math is consistent.
+		word := Word{FontSize: fontSize, OriginalText: text, Text: text}
+		var textWidth float64
+		if box.Embedded != nil {
+			word.Embedded = box.Embedded
+			textWidth = box.Embedded.MeasureString(text, fontSize)
+		} else {
+			word.Font = f
+			textWidth = f.MeasureString(text, fontSize)
+		}
+		resName := registerFont(ctx.Page, word)
 
 		var x, y float64
 		switch name {
@@ -267,12 +294,28 @@ func (r *Renderer) drawMarginBoxes(ctx *DrawContext, pageIdx int, margins Margin
 			continue
 		}
 
+		// Running headers/footers are pagination artifacts, not document
+		// content. In a tagged PDF they must be marked as /Artifact so they
+		// stay out of the structure tree (PDF/UA, ISO 14289-1 §7.1).
+		if r.tagged {
+			ctx.Stream.BeginArtifact()
+		}
 		setFillColor(ctx.Stream, textColor)
 		ctx.Stream.BeginText()
 		ctx.Stream.SetFont(resName, fontSize)
 		ctx.Stream.MoveText(x, y)
-		ctx.Stream.ShowText(text)
+		if box.Embedded != nil {
+			// Embedded fonts require Identity-H GID encoding; route through
+			// the shared embedded-word drawer so glyph subsetting is recorded
+			// via EncodeString. Raw ShowText is only valid for standard fonts.
+			drawWordEmbedded(ctx.Stream, word)
+		} else {
+			ctx.Stream.ShowText(text)
+		}
 		ctx.Stream.EndText()
+		if r.tagged {
+			ctx.Stream.EndMarkedContent()
+		}
 	}
 }
 

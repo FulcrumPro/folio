@@ -612,6 +612,15 @@ func encodeTextStringUTF16BE(s string) string {
 	return b.String()
 }
 
+// BeginArtifact writes the BDC operator opening an /Artifact marked-content
+// sequence. Artifacts are page elements that are not part of the document's
+// logical content — pagination headers/footers, backgrounds, and layout
+// decorations — and are excluded from the structure tree (ISO 32000-2
+// §14.8.2.2, PDF/UA ISO 14289-1 §7.1). Pair every call with EndMarkedContent.
+func (s *Stream) BeginArtifact() {
+	s.writeln("/Artifact BDC")
+}
+
 // MarkedPoint writes the MP operator: designate a marked-content point.
 // tag is the marked-content tag (structure type).
 func (s *Stream) MarkedPoint(tag string) {

@@ -182,12 +182,61 @@ func (c *converter) convertBlock(n *html.Node, style computedStyle) []layout.Ele
 	}
 	applyDivStyles(div, style, c.containerWidth)
 
+	// The Div now owns and draws the box background (honoring border-radius).
+	// Clear any redundant block-level background on direct child paragraphs to
+	// avoid a square-cornered overdraw on top of the rounded fill (issue #329).
+	if style.BackgroundColor != nil {
+		clearMatchingParagraphBackgrounds(div.Children(), *style.BackgroundColor)
+	}
+
 	// Apply background image if set.
 	if bgImg := c.resolveBackgroundImage(style); bgImg != nil {
 		div.SetBackgroundImage(bgImg)
 	}
 
 	return []layout.Element{div}
+}
+
+// clearMatchingParagraphBackgrounds removes the block-level background from any
+// direct *layout.Paragraph in elems whose paragraph background equals bg.
+//
+// When a block (or paragraph, or table cell) with a background is converted,
+// the enclosing container (a wrapping Div, or a layout.Cell) owns and draws the
+// box fill — honoring border-radius. If a synthesized or inner child Paragraph
+// also carries the same block-level background, it re-draws that fill as a
+// plain (square-cornered) rectangle on top, squaring off any rounded corners
+// (issue #329). Since the container already paints the fill, the child's copy
+// is redundant; clearing it removes the overdraw.
+//
+// Only the paragraph-level background is cleared. Per-run/word BackgroundColor
+// (inline <span> highlights) lives on the TextRuns, not on p.background, and is
+// left untouched.
+func clearMatchingParagraphBackgrounds(elems []layout.Element, bg layout.Color) {
+	for _, e := range elems {
+		if p, ok := e.(*layout.Paragraph); ok {
+			if pbg := p.Background(); pbg != nil && *pbg == bg {
+				p.ClearBackground()
+			}
+		}
+	}
+}
+
+// clearCellParagraphBackground clears the redundant block-level background on a
+// table cell's direct content when the cell owns and draws the rounded fill.
+//
+// A layout.Cell holds a single content Element: either the cell's only child
+// directly (a Paragraph for "<td>text</td>") or a wrapping Div for multi-child
+// cells. In both shapes the cell itself paints the background (honoring
+// border-radius), so a Paragraph carrying the same fill would re-draw it as a
+// square rectangle, squaring off the corners — the same overdraw as the Div
+// case (issue #329). Mirrors the Div gating: matching color only.
+func clearCellParagraphBackground(cell *layout.Cell, bg layout.Color) {
+	switch content := cell.Content().(type) {
+	case *layout.Paragraph:
+		clearMatchingParagraphBackgrounds([]layout.Element{content}, bg)
+	case *layout.Div:
+		clearMatchingParagraphBackgrounds(content.Children(), bg)
+	}
 }
 
 // containsAreaBreak reports whether any element in the slice is an AreaBreak.
@@ -216,6 +265,9 @@ func (c *converter) splitOnAreaBreaks(children []layout.Element, style computedS
 			div.Add(child)
 		}
 		applyDivStyles(div, style, c.containerWidth)
+		if style.BackgroundColor != nil {
+			clearMatchingParagraphBackgrounds(div.Children(), *style.BackgroundColor)
+		}
 		if bgImg := c.resolveBackgroundImage(style); bgImg != nil {
 			div.SetBackgroundImage(bgImg)
 		}

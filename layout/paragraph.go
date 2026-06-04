@@ -172,6 +172,26 @@ func (p *Paragraph) SetBackground(c Color) *Paragraph {
 	return p
 }
 
+// Background returns a copy of the paragraph's background fill color, or nil
+// if the paragraph has no block-level background. A copy is returned so callers
+// cannot mutate the paragraph's internal fill through the pointer. Provided for
+// testing and for callers that own the box fill (e.g. a wrapping Div) and need
+// to detect and clear a redundant paragraph-level background.
+func (p *Paragraph) Background() *Color {
+	if p.background == nil {
+		return nil
+	}
+	c := *p.background
+	return &c
+}
+
+// ClearBackground removes the paragraph's block-level background fill.
+// Per-run/word BackgroundColor (inline <span> highlights) is unaffected.
+func (p *Paragraph) ClearBackground() *Paragraph {
+	p.background = nil
+	return p
+}
+
 // SetFirstLineIndent sets the indentation for the first line (in points).
 // This corresponds to the CSS text-indent property.
 func (p *Paragraph) SetFirstLineIndent(pts float64) *Paragraph {

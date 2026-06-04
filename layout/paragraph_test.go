@@ -609,6 +609,45 @@ func TestParagraphInlineElementLayout(t *testing.T) {
 	}
 }
 
+func TestParagraphMaxWidthIncludesInlineElement(t *testing.T) {
+	// Issue #330, Change 2: Paragraph.MaxWidth must include the intrinsic
+	// width of inline-element runs (previously they were skipped, so a
+	// nested inline-block under-measured and got clipped). fixedElement does
+	// not implement Measurable, exercising the PlanLayout fallback path.
+	el := &fixedElement{width: 80, height: 16}
+
+	textOnly := NewParagraph("Hello", font.Helvetica, 12)
+	base := textOnly.MaxWidth()
+
+	withInline := NewStyledParagraph(
+		NewRun("Hello", font.Helvetica, 12),
+		RunInline(el),
+	)
+	got := withInline.MaxWidth()
+
+	// The inline element contributes its 80pt width, so the paragraph's
+	// max-content width must grow by at least that amount.
+	if got < base+80 {
+		t.Errorf("MaxWidth = %.1f, want >= base(%.1f)+80 to include inline element", got, base)
+	}
+}
+
+func TestParagraphMaxWidthInlineElementMeasurable(t *testing.T) {
+	// When the inline element implements Measurable, MaxWidth should use its
+	// MaxWidth() directly. A nested shrink-to-fit Div is Measurable.
+	inner := NewDiv().SetShrinkToFit(true).Add(NewParagraph("Chip", font.Helvetica, 12))
+	innerMax := inner.MaxWidth()
+	if innerMax <= 0 {
+		t.Fatalf("expected positive inner MaxWidth, got %f", innerMax)
+	}
+
+	p := NewStyledParagraph(RunInline(inner))
+	got := p.MaxWidth()
+	if got < innerMax {
+		t.Errorf("paragraph MaxWidth = %.1f, want >= inner MaxWidth %.1f", got, innerMax)
+	}
+}
+
 func TestParagraphInlineElementPlanLayout(t *testing.T) {
 	el := &fixedElement{width: 20, height: 16}
 	p := NewStyledParagraph(

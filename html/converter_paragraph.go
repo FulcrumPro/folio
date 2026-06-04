@@ -356,10 +356,18 @@ func (c *converter) convertInlineElement(n *html.Node, style computedStyle) layo
 // layout.Element suitable for inline placement within a paragraph.
 func (c *converter) convertInlineBlockElement(n *html.Node, style computedStyle) layout.Element {
 	elems := c.convertBlock(n, style)
-	if len(elems) > 0 {
-		return elems[0]
+	if len(elems) == 0 {
+		return nil
 	}
-	return nil
+	el := elems[0]
+	// Enable shrink-to-fit (CSS fit-content) so the inline-block sizes to its
+	// content and flows inline, instead of filling the whole paragraph width.
+	// An explicit CSS width still wins (SetShrinkToFit only applies when no
+	// explicit width is set, handled in Div.PlanLayout).
+	if div, ok := el.(*layout.Div); ok {
+		div.SetShrinkToFit(true)
+	}
+	return el
 }
 
 // collectListItemRuns collects styled TextRuns from a <li> element,

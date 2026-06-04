@@ -104,6 +104,11 @@ type Div struct {
 	// the entire Div to the next page rather than splitting it.
 	keepTogether bool
 
+	// shrinkToFit makes the Div size to its content (CSS fit-content)
+	// when no explicit width is set, instead of filling the available
+	// area width. Used for display:inline-block atomic boxes.
+	shrinkToFit bool
+
 	// Overlay children: absolutely positioned elements within this
 	// containing block. They are laid out independently and placed at
 	// fixed offsets (overlayX, overlayY) from the Div's top-left,
@@ -371,6 +376,14 @@ func (d *Div) KeepTogether() bool {
 	return d.keepTogether
 }
 
+// SetShrinkToFit enables shrink-to-fit (CSS fit-content) sizing. When enabled
+// and no explicit width is set, the Div sizes to its content's max-content
+// width (clamped to the available area) instead of filling the area width.
+func (d *Div) SetShrinkToFit(v bool) *Div {
+	d.shrinkToFit = v
+	return d
+}
+
 // SetTag sets a custom PDF structure tag for accessibility (PDF/UA).
 // Common tags: "Sect", "Art", "BlockQuote", "Caption", "Part".
 // If empty, the default "Div" tag is used.
@@ -518,6 +531,25 @@ func (d *Div) PlanLayout(area LayoutArea) LayoutPlan {
 		effectiveWidth = area.Width * d.widthPct
 	} else if d.width > 0 {
 		effectiveWidth = d.width
+	} else if d.shrinkToFit {
+		// CSS fit-content: size to the content's max-content width, but
+		// never exceed the available area. MaxWidth() already includes
+		// horizontal padding, so it yields an outer width consistent with
+		// effectiveWidth. Explicit min/max-width clamping below still runs.
+		fitContent := d.MaxWidth()
+		// Circular-dependency fallback: MaxWidth() deliberately treats
+		// percentage/calc-width children as non-intrinsic (they depend on
+		// the very width we are trying to compute), so it returns only this
+		// box's own horizontal padding when there is no intrinsic content
+		// width. Shrinking to that would collapse the box to an invisible
+		// sliver. When the fit-content width is no wider than our own
+		// horizontal padding, fall back to filling the available area.
+		if fitContent <= d.padding.Left+d.padding.Right {
+			fitContent = area.Width
+		} else if fitContent > area.Width {
+			fitContent = area.Width
+		}
+		effectiveWidth = fitContent
 	}
 
 	// Resolve max-width.
@@ -768,12 +800,13 @@ func (d *Div) PlanLayout(area LayoutArea) LayoutPlan {
 
 	// Create overflow Div with remaining children.
 	overflowDiv := &Div{
-		elements:   overflowElements,
-		padding:    d.padding,
-		borders:    d.borders,
-		background: d.background,
-		bgImage:    d.bgImage,
-		spaceAfter: d.spaceAfter,
+		elements:    overflowElements,
+		padding:     d.padding,
+		borders:     d.borders,
+		background:  d.background,
+		bgImage:     d.bgImage,
+		spaceAfter:  d.spaceAfter,
+		shrinkToFit: d.shrinkToFit,
 	}
 	return LayoutPlan{
 		Status: LayoutPartial, Consumed: consumed, Blocks: blocks, Overflow: overflowDiv,

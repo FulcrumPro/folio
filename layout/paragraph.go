@@ -1033,6 +1033,18 @@ func (p *Paragraph) MinWidth() float64 {
 func (p *Paragraph) MaxWidth() float64 {
 	total := 0.0
 	for _, run := range p.runs {
+		// Inline elements (e.g. a nested inline-block) participate in the
+		// same line as adjacent text. Treat them like a non-breaking word
+		// that contributes its own max-content width plus the same
+		// inter-run space the text branch adds below, so a fit-content
+		// parent measures wide enough to contain the nested chip.
+		if run.InlineElement != nil {
+			total += inlineElementMaxWidth(run.InlineElement)
+			// Add a space after the inline element (mirrors the per-run
+			// trailing space added for text runs).
+			total += inlineRunSpace(p.runs, run)
+			continue
+		}
 		measurer := runMeasurer(run)
 		words := splitWords(run.Text)
 		spaceW := measurer.MeasureString(" ", run.FontSize)
@@ -1052,6 +1064,49 @@ func (p *Paragraph) MaxWidth() float64 {
 		}
 	}
 	return total
+}
+
+// inlineElementMaxWidth reports the max-content width of an inline element
+// run. It prefers the element's own Measurable.MaxWidth(); otherwise it
+// falls back to measuring via PlanLayout at a large width and reading the
+// first block's width (mirroring how measureInlineElement extracts width).
+func inlineElementMaxWidth(el Element) float64 {
+	if m, ok := el.(Measurable); ok {
+		return m.MaxWidth()
+	}
+	plan := el.PlanLayout(LayoutArea{Width: 1e6, Height: 1e6})
+	if plan.Status != LayoutNothing && len(plan.Blocks) > 0 {
+		return plan.Blocks[0].Width
+	}
+	return 0
+}
+
+// inlineRunSpace returns the inter-run trailing space to add after an inline
+// element run, consistent with the per-run space the text branch of MaxWidth
+// adds. It derives the space width from a measurer; inline element runs carry
+// no font, so a fallback FontSize is used when none is present.
+func inlineRunSpace(runs []TextRun, run TextRun) float64 {
+	// An inline-element run typically has no font; derive the space width
+	// from the run's own font metrics when available, otherwise fall back
+	// to a neighboring text run's measurer.
+	if run.Font != nil || run.Embedded != nil {
+		return runMeasurer(run).MeasureString(" ", runFontSize(run))
+	}
+	for _, r := range runs {
+		if r.InlineElement == nil && (r.Font != nil || r.Embedded != nil) {
+			return runMeasurer(r).MeasureString(" ", r.FontSize)
+		}
+	}
+	return 0
+}
+
+// runFontSize returns a non-zero font size for measuring, defaulting to a
+// reasonable value when the run carries none.
+func runFontSize(run TextRun) float64 {
+	if run.FontSize > 0 {
+		return run.FontSize
+	}
+	return 12
 }
 
 // MeasureLines reports how many wrapped lines this paragraph produces at

@@ -5,6 +5,8 @@ package html
 
 import (
 	"strings"
+
+	"github.com/carlos7ags/folio/layout"
 )
 
 // Standard page sizes in points (width x height, portrait).
@@ -33,7 +35,7 @@ var pageSizes = map[string][2]float64{
 // base @page {} rule it inherits from: pass 1 resolves the base, pass 2 seeds
 // and applies the pseudos.
 func parsePageConfig(rules []pageRule, defaultFontSize float64) *PageConfig {
-	pc := &PageConfig{}
+	pc := &PageConfig{fontSize: defaultFontSize}
 	hasAny := false
 
 	// Pass 1: resolve the base @page {} rule (selector == "") — size,
@@ -51,24 +53,34 @@ func parsePageConfig(rules []pageRule, defaultFontSize float64) *PageConfig {
 				parsePageSize(val, pc, defaultFontSize)
 				hasAny = true
 			case "margin":
+				// Parse both the eager floats (correct for absolute units)
+				// and the unresolved length trees so percent / calc can be
+				// resolved against the page box at apply time (B2/N1).
 				t, r, b, l := parseMarginShorthand(val, defaultFontSize)
 				pc.MarginTop, pc.MarginRight, pc.MarginBottom, pc.MarginLeft = t, r, b, l
+				pc.marginTopLen, pc.marginRightLen, pc.marginBottomLen, pc.marginLeftLen = parseMarginShorthandLengths(val, defaultFontSize)
 				pc.HasMargins = true
 				hasAny = true
 			case "margin-top":
+				// Route through the calc-aware parser (N1) and keep the
+				// length for page-box percent resolution (B2).
 				pc.MarginTop = parseSingleLength(val, defaultFontSize)
+				pc.marginTopLen = parseBoxSideLength(val, defaultFontSize)
 				pc.HasMargins = true
 				hasAny = true
 			case "margin-right":
 				pc.MarginRight = parseSingleLength(val, defaultFontSize)
+				pc.marginRightLen = parseBoxSideLength(val, defaultFontSize)
 				pc.HasMargins = true
 				hasAny = true
 			case "margin-bottom":
 				pc.MarginBottom = parseSingleLength(val, defaultFontSize)
+				pc.marginBottomLen = parseBoxSideLength(val, defaultFontSize)
 				pc.HasMargins = true
 				hasAny = true
 			case "margin-left":
 				pc.MarginLeft = parseSingleLength(val, defaultFontSize)
+				pc.marginLeftLen = parseBoxSideLength(val, defaultFontSize)
 				pc.HasMargins = true
 				hasAny = true
 			}
@@ -119,22 +131,27 @@ func parsePageConfig(rules []pageRule, defaultFontSize float64) *PageConfig {
 			case "margin":
 				t, r, b, l := parseMarginShorthand(val, defaultFontSize)
 				target.Top, target.Right, target.Bottom, target.Left = t, r, b, l
+				target.topLen, target.rightLen, target.bottomLen, target.leftLen = parseMarginShorthandLengths(val, defaultFontSize)
 				target.HasMargins = true
 				hasAny = true
 			case "margin-top":
 				target.Top = parseSingleLength(val, defaultFontSize)
+				target.topLen = parseBoxSideLength(val, defaultFontSize)
 				target.HasMargins = true
 				hasAny = true
 			case "margin-right":
 				target.Right = parseSingleLength(val, defaultFontSize)
+				target.rightLen = parseBoxSideLength(val, defaultFontSize)
 				target.HasMargins = true
 				hasAny = true
 			case "margin-bottom":
 				target.Bottom = parseSingleLength(val, defaultFontSize)
+				target.bottomLen = parseBoxSideLength(val, defaultFontSize)
 				target.HasMargins = true
 				hasAny = true
 			case "margin-left":
 				target.Left = parseSingleLength(val, defaultFontSize)
+				target.leftLen = parseBoxSideLength(val, defaultFontSize)
 				target.HasMargins = true
 				hasAny = true
 			}
@@ -175,12 +192,19 @@ func parsePageConfig(rules []pageRule, defaultFontSize float64) *PageConfig {
 // margins, the seeded set is marked HasMargins so unspecified sides inherit the
 // base instead of defaulting to 0 (CSS cascade — Defect B fix).
 func newSeededMargins(pc *PageConfig) *PageMargins {
-	pm := &PageMargins{}
+	pm := &PageMargins{fontSize: pc.fontSize}
 	if pc.HasMargins {
 		pm.Top = pc.MarginTop
 		pm.Right = pc.MarginRight
 		pm.Bottom = pc.MarginBottom
 		pm.Left = pc.MarginLeft
+		// Inherit the deferred length trees too, so a pseudo that does not
+		// override a side resolves percent/calc base margins against the
+		// page box (B2) rather than the basis-0 eager float.
+		pm.topLen = pc.marginTopLen
+		pm.rightLen = pc.marginRightLen
+		pm.bottomLen = pc.marginBottomLen
+		pm.leftLen = pc.marginLeftLen
 		pm.HasMargins = true
 	}
 	return pm
@@ -237,12 +261,27 @@ func parseContentValue(val string) string {
 				continue
 			}
 		}
-		// counter() function — stored as placeholder, resolved at render time.
+		// counter() function — stored as a placeholder, resolved at
+		// render time. Supports an optional second argument naming a
+		// list-style-type, e.g. counter(page, upper-roman). The style is
+		// threaded through the placeholder so the renderer can format the
+		// resolved page number accordingly (layout.formatCounter). Only
+		// the reserved `page` / `pages` counters are deferred; any other
+		// counter name is dropped (its value is not tracked here) rather
+		// than leaking the literal call text into the PDF.
 		if strings.HasPrefix(remaining, "counter(") {
 			closeIdx := strings.IndexByte(remaining, ')')
 			if closeIdx >= 0 {
-				fnCall := remaining[:closeIdx+1]
-				result.WriteString("{" + fnCall + "}")
+				inner := remaining[len("counter("):closeIdx]
+				name, style := inner, ""
+				if comma := strings.IndexByte(inner, ','); comma >= 0 {
+					name = inner[:comma]
+					style = strings.TrimSpace(inner[comma+1:])
+				}
+				name = strings.TrimSpace(strings.ToLower(name))
+				if name == "page" || name == "pages" {
+					result.WriteString(layout.CounterPlaceholder(name, style))
+				}
 				remaining = remaining[closeIdx+1:]
 				continue
 			}
@@ -302,9 +341,13 @@ func parsePageSize(val string, pc *PageConfig, fontSize float64) {
 		return
 	}
 
-	// Orientation only: "landscape" or "portrait"
+	// Orientation only: "landscape" or "portrait". No explicit
+	// dimensions are given, so the orientation must be applied to the
+	// document default page size (done in document/html.go, where the
+	// default is known). Flag it so that layer can swap width/height.
 	if parts[0] == "landscape" || parts[0] == "portrait" {
-		return // no dimensions, just orientation
+		pc.OrientationOnly = true
+		return
 	}
 
 	// Explicit dimensions: "8.5in 11in" or "210mm 297mm" or

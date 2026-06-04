@@ -354,6 +354,36 @@ type PageMargins struct {
 	Top, Right, Bottom, Left float64
 	HasMargins               bool                        // true if any margin property was explicitly set (even to 0)
 	MarginBoxes              map[string]MarginBoxContent // e.g. "top-center" → content
+
+	// Unresolved length trees for each side, preserved so percent / calc
+	// can be resolved against the page box at apply time (the float
+	// fields above are eagerly resolved with a zero basis and are only
+	// correct for absolute units). nil when the side was not set.
+	topLen, rightLen, bottomLen, leftLen *cssLength
+
+	// fontSize is the default font size captured at parse time, used to
+	// resolve em / rem inside the deferred length trees.
+	fontSize float64
+}
+
+// ResolveMargins resolves any deferred (percent / calc) margin lengths
+// against the page box. Per CSS Paged Media, @page margin percentages
+// resolve against the page dimensions: left/right against pageW,
+// top/bottom against pageH. Sides without a deferred length keep their
+// eagerly resolved float value.
+func (m *PageMargins) ResolveMargins(pageW, pageH float64) {
+	if m.topLen != nil {
+		m.Top = m.topLen.toPoints(pageH, m.fontSize)
+	}
+	if m.bottomLen != nil {
+		m.Bottom = m.bottomLen.toPoints(pageH, m.fontSize)
+	}
+	if m.rightLen != nil {
+		m.Right = m.rightLen.toPoints(pageW, m.fontSize)
+	}
+	if m.leftLen != nil {
+		m.Left = m.leftLen.toPoints(pageW, m.fontSize)
+	}
 }
 
 // PageConfig holds page dimensions and margins from CSS @page rules.
@@ -363,12 +393,29 @@ type PageConfig struct {
 	AutoHeight bool    // true when @page size has explicit height of 0 (size to content)
 	Landscape  bool
 
+	// OrientationOnly is true when @page { size: ... } gave only an
+	// orientation keyword (landscape/portrait) with no named size or
+	// explicit dimensions. Width/Height are then 0 and the orientation
+	// must be applied to the document default page size at apply time.
+	// Landscape distinguishes the two keywords (true = landscape).
+	OrientationOnly bool
+
 	// Default margins (from @page with no pseudo-selector).
 	MarginTop    float64
 	MarginRight  float64
 	MarginBottom float64
 	MarginLeft   float64
 	HasMargins   bool // true if any margin property was explicitly set (even to 0)
+
+	// Unresolved length trees for the default margins, preserved so
+	// percent / calc resolve against the page box at apply time. The
+	// float fields above are eagerly resolved with a zero basis and are
+	// only correct for absolute units. nil when not set.
+	marginTopLen, marginRightLen, marginBottomLen, marginLeftLen *cssLength
+
+	// fontSize is the default font size captured at parse time, used to
+	// resolve em / rem inside the deferred length trees.
+	fontSize float64
 
 	// Per-page-type margin overrides (nil = use default).
 	First *PageMargins // @page :first
@@ -377,6 +424,88 @@ type PageConfig struct {
 
 	// Default margin boxes (from @page with no pseudo-selector).
 	MarginBoxes map[string]MarginBoxContent // e.g. "top-center" → content
+}
+
+// ResolveMargins resolves the default-margin deferred lengths against the
+// page box, then resolves any per-page-type variant overrides
+// (:first, :left, :right). See PageMargins.ResolveMargins for the
+// percent basis rules. pageW / pageH are the resolved page dimensions in
+// points (the @page size if given, otherwise the document default).
+func (pc *PageConfig) ResolveMargins(pageW, pageH float64) {
+	if pc.marginTopLen != nil {
+		pc.MarginTop = pc.marginTopLen.toPoints(pageH, pc.fontSize)
+	}
+	if pc.marginBottomLen != nil {
+		pc.MarginBottom = pc.marginBottomLen.toPoints(pageH, pc.fontSize)
+	}
+	if pc.marginRightLen != nil {
+		pc.MarginRight = pc.marginRightLen.toPoints(pageW, pc.fontSize)
+	}
+	if pc.marginLeftLen != nil {
+		pc.MarginLeft = pc.marginLeftLen.toPoints(pageW, pc.fontSize)
+	}
+	if pc.First != nil {
+		pc.First.ResolveMargins(pageW, pageH)
+	}
+	if pc.Left != nil {
+		pc.Left.ResolveMargins(pageW, pageH)
+	}
+	if pc.Right != nil {
+		pc.Right.ResolveMargins(pageW, pageH)
+	}
+}
+
+// Resolve computes the final page geometry for this @page config and
+// resolves all margin lengths (default + :first / :left / :right) against
+// that geometry. It is the single entry point every Document-building
+// consumer must call so that page sizing, the orientation-only swap, and
+// deferred percent / calc margin resolution behave identically across all
+// code paths (AddHTML, the C ABI, WASM, the tmpl package, and examples).
+//
+// defaultW / defaultH are the document's default page dimensions in points,
+// used when the @page rule supplied no explicit size (or only an
+// orientation keyword). The returned width / height are the final page
+// dimensions; autoHeight reports the CSS `size: <w> 0` content-sized case
+// (height is then 0). Margins are resolved in place on pc and read by the
+// caller from pc.MarginTop/… and pc.First/Left/Right after this returns.
+//
+// Precedence (S-1): an orientation-only keyword (size: landscape | portrait)
+// rotates whatever size is otherwise in effect — the explicit @page dims if
+// given, else the document default — rather than being ignored when explicit
+// dims exist.
+func (pc *PageConfig) Resolve(defaultW, defaultH float64) (width, height float64, autoHeight bool) {
+	switch {
+	case pc.Width > 0 && (pc.Height > 0 || pc.AutoHeight):
+		// Explicit @page dimensions. parsePageSize already applied any
+		// `landscape` keyword that accompanied a named/explicit size.
+		width, height, autoHeight = pc.Width, pc.Height, pc.AutoHeight
+	default:
+		// No explicit @page size: start from the document default.
+		width, height = defaultW, defaultH
+	}
+
+	// Orientation-only keyword (size: landscape | portrait) applies its
+	// orientation to whatever dims are now in effect, swapping if needed.
+	// AutoHeight pages have no meaningful orientation, so leave them.
+	if pc.OrientationOnly && !autoHeight {
+		if pc.Landscape && width < height {
+			width, height = height, width
+		} else if !pc.Landscape && width > height {
+			width, height = height, width
+		}
+	}
+
+	// Resolve @page margin percentages / calc against the final page box.
+	// Per CSS Paged Media, left/right resolve against width and top/bottom
+	// against height. AutoHeight uses defaultH as the percent basis since
+	// the final height is content-driven and unknown here.
+	basisH := height
+	if autoHeight {
+		basisH = defaultH
+	}
+	pc.ResolveMargins(width, basisH)
+
+	return width, height, autoHeight
 }
 
 // convertMarginBoxes converts html.MarginBoxContent to layout.MarginBox,

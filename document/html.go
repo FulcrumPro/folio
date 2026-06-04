@@ -57,12 +57,16 @@ func (d *Document) AddHTMLWithContext(ctx context.Context, htmlStr string, opts 
 
 	// Apply @page configuration if present.
 	if pc := result.PageConfig; pc != nil {
-		if pc.Width > 0 && (pc.Height > 0 || pc.AutoHeight) {
-			// parsePageSize already swaps width/height for landscape,
-			// so we use the dimensions as-is. AutoHeight passes Height=0
-			// to trigger content-sized pages.
-			d.pageSize = PageSize{Width: pc.Width, Height: pc.Height}
-		}
+		// Resolve page geometry + the orientation-only swap + all margin
+		// percentages / calc through the single shared helper so every
+		// Document-building consumer behaves identically (B-1). The default
+		// page box is the document default; the helper applies any explicit
+		// @page size or orientation-only keyword and resolves margins
+		// against the final dimensions (left/right vs width, top/bottom vs
+		// height, per CSS Paged Media).
+		w, h, _ := pc.Resolve(d.pageSize.Width, d.pageSize.Height)
+		d.pageSize = PageSize{Width: w, Height: h}
+
 		if pc.HasMargins {
 			d.margins.Top = pc.MarginTop
 			d.margins.Right = pc.MarginRight

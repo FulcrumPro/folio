@@ -5,7 +5,6 @@ package layout
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/carlos7ags/folio/content"
@@ -270,12 +269,12 @@ func (r *Renderer) drawMarginBoxes(ctx *DrawContext, pageIdx int, margins Margin
 		if text == "" {
 			continue
 		}
-		// Resolve {counter(page)} and {counter(pages)} placeholders.
+		// Resolve {counter(page)} / {counter(pages)} placeholders,
+		// including styled variants like {counter(page,upper-roman)}.
 		// pageIdx is 0-based; counter(page) is 1-based per CSS GCPM.
 		// counter(pages) uses ctx.TotalPages, set during the emission
 		// pass once pagination is final.
-		text = strings.ReplaceAll(text, CounterPagePlaceholder, fmt.Sprintf("%d", pageIdx+1))
-		text = strings.ReplaceAll(text, CounterPagesPlaceholder, fmt.Sprintf("%d", ctx.TotalPages))
+		text = substituteCounters(text, pageIdx, ctx.TotalPages)
 
 		// Resolve {string(name)} placeholders from CSS string-set.
 		text = r.resolveStringRefs(text, pageIdx)

@@ -426,20 +426,27 @@ func (c *converter) resolveContentValue(val string) string {
 				continue
 			}
 		}
-		// counter() function.
+		// counter() function. Supports an optional list-style argument:
+		// counter(<name>) or counter(<name>, <list-style>).
 		if strings.HasPrefix(remaining, "counter(") {
 			closeIdx := strings.IndexByte(remaining, ')')
 			if closeIdx >= 0 {
-				name := strings.TrimSpace(remaining[len("counter("):closeIdx])
+				inner := remaining[len("counter("):closeIdx]
+				name, style := inner, ""
+				if comma := strings.IndexByte(inner, ','); comma >= 0 {
+					name = inner[:comma]
+					style = strings.TrimSpace(inner[comma+1:])
+				}
+				name = strings.TrimSpace(name)
 				// `page` and `pages` are reserved counters whose value is
 				// only known once pagination runs. Emit the same deferred
 				// placeholder used by @page margin boxes; `layout` resolves
-				// it during content-stream emission.
+				// it during content-stream emission, applying the style.
 				switch name {
 				case "page":
-					result.WriteString(layout.CounterPagePlaceholder)
+					result.WriteString(layout.CounterPlaceholder("page", style))
 				case "pages":
-					result.WriteString(layout.CounterPagesPlaceholder)
+					result.WriteString(layout.CounterPlaceholder("pages", style))
 				default:
 					result.WriteString(strconv.Itoa(c.getCounter(name)))
 				}

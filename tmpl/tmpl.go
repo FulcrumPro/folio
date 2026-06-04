@@ -303,11 +303,12 @@ func buildDocumentFromResult(result *foliohtml.ConvertResult, opts *Options) *do
 	ps := opts.pageSize()
 	margins := opts.margins()
 
-	// @page rules from the template override Options.
+	// @page rules from the template override Options. Resolve geometry +
+	// orientation-only swap + margin percentages / calc through the shared
+	// helper so this path matches AddHTML (B-1).
 	if pc := result.PageConfig; pc != nil {
-		if pc.Width > 0 && pc.Height > 0 {
-			ps = document.PageSize{Width: pc.Width, Height: pc.Height}
-		}
+		w, h, _ := pc.Resolve(ps.Width, ps.Height)
+		ps = document.PageSize{Width: w, Height: h}
 		if pc.HasMargins {
 			margins = layout.Margins{
 				Top:    pc.MarginTop,

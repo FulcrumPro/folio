@@ -79,10 +79,11 @@ func htmlToDocument(htmlStr string, pageWidth, pageHeight float64) (*document.Do
 	if pageWidth > 0 && pageHeight > 0 {
 		ps = document.PageSize{Width: pageWidth, Height: pageHeight}
 	}
+	// Resolve @page geometry + orientation-only swap + margin percentages /
+	// calc through the shared helper so this path matches AddHTML (B-1).
 	if pc := result.PageConfig; pc != nil {
-		if pc.Width > 0 && pc.Height > 0 {
-			ps = document.PageSize{Width: pc.Width, Height: pc.Height}
-		}
+		w, h, _ := pc.Resolve(ps.Width, ps.Height)
+		ps = document.PageSize{Width: w, Height: h}
 	}
 
 	doc := document.NewDocument(ps)

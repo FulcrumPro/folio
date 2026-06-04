@@ -61,14 +61,13 @@ func renderHTML(_ js.Value, args []js.Value) any {
 		return map[string]any{"error": err.Error()}
 	}
 
-	// Apply @page CSS rules to page size.
-	// AutoHeight means height explicitly set to 0 (size page to content).
+	// Apply @page CSS rules to page size via the shared helper so this path
+	// honors orientation-only keywords and resolves margin percentages /
+	// calc identically to AddHTML (B-1). AutoHeight (size: <w> 0) yields a
+	// content-sized page (height 0).
 	if pc := result.PageConfig; pc != nil {
-		if pc.Width > 0 && pc.Height > 0 {
-			pageSize = document.PageSize{Width: pc.Width, Height: pc.Height}
-		} else if pc.Width > 0 && pc.AutoHeight {
-			pageSize = document.PageSize{Width: pc.Width, Height: 0}
-		}
+		w, h, _ := pc.Resolve(pageSize.Width, pageSize.Height)
+		pageSize = document.PageSize{Width: w, Height: h}
 	}
 
 	doc := document.NewDocument(pageSize)

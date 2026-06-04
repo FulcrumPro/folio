@@ -252,13 +252,22 @@ func buildDocument(htmlSource string) (*document.Document, error) {
 		return nil, fmt.Errorf("convert: %w", err)
 	}
 
-	doc := document.NewDocument(document.PageSizeA4)
+	// Resolve @page geometry + orientation-only swap + margin percentages /
+	// calc through the shared helper (before NewDocument, which fixes the
+	// page size) so this path matches AddHTML (B-1).
+	ps := document.PageSizeA4
+	if pc := result.PageConfig; pc != nil {
+		w, h, _ := pc.Resolve(ps.Width, ps.Height)
+		ps = document.PageSize{Width: w, Height: h}
+	}
+
+	doc := document.NewDocument(ps)
 	doc.SetMargins(layout.Margins{Top: 0, Right: 0, Bottom: 0, Left: 0})
 	doc.Info.Title = "Q4 2026 Quarterly Report"
 	doc.Info.Author = "Apex Capital Partners"
 	doc.SetAutoBookmarks(true)
 
-	// Apply @page configuration (margins, margin boxes for page numbers).
+	// Apply @page margins (resolved above by pc.Resolve).
 	if pc := result.PageConfig; pc != nil {
 		if pc.HasMargins {
 			doc.SetMargins(layout.Margins{

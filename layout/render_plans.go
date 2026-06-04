@@ -444,6 +444,17 @@ func (r *Renderer) renderAbsolutes(pages []PageResult, defaultWidth float64, tot
 	lastPage := len(pages) - 1
 
 	for _, item := range r.absolutes {
+		// A fixed element (position: fixed) is drawn on every page; its
+		// geometry is page-relative (resolved against page width/height) so it
+		// is laid out and placed identically on each page. Non-fixed elements
+		// resolve to a single page: an explicit pageIndex, or -1 ⇒ last page.
+		if item.fixed {
+			for pageIdx := range pages {
+				r.drawAbsoluteOnPage(pages, item, pageIdx, defaultWidth, totalPages)
+			}
+			continue
+		}
+
 		pageIdx := item.pageIndex
 		if pageIdx < 0 {
 			pageIdx = lastPage
@@ -451,52 +462,58 @@ func (r *Renderer) renderAbsolutes(pages []PageResult, defaultWidth float64, tot
 		if pageIdx < 0 || pageIdx >= len(pages) {
 			continue
 		}
-		page := &pages[pageIdx]
+		r.drawAbsoluteOnPage(pages, item, pageIdx, defaultWidth, totalPages)
+	}
+}
 
-		layoutWidth := item.width
-		if layoutWidth <= 0 {
-			layoutWidth = defaultWidth
+// drawAbsoluteOnPage lays out one absolute item against the given page and
+// draws it, honoring right-alignment and z-index ordering.
+func (r *Renderer) drawAbsoluteOnPage(pages []PageResult, item absoluteItem, pageIdx int, defaultWidth float64, totalPages int) {
+	page := &pages[pageIdx]
+
+	layoutWidth := item.width
+	if layoutWidth <= 0 {
+		layoutWidth = defaultWidth
+	}
+
+	area := LayoutArea{Width: layoutWidth, Height: r.pageHeight}
+	plan := item.elem.PlanLayout(area)
+
+	x := item.x
+	if item.rightAligned {
+		elemWidth := 0.0
+		for _, block := range plan.Blocks {
+			if w := block.X + block.Width; w > elemWidth {
+				elemWidth = w
+			}
 		}
+		x = r.pageWidth - item.x - elemWidth
+	}
 
-		area := LayoutArea{Width: layoutWidth, Height: r.pageHeight}
-		plan := item.elem.PlanLayout(area)
-
-		x := item.x
-		if item.rightAligned {
-			elemWidth := 0.0
-			for _, block := range plan.Blocks {
-				if w := block.X + block.Width; w > elemWidth {
-					elemWidth = w
-				}
-			}
-			x = r.pageWidth - item.x - elemWidth
+	if item.zIndex < 0 {
+		// Render into a temporary stream and prepend to draw behind flow content.
+		bgStream := content.NewStream()
+		bgCtx := DrawContext{
+			Stream:     bgStream,
+			Page:       page,
+			ActualText: r.actualText,
+			PageIdx:    pageIdx,
+			TotalPages: totalPages,
 		}
-
-		if item.zIndex < 0 {
-			// Render into a temporary stream and prepend to draw behind flow content.
-			bgStream := content.NewStream()
-			bgCtx := DrawContext{
-				Stream:     bgStream,
-				Page:       page,
-				ActualText: r.actualText,
-				PageIdx:    pageIdx,
-				TotalPages: totalPages,
-			}
-			for _, block := range plan.Blocks {
-				drawBlock(block, x, item.y, &bgCtx, r.tagged, &r.structTags, pageIdx)
-			}
-			page.Stream.PrependBytes(bgStream.Bytes())
-		} else {
-			ctx := DrawContext{
-				Stream:     page.Stream,
-				Page:       page,
-				ActualText: r.actualText,
-				PageIdx:    pageIdx,
-				TotalPages: totalPages,
-			}
-			for _, block := range plan.Blocks {
-				drawBlock(block, x, item.y, &ctx, r.tagged, &r.structTags, pageIdx)
-			}
+		for _, block := range plan.Blocks {
+			drawBlock(block, x, item.y, &bgCtx, r.tagged, &r.structTags, pageIdx)
+		}
+		page.Stream.PrependBytes(bgStream.Bytes())
+	} else {
+		ctx := DrawContext{
+			Stream:     page.Stream,
+			Page:       page,
+			ActualText: r.actualText,
+			PageIdx:    pageIdx,
+			TotalPages: totalPages,
+		}
+		for _, block := range plan.Blocks {
+			drawBlock(block, x, item.y, &ctx, r.tagged, &r.structTags, pageIdx)
 		}
 	}
 }

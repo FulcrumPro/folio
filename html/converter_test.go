@@ -6019,6 +6019,60 @@ func TestConvertPositionFixed(t *testing.T) {
 	}
 }
 
+func TestConvertPositionRelativePercentTop(t *testing.T) {
+	// A relative top percentage must resolve against the page height, not 0.
+	// Page height defaults to 792pt, so top:50% should yield a ~396pt offset.
+	htmlStr := `<div style="position: relative; top: 50%"><p>Shifted</p></div>`
+	result, err := ConvertFull(htmlStr, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Elements) == 0 {
+		t.Fatal("expected a relatively positioned element")
+	}
+	div, ok := result.Elements[0].(*layout.Div)
+	if !ok {
+		t.Fatalf("expected *layout.Div, got %T", result.Elements[0])
+	}
+	plan := div.PlanLayout(layout.LayoutArea{Width: 468, Height: 720})
+	if len(plan.Blocks) == 0 {
+		t.Fatal("expected at least one placed block")
+	}
+	gotY := plan.Blocks[0].Y
+	if gotY <= 0 {
+		t.Fatalf("relative top:50%% should produce a non-zero vertical offset, got %v", gotY)
+	}
+	const want = 396.0 // 50% of default 792pt page height
+	if gotY < want-1 || gotY > want+1 {
+		t.Errorf("relative top:50%% offset = %v, want ~%v", gotY, want)
+	}
+}
+
+func TestConvertPositionRelativePercentBottom(t *testing.T) {
+	// A relative bottom percentage shifts the element upward (negative offset).
+	htmlStr := `<div style="position: relative; bottom: 25%"><p>Shifted</p></div>`
+	result, err := ConvertFull(htmlStr, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Elements) == 0 {
+		t.Fatal("expected a relatively positioned element")
+	}
+	div, ok := result.Elements[0].(*layout.Div)
+	if !ok {
+		t.Fatalf("expected *layout.Div, got %T", result.Elements[0])
+	}
+	plan := div.PlanLayout(layout.LayoutArea{Width: 468, Height: 720})
+	if len(plan.Blocks) == 0 {
+		t.Fatal("expected at least one placed block")
+	}
+	gotY := plan.Blocks[0].Y
+	const want = -198.0 // -25% of default 792pt page height
+	if gotY > want+1 || gotY < want-1 {
+		t.Errorf("relative bottom:25%% offset = %v, want ~%v", gotY, want)
+	}
+}
+
 func TestConvertPositionStatic(t *testing.T) {
 	htmlStr := `<div style="position: static"><p>Normal</p></div>`
 	result, err := ConvertFull(htmlStr, nil)

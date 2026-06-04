@@ -134,6 +134,7 @@ func renderHTML(_ js.Value, args []js.Value) any {
 			RightAligned: abs.RightAligned,
 			ZIndex:       abs.ZIndex,
 			PageIndex:    -1,
+			Fixed:        abs.Fixed,
 		})
 	}
 

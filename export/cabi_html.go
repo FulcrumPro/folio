@@ -119,6 +119,7 @@ func htmlToDocument(htmlStr string, pageWidth, pageHeight float64) (*document.Do
 			RightAligned: abs.RightAligned,
 			ZIndex:       abs.ZIndex,
 			PageIndex:    -1,
+			Fixed:        abs.Fixed,
 		})
 	}
 

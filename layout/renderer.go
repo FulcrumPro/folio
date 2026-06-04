@@ -79,6 +79,7 @@ type absoluteItem struct {
 	pageIndex    int     // -1 means "current page at time of rendering"
 	rightAligned bool    // x is a right-edge offset; final X = pageWidth - x - elementWidth
 	zIndex       int     // negative = render behind normal flow content
+	fixed        bool    // position: fixed — draw on every page
 }
 
 // StructTagInfo records a structure tag emitted during rendering.
@@ -408,6 +409,7 @@ type AbsoluteOpts struct {
 	RightAligned bool // x is a right-edge offset
 	ZIndex       int  // negative = render behind normal flow
 	PageIndex    int  // -1 = last page
+	Fixed        bool // position: fixed — draw on every page
 }
 
 // AddAbsolute places an element at the given (x, y) coordinates on the
@@ -426,7 +428,7 @@ func (r *Renderer) AddAbsolute(e Element, x, y, width float64) {
 func (r *Renderer) AddAbsoluteWithOpts(e Element, x, y, width float64, opts AbsoluteOpts) {
 	r.absolutes = append(r.absolutes, absoluteItem{
 		elem: e, x: x, y: y, width: width,
-		pageIndex: opts.PageIndex, rightAligned: opts.RightAligned, zIndex: opts.ZIndex,
+		pageIndex: opts.PageIndex, rightAligned: opts.RightAligned, zIndex: opts.ZIndex, fixed: opts.Fixed,
 	})
 }
 

@@ -120,6 +120,7 @@ func (d *Document) AddHTMLWithContext(ctx context.Context, htmlStr string, opts 
 			pageIndex:    -1,
 			rightAligned: abs.RightAligned,
 			zIndex:       abs.ZIndex,
+			fixed:        abs.Fixed,
 		})
 	}
 

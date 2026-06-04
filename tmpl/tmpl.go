@@ -328,6 +328,12 @@ func buildDocumentFromResult(result *foliohtml.ConvertResult, opts *Options) *do
 	if len(result.FirstMarginBoxes) > 0 {
 		doc.SetFirstMarginBoxes(result.FirstMarginBoxes)
 	}
+	if len(result.LeftMarginBoxes) > 0 {
+		doc.SetLeftMarginBoxes(result.LeftMarginBoxes)
+	}
+	if len(result.RightMarginBoxes) > 0 {
+		doc.SetRightMarginBoxes(result.RightMarginBoxes)
+	}
 
 	// Apply @page :first / :left / :right margin overrides.
 	if pc := result.PageConfig; pc != nil {
@@ -335,6 +341,18 @@ func buildDocumentFromResult(result *foliohtml.ConvertResult, opts *Options) *do
 			doc.SetFirstMargins(layout.Margins{
 				Top: pc.First.Top, Right: pc.First.Right,
 				Bottom: pc.First.Bottom, Left: pc.First.Left,
+			})
+		}
+		if pc.Left != nil && pc.Left.HasMargins {
+			doc.SetLeftMargins(layout.Margins{
+				Top: pc.Left.Top, Right: pc.Left.Right,
+				Bottom: pc.Left.Bottom, Left: pc.Left.Left,
+			})
+		}
+		if pc.Right != nil && pc.Right.HasMargins {
+			doc.SetRightMargins(layout.Margins{
+				Top: pc.Right.Top, Right: pc.Right.Right,
+				Bottom: pc.Right.Bottom, Left: pc.Right.Left,
 			})
 		}
 	}

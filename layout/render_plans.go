@@ -133,13 +133,21 @@ func (r *Renderer) renderWithPlans() []PageResult {
 		queue = queue[1:]
 
 		// Handle AreaBreak — always flush and start a new page.
+		//
+		// Unlike startNewPage (which skips empty pages), an explicit break
+		// always advances the page even when the current page has no blocks.
+		// Crucially it must recompute margins/dimensions for the new page via
+		// pageMarginsFor(pageIdx): the per-page margin selection (@page :first
+		// / :left / :right) keys off the cumulative pageIdx, so without this
+		// recalc every break-delimited page would keep page 0's :first margins.
 		if _, ok := elem.(*AreaBreak); ok {
 			flushPage()
 			curBlocks = nil
+			pageIdx++
+			maxWidth, usableHeight, curMargins = pageMarginsFor(pageIdx)
 			remainingHeight = usableHeight
 			curY = 0
 			floats = nil
-			pageIdx++
 			atPageTop = true
 			continue
 		}
@@ -255,8 +263,12 @@ func (r *Renderer) renderWithPlans() []PageResult {
 	}
 
 	// For auto-height pages, compute the actual page height from content.
+	// Auto-height only ever produces page 0, so use the margins resolved for
+	// that page (which may come from @page :first) — matching the margins used
+	// to position the content — rather than the default margin set.
 	if autoHeight && len(curBlocks) > 0 {
-		r.pageHeight = curY + r.margins.Top + r.margins.Bottom
+		m0 := r.marginsForPage(0)
+		r.pageHeight = curY + m0.Top + m0.Bottom
 	}
 
 	// Flush the last page.
@@ -265,7 +277,8 @@ func (r *Renderer) renderWithPlans() []PageResult {
 	} else if len(records) == 0 {
 		// Ensure at least one page.
 		if autoHeight {
-			r.pageHeight = r.margins.Top + r.margins.Bottom
+			m0 := r.marginsForPage(0)
+			r.pageHeight = m0.Top + m0.Bottom
 		}
 		records = append(records, pageRecord{idx: 0, margins: r.marginsForPage(0)})
 	}

@@ -186,6 +186,39 @@ func TestRenderDocumentPageRulesOverrideOptions(t *testing.T) {
 	}
 }
 
+// TestRenderDocumentPagePseudoMargins exercises the tmpl entry point's wiring
+// of @page :first / :left / :right margins and margin boxes. Prior to the
+// Defect A fix, buildDocumentFromResult wired only :first margins and dropped
+// :left/:right entirely. This renders a multi-page document and asserts a valid
+// PDF is produced (the document fields are unexported across packages; field-
+// level merge assertions live in document/html_test.go and html/features_test.go).
+func TestRenderDocumentPagePseudoMargins(t *testing.T) {
+	tpl := `<html><head><style>
+		@page { margin: 2cm; }
+		@page :first { margin-top: 4cm; }
+		@page :left { margin-left: 3cm; @top-left { content: "L"; } }
+		@page :right { margin-right: 3cm; @top-right { content: "R"; } }
+	</style></head><body>
+		<p style="page-break-after: always;">one</p>
+		<p style="page-break-after: always;">two</p>
+		<p>three</p>
+	</body></html>`
+	doc, err := RenderDocument(tpl, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc == nil {
+		t.Fatal("expected non-nil document")
+	}
+	var buf bytes.Buffer
+	if _, err := doc.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+	if !bytes.HasPrefix(buf.Bytes(), []byte("%PDF-")) {
+		t.Error("output does not start with %PDF-")
+	}
+}
+
 // --- RenderFile tests ---
 
 func TestRenderFile(t *testing.T) {

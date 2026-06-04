@@ -105,6 +105,20 @@ func (d *Document) AddHTMLWithContext(ctx context.Context, htmlStr string, opts 
 			}
 			d.SetFirstMarginBoxes(boxes)
 		}
+		if pc.Left != nil && len(pc.Left.MarginBoxes) > 0 {
+			boxes := make(map[string]layout.MarginBox)
+			for name, mbc := range pc.Left.MarginBoxes {
+				boxes[name] = layout.MarginBox{Content: mbc.Content, FontSize: mbc.FontSize, Color: mbc.Color}
+			}
+			d.SetLeftMarginBoxes(boxes)
+		}
+		if pc.Right != nil && len(pc.Right.MarginBoxes) > 0 {
+			boxes := make(map[string]layout.MarginBox)
+			for name, mbc := range pc.Right.MarginBoxes {
+				boxes[name] = layout.MarginBox{Content: mbc.Content, FontSize: mbc.FontSize, Color: mbc.Color}
+			}
+			d.SetRightMarginBoxes(boxes)
+		}
 	}
 
 	// Add all normal-flow elements.

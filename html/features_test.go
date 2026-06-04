@@ -179,6 +179,200 @@ func TestPagePseudoSelectors(t *testing.T) {
 	}
 }
 
+// TestPagePseudoSelectorCaseInsensitive verifies that page pseudo names are
+// matched case-insensitively (CSS page pseudo names are case-insensitive), so
+// `@page :First` is honoured exactly like `@page :first`.
+//
+// Fail-before/pass-after: before the fix `sel` was compared against lowercase
+// literals without lowercasing, so `:First` fell into the default case and was
+// dropped — pc.First would be nil and its margins lost.
+func TestPagePseudoSelectorCaseInsensitive(t *testing.T) {
+	html := `<html><head><style>
+		@page { margin: 2cm; }
+		@page :First { margin-top: 4cm; }
+		@page :LEFT { margin-left: 3cm; }
+		@page :Right { margin-right: 3cm; }
+	</style></head><body><p>X</p></body></html>`
+	result, err := ConvertFull(html, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc := result.PageConfig
+	if pc == nil {
+		t.Fatal("expected PageConfig")
+	}
+
+	// :First (capitalized) must be honoured.
+	if pc.First == nil {
+		t.Fatal("expected First page margins from @page :First")
+	}
+	// 4cm ≈ 113.39pt
+	if math.Abs(pc.First.Top-113.39) > 1 {
+		t.Errorf("First.Top = %.2f, want ~113.39 (4cm)", pc.First.Top)
+	}
+
+	// :LEFT must be honoured.
+	if pc.Left == nil {
+		t.Fatal("expected Left page margins from @page :LEFT")
+	}
+	if math.Abs(pc.Left.Left-85.04) > 1 {
+		t.Errorf("Left.Left = %.2f, want ~85.04 (3cm)", pc.Left.Left)
+	}
+
+	// :Right must be honoured.
+	if pc.Right == nil {
+		t.Fatal("expected Right page margins from @page :Right")
+	}
+	if math.Abs(pc.Right.Right-85.04) > 1 {
+		t.Errorf("Right.Right = %.2f, want ~85.04 (3cm)", pc.Right.Right)
+	}
+}
+
+// TestPageFirstMarginsMergeOverBase is the Defect B regression: a partial
+// `@page :first { margin-top: 4cm }` over a base `@page { margin: 2cm }` must
+// yield top=4cm AND right/bottom/left=2cm (inherited base), not 0.
+func TestPageFirstMarginsMergeOverBase(t *testing.T) {
+	html := `<html><head><style>
+		@page { margin: 2cm; }
+		@page :first { margin-top: 4cm; }
+	</style></head><body><p>X</p></body></html>`
+	result, err := ConvertFull(html, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc := result.PageConfig
+	if pc == nil || pc.First == nil {
+		t.Fatal("expected PageConfig with First margins")
+	}
+	// 4cm ≈ 113.39pt, 2cm ≈ 56.69pt.
+	if math.Abs(pc.First.Top-113.39) > 1 {
+		t.Errorf("First.Top = %.2f, want ~113.39 (4cm)", pc.First.Top)
+	}
+	if math.Abs(pc.First.Right-56.69) > 1 {
+		t.Errorf("First.Right = %.2f, want ~56.69 (2cm inherited from base, not 0)", pc.First.Right)
+	}
+	if math.Abs(pc.First.Bottom-56.69) > 1 {
+		t.Errorf("First.Bottom = %.2f, want ~56.69 (2cm inherited from base, not 0)", pc.First.Bottom)
+	}
+	if math.Abs(pc.First.Left-56.69) > 1 {
+		t.Errorf("First.Left = %.2f, want ~56.69 (2cm inherited from base, not 0)", pc.First.Left)
+	}
+}
+
+// TestPageLeftRightMarginsMergeOverBase verifies :left/:right partial margins
+// also inherit the base @page {} margins for unspecified sides.
+func TestPageLeftRightMarginsMergeOverBase(t *testing.T) {
+	html := `<html><head><style>
+		@page { margin: 2cm; }
+		@page :left { margin-left: 3cm; }
+		@page :right { margin-right: 3cm; }
+	</style></head><body><p>X</p></body></html>`
+	result, err := ConvertFull(html, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc := result.PageConfig
+	if pc == nil || pc.Left == nil || pc.Right == nil {
+		t.Fatal("expected PageConfig with Left and Right margins")
+	}
+	// :left margin-left = 3cm (~85.04), other sides inherit 2cm (~56.69).
+	if math.Abs(pc.Left.Left-85.04) > 1 {
+		t.Errorf("Left.Left = %.2f, want ~85.04 (3cm)", pc.Left.Left)
+	}
+	if math.Abs(pc.Left.Top-56.69) > 1 {
+		t.Errorf("Left.Top = %.2f, want ~56.69 (2cm inherited)", pc.Left.Top)
+	}
+	if math.Abs(pc.Left.Right-56.69) > 1 {
+		t.Errorf("Left.Right = %.2f, want ~56.69 (2cm inherited)", pc.Left.Right)
+	}
+	// :right margin-right = 3cm, other sides inherit 2cm.
+	if math.Abs(pc.Right.Right-85.04) > 1 {
+		t.Errorf("Right.Right = %.2f, want ~85.04 (3cm)", pc.Right.Right)
+	}
+	if math.Abs(pc.Right.Left-56.69) > 1 {
+		t.Errorf("Right.Left = %.2f, want ~56.69 (2cm inherited)", pc.Right.Left)
+	}
+}
+
+// TestPagePseudoBeforeBaseStillMerges verifies the seeding works even when the
+// :first rule appears in source BEFORE the base @page {} rule (two-pass fix).
+func TestPagePseudoBeforeBaseStillMerges(t *testing.T) {
+	html := `<html><head><style>
+		@page :first { margin-top: 4cm; }
+		@page { margin: 2cm; }
+	</style></head><body><p>X</p></body></html>`
+	result, err := ConvertFull(html, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc := result.PageConfig
+	if pc == nil || pc.First == nil {
+		t.Fatal("expected PageConfig with First margins")
+	}
+	if math.Abs(pc.First.Top-113.39) > 1 {
+		t.Errorf("First.Top = %.2f, want ~113.39 (4cm)", pc.First.Top)
+	}
+	if math.Abs(pc.First.Left-56.69) > 1 {
+		t.Errorf("First.Left = %.2f, want ~56.69 (2cm inherited, source order independent)", pc.First.Left)
+	}
+}
+
+// TestPageNamedDoesNotPolluteDefault is the Defect C regression: a NAMED page
+// (`@page narrow { margin: 5cm }`) must NOT become the global default rule.
+func TestPageNamedDoesNotPolluteDefault(t *testing.T) {
+	html := `<html><head><style>
+		@page { margin: 2cm; }
+		@page narrow { margin: 5cm; }
+	</style></head><body><p>X</p></body></html>`
+	result, err := ConvertFull(html, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc := result.PageConfig
+	if pc == nil {
+		t.Fatal("expected PageConfig")
+	}
+	// 2cm ≈ 56.69pt; must NOT be 5cm (~141.73pt) from the named page.
+	if math.Abs(pc.MarginTop-56.69) > 1 {
+		t.Errorf("default MarginTop = %.2f, want ~56.69 (named page must not pollute default)", pc.MarginTop)
+	}
+}
+
+// TestPageNamedAloneNoDefaultMargins verifies a named page on its own does not
+// set any default margins (HasMargins stays false).
+func TestPageNamedAloneNoDefaultMargins(t *testing.T) {
+	html := `<html><head><style>
+		@page narrow { margin: 5cm; }
+	</style></head><body><p>X</p></body></html>`
+	result, err := ConvertFull(html, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PageConfig != nil && result.PageConfig.HasMargins {
+		t.Errorf("named-only page set default HasMargins=true with MarginTop=%.2f, want no default margins", result.PageConfig.MarginTop)
+	}
+}
+
+// TestPageBlankDoesNotPolluteDefault verifies an unsupported pseudo (:blank)
+// does not become the global default rule.
+func TestPageBlankDoesNotPolluteDefault(t *testing.T) {
+	html := `<html><head><style>
+		@page { margin: 2cm; }
+		@page :blank { margin: 5cm; }
+	</style></head><body><p>X</p></body></html>`
+	result, err := ConvertFull(html, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc := result.PageConfig
+	if pc == nil {
+		t.Fatal("expected PageConfig")
+	}
+	if math.Abs(pc.MarginTop-56.69) > 1 {
+		t.Errorf("default MarginTop = %.2f, want ~56.69 (:blank must not pollute default)", pc.MarginTop)
+	}
+}
+
 // --- Body padding renders as Div ---
 
 func TestBodyPaddingRendered(t *testing.T) {
@@ -813,6 +1007,79 @@ func TestPageMarginBoxFirstPage(t *testing.T) {
 		t.Error("expected top-center margin box on :first")
 	} else if mb.Content != "Cover Page" {
 		t.Errorf("content = %q, want %q", mb.Content, "Cover Page")
+	}
+}
+
+// TestPageFirstEmptyMarginBoxPreserved is the parse-side regression guard for
+// the bug where @page :first { @bottom-center { content: "" } } was dropped at
+// parse, so it never reached the renderer and could not blank the first-page
+// footer. An explicitly-declared empty-content box must be preserved (with
+// HasContent set) so the renderer can OVERRIDE the inherited default for that
+// page/slot. The base @page rule keeps dropping empty boxes (nothing to draw,
+// nothing to override).
+//
+// Fail-before/pass-after: before the fix pc.First.MarginBoxes had no
+// bottom-center entry, so the default footer leaked onto page 1.
+func TestPageFirstEmptyMarginBoxPreserved(t *testing.T) {
+	html := `<html><head><style>
+		@page {
+			margin: 36pt;
+			@bottom-center { content: "Page " counter(page); }
+		}
+		@page :first {
+			@bottom-center { content: ""; }
+		}
+	</style></head><body><p>Content</p></body></html>`
+	result, err := ConvertFull(html, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc := result.PageConfig
+	if pc == nil {
+		t.Fatal("expected PageConfig")
+	}
+	// The default base box must still be present and non-empty.
+	if mb, ok := pc.MarginBoxes["bottom-center"]; !ok {
+		t.Error("expected default bottom-center margin box")
+	} else if !strings.Contains(mb.Content, "Page ") {
+		t.Errorf("default bottom-center content = %q, should contain 'Page '", mb.Content)
+	}
+	// The :first empty box must be preserved so it can override the default.
+	if pc.First == nil {
+		t.Fatal("expected First page config")
+	}
+	mb, ok := pc.First.MarginBoxes["bottom-center"]
+	if !ok {
+		t.Fatal("empty :first bottom-center box was dropped; it must be preserved to override the default")
+	}
+	if mb.Content != "" {
+		t.Errorf(":first bottom-center content = %q, want empty", mb.Content)
+	}
+	if !mb.HasContent {
+		t.Error(":first bottom-center HasContent should be true (content was explicitly declared)")
+	}
+}
+
+// TestPageBaseEmptyMarginBoxDropped confirms an empty-content box on the BASE
+// @page rule is still dropped (it has nothing to draw and nothing to override),
+// preserving the pre-existing behaviour for the non-pseudo case.
+func TestPageBaseEmptyMarginBoxDropped(t *testing.T) {
+	html := `<html><head><style>
+		@page {
+			margin: 36pt;
+			@bottom-center { content: ""; }
+		}
+	</style></head><body><p>Content</p></body></html>`
+	result, err := ConvertFull(html, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc := result.PageConfig
+	if pc == nil {
+		t.Fatal("expected PageConfig")
+	}
+	if _, ok := pc.MarginBoxes["bottom-center"]; ok {
+		t.Error("empty base bottom-center box should be dropped, but it was kept")
 	}
 }
 

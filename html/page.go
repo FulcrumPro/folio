@@ -22,93 +22,57 @@ var pageSizes = map[string][2]float64{
 
 // parsePageConfig extracts page dimensions and margins from @page rules.
 // Supports pseudo-selectors: @page :first, @page :left, @page :right.
+//
+// Margin cascade: each pseudo target (:first/:left/:right) is seeded from the
+// RESOLVED base @page {} margins BEFORE its own declarations are applied, so a
+// side the pseudo does not specify inherits the base value (CSS cascade). For
+// example, `@page { margin: 2cm } @page :first { margin-top: 4cm }` yields a
+// first page with top=4cm and right/bottom/left=2cm — not 0.
+//
+// Two passes are required because a pseudo rule may appear in source before the
+// base @page {} rule it inherits from: pass 1 resolves the base, pass 2 seeds
+// and applies the pseudos.
 func parsePageConfig(rules []pageRule, defaultFontSize float64) *PageConfig {
 	pc := &PageConfig{}
 	hasAny := false
 
+	// Pass 1: resolve the base @page {} rule (selector == "") — size,
+	// margins, and margin boxes. Named pages and unrecognised pseudos are
+	// already dropped upstream in css.go so they cannot pollute the default.
 	for _, rule := range rules {
-		// Determine which margin target to apply to based on selector.
-		var target *PageMargins
-		switch rule.selector {
-		case "first":
-			if pc.First == nil {
-				pc.First = &PageMargins{}
-			}
-			target = pc.First
-		case "left":
-			if pc.Left == nil {
-				pc.Left = &PageMargins{}
-			}
-			target = pc.Left
-		case "right":
-			if pc.Right == nil {
-				pc.Right = &PageMargins{}
-			}
-			target = pc.Right
+		if rule.selector != "" {
+			continue
 		}
-
 		for _, d := range rule.declarations {
 			prop := strings.TrimSpace(strings.ToLower(d.property))
 			val := strings.TrimSpace(d.value)
-
 			switch prop {
 			case "size":
 				parsePageSize(val, pc, defaultFontSize)
 				hasAny = true
 			case "margin":
 				t, r, b, l := parseMarginShorthand(val, defaultFontSize)
-				if target != nil {
-					target.Top, target.Right, target.Bottom, target.Left = t, r, b, l
-					target.HasMargins = true
-				} else {
-					pc.MarginTop, pc.MarginRight, pc.MarginBottom, pc.MarginLeft = t, r, b, l
-					pc.HasMargins = true
-				}
+				pc.MarginTop, pc.MarginRight, pc.MarginBottom, pc.MarginLeft = t, r, b, l
+				pc.HasMargins = true
 				hasAny = true
 			case "margin-top":
-				v := parseSingleLength(val, defaultFontSize)
-				if target != nil {
-					target.Top = v
-					target.HasMargins = true
-				} else {
-					pc.MarginTop = v
-					pc.HasMargins = true
-				}
+				pc.MarginTop = parseSingleLength(val, defaultFontSize)
+				pc.HasMargins = true
 				hasAny = true
 			case "margin-right":
-				v := parseSingleLength(val, defaultFontSize)
-				if target != nil {
-					target.Right = v
-					target.HasMargins = true
-				} else {
-					pc.MarginRight = v
-					pc.HasMargins = true
-				}
+				pc.MarginRight = parseSingleLength(val, defaultFontSize)
+				pc.HasMargins = true
 				hasAny = true
 			case "margin-bottom":
-				v := parseSingleLength(val, defaultFontSize)
-				if target != nil {
-					target.Bottom = v
-					target.HasMargins = true
-				} else {
-					pc.MarginBottom = v
-					pc.HasMargins = true
-				}
+				pc.MarginBottom = parseSingleLength(val, defaultFontSize)
+				pc.HasMargins = true
 				hasAny = true
 			case "margin-left":
-				v := parseSingleLength(val, defaultFontSize)
-				if target != nil {
-					target.Left = v
-					target.HasMargins = true
-				} else {
-					pc.MarginLeft = v
-					pc.HasMargins = true
-				}
+				pc.MarginLeft = parseSingleLength(val, defaultFontSize)
+				pc.HasMargins = true
 				hasAny = true
 			}
 		}
-
-		// Extract margin box content.
 		if len(rule.marginBoxes) > 0 {
 			hasAny = true
 			for boxName, boxDecls := range rule.marginBoxes {
@@ -116,17 +80,86 @@ func parsePageConfig(rules []pageRule, defaultFontSize float64) *PageConfig {
 				if mbc.Content == "" {
 					continue
 				}
-				if target != nil {
-					if target.MarginBoxes == nil {
-						target.MarginBoxes = make(map[string]MarginBoxContent)
-					}
-					target.MarginBoxes[boxName] = mbc
-				} else {
-					if pc.MarginBoxes == nil {
-						pc.MarginBoxes = make(map[string]MarginBoxContent)
-					}
-					pc.MarginBoxes[boxName] = mbc
+				if pc.MarginBoxes == nil {
+					pc.MarginBoxes = make(map[string]MarginBoxContent)
 				}
+				pc.MarginBoxes[boxName] = mbc
+			}
+		}
+	}
+
+	// Pass 2: pseudo selectors (:first/:left/:right). Each target inherits
+	// the resolved base margins, then overlays its own declarations.
+	for _, rule := range rules {
+		var target *PageMargins
+		switch rule.selector {
+		case "first":
+			if pc.First == nil {
+				pc.First = newSeededMargins(pc)
+			}
+			target = pc.First
+		case "left":
+			if pc.Left == nil {
+				pc.Left = newSeededMargins(pc)
+			}
+			target = pc.Left
+		case "right":
+			if pc.Right == nil {
+				pc.Right = newSeededMargins(pc)
+			}
+			target = pc.Right
+		default:
+			continue
+		}
+
+		for _, d := range rule.declarations {
+			prop := strings.TrimSpace(strings.ToLower(d.property))
+			val := strings.TrimSpace(d.value)
+			switch prop {
+			case "margin":
+				t, r, b, l := parseMarginShorthand(val, defaultFontSize)
+				target.Top, target.Right, target.Bottom, target.Left = t, r, b, l
+				target.HasMargins = true
+				hasAny = true
+			case "margin-top":
+				target.Top = parseSingleLength(val, defaultFontSize)
+				target.HasMargins = true
+				hasAny = true
+			case "margin-right":
+				target.Right = parseSingleLength(val, defaultFontSize)
+				target.HasMargins = true
+				hasAny = true
+			case "margin-bottom":
+				target.Bottom = parseSingleLength(val, defaultFontSize)
+				target.HasMargins = true
+				hasAny = true
+			case "margin-left":
+				target.Left = parseSingleLength(val, defaultFontSize)
+				target.HasMargins = true
+				hasAny = true
+			}
+		}
+
+		// Extract margin box content for this pseudo target.
+		//
+		// Unlike the base @page rule, a pseudo box with empty resolved content
+		// is PRESERVED when the `content` property was explicitly declared
+		// (HasContent). Such a box (e.g. `@page :first { @bottom-center {
+		// content: "" } }`) must enter the pseudo set so the per-slot merge in
+		// the renderer lets it OVERRIDE — and thus blank — the inherited
+		// default box for that page/slot. A box with no content declaration at
+		// all (only font-size/color, say) and empty content is still dropped.
+		if len(rule.marginBoxes) > 0 {
+			hasAny = true
+			for boxName, boxDecls := range rule.marginBoxes {
+				mbc := parseMarginBoxDecls(boxDecls, defaultFontSize)
+				if mbc.Content == "" && !mbc.HasContent {
+					continue
+				}
+				if target.MarginBoxes == nil {
+					target.MarginBoxes = make(map[string]MarginBoxContent)
+				}
+				target.MarginBoxes[boxName] = mbc
 			}
 		}
 	}
@@ -135,6 +168,22 @@ func parsePageConfig(rules []pageRule, defaultFontSize float64) *PageConfig {
 		return nil
 	}
 	return pc
+}
+
+// newSeededMargins creates a PageMargins for a pseudo target (:first/:left/
+// :right) seeded with the resolved base @page {} margins. If the base set any
+// margins, the seeded set is marked HasMargins so unspecified sides inherit the
+// base instead of defaulting to 0 (CSS cascade — Defect B fix).
+func newSeededMargins(pc *PageConfig) *PageMargins {
+	pm := &PageMargins{}
+	if pc.HasMargins {
+		pm.Top = pc.MarginTop
+		pm.Right = pc.MarginRight
+		pm.Bottom = pc.MarginBottom
+		pm.Left = pc.MarginLeft
+		pm.HasMargins = true
+	}
+	return pm
 }
 
 // parseMarginBoxDecls extracts content, font-size, and color from margin box declarations.
@@ -146,6 +195,7 @@ func parseMarginBoxDecls(decls []cssDecl, defaultFontSize float64) MarginBoxCont
 		switch prop {
 		case "content":
 			mbc.Content = parseContentValue(val)
+			mbc.HasContent = true
 		case "font-size":
 			if l := parseCSSLengthWithUnit(val); l != nil {
 				mbc.FontSize = l.toPoints(0, defaultFontSize)

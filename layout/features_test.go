@@ -354,6 +354,68 @@ func TestRendererDefaultMarginsWhenNoVariants(t *testing.T) {
 	}
 }
 
+// TestRendererFirstWinsOverRightOnPage0 verifies the :first set takes
+// precedence over the parity-derived :right set on page 0 (CSS specificity).
+func TestRendererFirstWinsOverRightOnPage0(t *testing.T) {
+	r := NewRenderer(612, 792, Margins{Top: 72, Right: 72, Bottom: 72, Left: 72})
+	r.SetFirstMargins(Margins{Top: 100, Right: 72, Bottom: 72, Left: 72})
+	r.SetRightMargins(Margins{Top: 72, Right: 90, Bottom: 72, Left: 50})
+
+	m0 := r.marginsForPage(0)
+	if m0.Top != 100 {
+		t.Errorf("page 0: Top = %.1f, want 100 (:first wins over :right)", m0.Top)
+	}
+	if m0.Right == 90 {
+		t.Errorf("page 0: Right = 90, expected :first set, not :right")
+	}
+}
+
+// TestRendererMarginBoxesForPage verifies parity selection and merge-over-base
+// for margin boxes: page 0 = :first, page 1 = :left, page 2 = :right, with the
+// default boxes filled in for slots the parity set does not define.
+func TestRendererMarginBoxesForPage(t *testing.T) {
+	r := NewRenderer(612, 792, Margins{Top: 72, Right: 72, Bottom: 72, Left: 72})
+	r.SetMarginBoxes(map[string]MarginBox{
+		"bottom-center": {Content: "default-footer"},
+	})
+	r.SetFirstMarginBoxes(map[string]MarginBox{
+		"top-center": {Content: "first-header"},
+	})
+	r.SetLeftMarginBoxes(map[string]MarginBox{
+		"top-left": {Content: "left-header"},
+	})
+	r.SetRightMarginBoxes(map[string]MarginBox{
+		"top-right": {Content: "right-header"},
+	})
+
+	// Page 0 → :first, merged over default.
+	b0 := r.marginBoxesForPage(0)
+	if b0["top-center"].Content != "first-header" {
+		t.Errorf("page 0: top-center = %q, want first-header", b0["top-center"].Content)
+	}
+	if b0["bottom-center"].Content != "default-footer" {
+		t.Errorf("page 0: bottom-center = %q, want default-footer (merge over base)", b0["bottom-center"].Content)
+	}
+	if _, ok := b0["top-left"]; ok {
+		t.Error("page 0: should not have left-page box")
+	}
+
+	// Page 1 → :left.
+	b1 := r.marginBoxesForPage(1)
+	if b1["top-left"].Content != "left-header" {
+		t.Errorf("page 1: top-left = %q, want left-header", b1["top-left"].Content)
+	}
+	if b1["bottom-center"].Content != "default-footer" {
+		t.Errorf("page 1: bottom-center = %q, want default-footer", b1["bottom-center"].Content)
+	}
+
+	// Page 2 → :right.
+	b2 := r.marginBoxesForPage(2)
+	if b2["top-right"].Content != "right-header" {
+		t.Errorf("page 2: top-right = %q, want right-header", b2["top-right"].Content)
+	}
+}
+
 // --- Heading SetRuns ---
 
 func TestHeadingSetRuns(t *testing.T) {

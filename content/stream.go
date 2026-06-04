@@ -682,72 +682,99 @@ func (s *Stream) RoundedRect(x, y, w, h, r float64) {
 	s.ClosePath()
 }
 
-// RoundedRectPerCorner draws a rounded rectangle with different radii per corner.
-// The radii are rTL (top-left), rTR (top-right), rBR (bottom-right), rBL (bottom-left).
+// RoundedRectPerCorner draws a rounded rectangle with different (circular)
+// radii per corner. The radii are rTL (top-left), rTR (top-right),
+// rBR (bottom-right), rBL (bottom-left).
 // In PDF coordinates y increases upward, so (x, y) is the bottom-left of the rect.
 //
 // Radii are proportionally reduced so that no edge is over-subscribed by its
 // two adjacent corners (the CSS border-radius algorithm, CSS Backgrounds and
 // Borders Module Level 3 §5.5). Negative radii are treated as 0.
+//
+// This is a circular special case of RoundedRectPerCornerXY: it delegates with
+// rx == ry per corner so there is a single drawing implementation.
 func (s *Stream) RoundedRectPerCorner(x, y, w, h, rTL, rTR, rBR, rBL float64) {
-	if rTL < 0 {
-		rTL = 0
-	}
-	if rTR < 0 {
-		rTR = 0
-	}
-	if rBR < 0 {
-		rBR = 0
-	}
-	if rBL < 0 {
-		rBL = 0
+	s.RoundedRectPerCornerXY(x, y, w, h,
+		[4]float64{rTL, rTR, rBR, rBL},
+		[4]float64{rTL, rTR, rBR, rBL})
+}
+
+// RoundedRectPerCornerXY draws a rounded rectangle with independent horizontal
+// (rx) and vertical (ry) radii per corner, producing elliptical corners. The
+// arrays are indexed [TL, TR, BR, BL]. A corner with rx == ry is circular.
+// In PDF coordinates y increases upward, so (x, y) is the bottom-left of the rect.
+//
+// Radii are proportionally reduced so that no edge is over-subscribed by its
+// two adjacent corners (the generalized CSS border-radius algorithm, CSS
+// Backgrounds and Borders Module Level 3 §5.5): the horizontal radii constrain
+// the top/bottom edges against w, and the vertical radii constrain the
+// left/right edges against h. A single reduction factor f scales every rx and
+// ry. Negative radii are treated as 0.
+func (s *Stream) RoundedRectPerCornerXY(x, y, w, h float64, rx, ry [4]float64) {
+	const (
+		tl = 0
+		tr = 1
+		br = 2
+		bl = 3
+	)
+	for i := range rx {
+		if rx[i] < 0 {
+			rx[i] = 0
+		}
+		if ry[i] < 0 {
+			ry[i] = 0
+		}
 	}
 	f := 1.0
-	if s := rTL + rTR; s > 0 {
-		f = min(f, w/s)
+	if sum := rx[tl] + rx[tr]; sum > 0 { // top edge
+		f = min(f, w/sum)
 	}
-	if s := rTR + rBR; s > 0 {
-		f = min(f, h/s)
+	if sum := rx[bl] + rx[br]; sum > 0 { // bottom edge
+		f = min(f, w/sum)
 	}
-	if s := rBL + rBR; s > 0 {
-		f = min(f, w/s)
+	if sum := ry[tl] + ry[bl]; sum > 0 { // left edge
+		f = min(f, h/sum)
 	}
-	if s := rTL + rBL; s > 0 {
-		f = min(f, h/s)
+	if sum := ry[tr] + ry[br]; sum > 0 { // right edge
+		f = min(f, h/sum)
 	}
 	if f < 1 {
-		rTL *= f
-		rTR *= f
-		rBR *= f
-		rBL *= f
+		for i := range rx {
+			rx[i] *= f
+			ry[i] *= f
+		}
 	}
 	const k = 0.5522847498
 
-	// Start at bottom-left, just past the BL corner radius.
-	s.MoveTo(x+rBL, y)
-	// Bottom edge → bottom-right corner
-	s.LineTo(x+w-rBR, y)
-	if rBR > 0 {
-		kr := rBR * k
-		s.CurveTo(x+w-rBR+kr, y, x+w, y+rBR-kr, x+w, y+rBR)
+	// Start at bottom-left, just past the BL corner radius (x extent).
+	s.MoveTo(x+rx[bl], y)
+	// Bottom edge → bottom-right corner.
+	s.LineTo(x+w-rx[br], y)
+	if rx[br] > 0 || ry[br] > 0 {
+		krx := rx[br] * k
+		kry := ry[br] * k
+		s.CurveTo(x+w-rx[br]+krx, y, x+w, y+ry[br]-kry, x+w, y+ry[br])
 	}
-	// Right edge → top-right corner
-	s.LineTo(x+w, y+h-rTR)
-	if rTR > 0 {
-		kr := rTR * k
-		s.CurveTo(x+w, y+h-rTR+kr, x+w-rTR+kr, y+h, x+w-rTR, y+h)
+	// Right edge → top-right corner.
+	s.LineTo(x+w, y+h-ry[tr])
+	if rx[tr] > 0 || ry[tr] > 0 {
+		krx := rx[tr] * k
+		kry := ry[tr] * k
+		s.CurveTo(x+w, y+h-ry[tr]+kry, x+w-rx[tr]+krx, y+h, x+w-rx[tr], y+h)
 	}
-	// Top edge → top-left corner
-	s.LineTo(x+rTL, y+h)
-	if rTL > 0 {
-		kr := rTL * k
-		s.CurveTo(x+rTL-kr, y+h, x, y+h-rTL+kr, x, y+h-rTL)
+	// Top edge → top-left corner.
+	s.LineTo(x+rx[tl], y+h)
+	if rx[tl] > 0 || ry[tl] > 0 {
+		krx := rx[tl] * k
+		kry := ry[tl] * k
+		s.CurveTo(x+rx[tl]-krx, y+h, x, y+h-ry[tl]+kry, x, y+h-ry[tl])
 	}
-	// Left edge → bottom-left corner
-	s.LineTo(x, y+rBL)
-	if rBL > 0 {
-		kr := rBL * k
-		s.CurveTo(x, y+rBL-kr, x+rBL-kr, y, x+rBL, y)
+	// Left edge → bottom-left corner.
+	s.LineTo(x, y+ry[bl])
+	if rx[bl] > 0 || ry[bl] > 0 {
+		krx := rx[bl] * k
+		kry := ry[bl] * k
+		s.CurveTo(x, y+ry[bl]-kry, x+rx[bl]-krx, y, x+rx[bl], y)
 	}
 	s.ClosePath()
 }

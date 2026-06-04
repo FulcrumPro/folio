@@ -1130,6 +1130,96 @@ func TestRoundedRectPerCornerNegativeRadius(t *testing.T) {
 	}
 }
 
+// --- RoundedRectPerCornerXY (elliptical corners) tests ---
+
+// A square box with equal rx==ry per corner must produce exactly the same
+// path as the circular RoundedRectPerCorner — RoundedRectPerCorner delegates
+// to the XY version, so this also guards against a behavior change for
+// existing callers.
+func TestRoundedRectPerCornerXYCircleMatchesCircular(t *testing.T) {
+	// 28x28 box, 50%-equivalent radius = 14 on every corner.
+	circ := NewStream()
+	circ.RoundedRectPerCorner(0, 0, 28, 28, 14, 14, 14, 14)
+	xy := NewStream()
+	xy.RoundedRectPerCornerXY(0, 0, 28, 28,
+		[4]float64{14, 14, 14, 14}, [4]float64{14, 14, 14, 14})
+	if string(circ.Bytes()) != string(xy.Bytes()) {
+		t.Errorf("circular and XY paths differ:\ncircular=%q\nxy=%q",
+			circ.Bytes(), xy.Bytes())
+	}
+}
+
+// An elliptical corner (rx != ry) must place its control points at distinct
+// x and y extents — the curve reaches rx horizontally and ry vertically.
+func TestRoundedRectPerCornerXYElliptical(t *testing.T) {
+	// 100x40 box, 50% radius → rx=50, ry=20 on every corner (a pill).
+	s := NewStream()
+	rx := [4]float64{50, 50, 50, 50}
+	ry := [4]float64{20, 20, 20, 20}
+	s.RoundedRectPerCornerXY(0, 0, 100, 40, rx, ry)
+	got := string(s.Bytes())
+	// Start point is at x = rx[BL] = 50 (horizontal extent), y = 0.
+	if !strings.HasPrefix(got, "50 0 m") {
+		t.Errorf("expected elliptical path to start with %q, got %q", "50 0 m", got)
+	}
+	// Four curves, one per corner.
+	if strings.Count(got, " c") != 4 {
+		t.Errorf("expected 4 curve operators, got %d in %q", strings.Count(got, " c"), got)
+	}
+	// The vertical extent (ry=20) and horizontal extent (rx=50) differ, so the
+	// path must mention both 20 and 50 — confirming the corners are not
+	// circular. A circular rendering would collapse to a single radius.
+	if !strings.Contains(got, "20") || !strings.Contains(got, "50") {
+		t.Errorf("expected distinct x/y extents (20 and 50) in %q", got)
+	}
+}
+
+// The generalized clamp must reduce over-subscribed radii using w for the
+// horizontal (rx) sums and h for the vertical (ry) sums, scaling both axes by
+// the same factor.
+func TestRoundedRectPerCornerXYClamp(t *testing.T) {
+	// w=20, h=100, all rx=30 → top sum=60, f_top=20/60=1/3.
+	// all ry=10 → left sum=20, f_left=100/20=5. f=min(1, 1/3, ...)=1/3.
+	// rx scales to 10 (start x = rx[BL] = 10), ry scales to 10/3≈3.333.
+	s := NewStream()
+	s.RoundedRectPerCornerXY(0, 0, 20, 100,
+		[4]float64{30, 30, 30, 30}, [4]float64{10, 10, 10, 10})
+	got := string(s.Bytes())
+	if !strings.HasPrefix(got, "10 0 m") {
+		t.Errorf("expected clamped path to start with %q, got %q", "10 0 m", got)
+	}
+	// ry must be scaled by the SAME factor f=1/3: ry 10 → 3.333333. Guard the
+	// vertical axis explicitly so a bug that scales only rx (leaving ry=10)
+	// cannot pass. The right edge runs to y = h-ry = 100-3.333333 = 96.666667
+	// (an unscaled ry would emit 90), and the bottom-right corner curve ends at
+	// y = ry = 3.333333 with control y = ry-ry*k = 1.492384. Assert the whole
+	// BR curve operator as an exact line so the match is not a loose substring.
+	const brCurve = "15.522847 0 20 1.492384 20 3.333333 c"
+	if !strings.Contains(got, "\n"+brCurve+"\n") &&
+		!strings.HasSuffix(got, "\n"+brCurve) {
+		t.Errorf("expected BR corner curve %q (proving ry scaled by f=1/3) in %q",
+			brCurve, got)
+	}
+	if !strings.Contains(got, "\n20 96.666667 l\n") {
+		t.Errorf("expected right edge %q (ry scaled to 3.333333, not 10) in %q",
+			"20 96.666667 l", got)
+	}
+}
+
+// Negative radii on either axis are treated as 0.
+func TestRoundedRectPerCornerXYNegative(t *testing.T) {
+	s := NewStream()
+	s.RoundedRectPerCornerXY(0, 0, 100, 50,
+		[4]float64{-5, 0, 0, 0}, [4]float64{-5, 0, 0, 0})
+	got := string(s.Bytes())
+	if !strings.HasPrefix(got, "0 0 m") {
+		t.Errorf("expected path to start with %q, got %q", "0 0 m", got)
+	}
+	if strings.Contains(got, " c") {
+		t.Errorf("expected no curves with zero/negative radii, got %q", got)
+	}
+}
+
 // --- ISO 32000 operator tests (Part B) ---
 
 func TestMoveTextWithLeading(t *testing.T) {

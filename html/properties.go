@@ -345,6 +345,25 @@ func parseLengthPt(val string, fontSize float64) float64 {
 	return 0
 }
 
+// parseRadiusComponent parses a single border-radius corner component and
+// splits it into an absolute point length and a percentage fraction. A
+// percentage value (e.g. "50%") returns (0, 0.5) so the caller can resolve it
+// against the box width/height at layout time; any other length returns its
+// resolved points and a 0 fraction. Invalid input returns (0, 0).
+//
+// Note: the CSS `border-radius: <h> / <v>` slash syntax (independent horizontal
+// and vertical radii) is not handled here — that is deferred follow-up work.
+func parseRadiusComponent(val string, fontSize float64) (abs float64, pct float64) {
+	l := parseLength(val)
+	if l == nil {
+		return 0, 0
+	}
+	if l.Unit == "%" {
+		return 0, l.Value / 100
+	}
+	return l.toPoints(0, fontSize), 0
+}
+
 // hslToRGB converts HSL values (each 0-1) to RGB values (each 0-1).
 func hslToRGB(h, s, l float64) (r, g, b float64) {
 	if s == 0 {

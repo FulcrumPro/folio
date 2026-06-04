@@ -171,8 +171,15 @@ type computedStyle struct {
 	BorderRadiusTR float64 // per-corner: top-right
 	BorderRadiusBR float64 // per-corner: bottom-right
 	BorderRadiusBL float64 // per-corner: bottom-left
-	Opacity        float64 // 0..1 (0 = default, meaning "not set")
-	Overflow       string  // "visible", "hidden"
+	// Per-corner percentage radii (fraction 0..1; 0 = not a percentage).
+	// CSS resolves a percentage radius against the box width (horizontal axis)
+	// and height (vertical axis) at layout time, yielding elliptical corners.
+	BorderRadiusTLPct float64
+	BorderRadiusTRPct float64
+	BorderRadiusBRPct float64
+	BorderRadiusBLPct float64
+	Opacity           float64 // 0..1 (0 = default, meaning "not set")
+	Overflow          string  // "visible", "hidden"
 
 	// Box shadow (multiple shadows supported, drawn bottom-to-top)
 	BoxShadows []boxShadow

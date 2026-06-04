@@ -94,14 +94,14 @@ func (d *Document) AddHTMLWithContext(ctx context.Context, htmlStr string, opts 
 		if len(pc.MarginBoxes) > 0 {
 			boxes := make(map[string]layout.MarginBox)
 			for name, mbc := range pc.MarginBoxes {
-				boxes[name] = layout.MarginBox{Content: mbc.Content, FontSize: mbc.FontSize, Color: mbc.Color}
+				boxes[name] = layout.MarginBox{Content: mbc.Content, FontSize: mbc.FontSize, Color: mbc.Color, HasColor: mbc.HasColor, Embedded: mbc.Embedded}
 			}
 			d.SetMarginBoxes(boxes)
 		}
 		if pc.First != nil && len(pc.First.MarginBoxes) > 0 {
 			boxes := make(map[string]layout.MarginBox)
 			for name, mbc := range pc.First.MarginBoxes {
-				boxes[name] = layout.MarginBox{Content: mbc.Content, FontSize: mbc.FontSize, Color: mbc.Color}
+				boxes[name] = layout.MarginBox{Content: mbc.Content, FontSize: mbc.FontSize, Color: mbc.Color, HasColor: mbc.HasColor, Embedded: mbc.Embedded}
 			}
 			d.SetFirstMarginBoxes(boxes)
 		}

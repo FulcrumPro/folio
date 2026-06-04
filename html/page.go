@@ -153,6 +153,7 @@ func parseMarginBoxDecls(decls []cssDecl, defaultFontSize float64) MarginBoxCont
 		case "color":
 			if c, ok := parseColor(val); ok {
 				mbc.Color = [3]float64{c.R, c.G, c.B}
+				mbc.HasColor = true
 			}
 		}
 	}

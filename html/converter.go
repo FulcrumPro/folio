@@ -320,7 +320,17 @@ type DocMetadata struct {
 type MarginBoxContent struct {
 	Content  string     // resolved content string (after evaluating counter(), string literals, etc.)
 	FontSize float64    // font size in points (0 = use default 9pt)
-	Color    [3]float64 // RGB color (0-1 each; all zero = default gray)
+	Color    [3]float64 // RGB color (0-1 each)
+	// HasColor is true only when a `color` declaration was present in the
+	// margin-box rule. It lets the renderer distinguish an explicit
+	// `color: black` from an unset color (which defaults to gray).
+	HasColor bool
+	// Embedded is the document's default body font, stamped during
+	// conversion so the renderer can draw the margin box with an embedded
+	// (PDF/A-safe) font instead of the non-embedded standard Helvetica.
+	// Nil when the document uses no embedded fonts. Font-family declared
+	// inside the margin box itself is not yet honoured (follow-up).
+	Embedded *font.EmbeddedFont
 }
 
 // PageMargins holds the margin values and margin-box content for a
@@ -354,8 +364,13 @@ type PageConfig struct {
 	MarginBoxes map[string]MarginBoxContent // e.g. "top-center" → content
 }
 
-// convertMarginBoxes converts html.MarginBoxContent to layout.MarginBox.
-func convertMarginBoxes(src map[string]MarginBoxContent) map[string]layout.MarginBox {
+// convertMarginBoxes converts html.MarginBoxContent to layout.MarginBox,
+// stamping the document's default body font (emb) onto each box so the
+// renderer draws running headers/footers with an embedded, PDF/A-safe font
+// instead of the non-embedded standard Helvetica (issue #328). emb may be
+// nil when the document has no embedded fonts; the renderer then falls back
+// to Helvetica, which is acceptable because such a document is not PDF/A.
+func convertMarginBoxes(src map[string]MarginBoxContent, emb *font.EmbeddedFont) map[string]layout.MarginBox {
 	if len(src) == 0 {
 		return nil
 	}
@@ -365,9 +380,62 @@ func convertMarginBoxes(src map[string]MarginBoxContent) map[string]layout.Margi
 			Content:  mbc.Content,
 			FontSize: mbc.FontSize,
 			Color:    mbc.Color,
+			HasColor: mbc.HasColor,
+			Embedded: emb,
 		}
 	}
 	return out
+}
+
+// stampMarginBoxFont writes emb onto the Embedded field of every
+// MarginBoxContent in src. It is used so the document.AddHTML path, which
+// reconstructs layout.MarginBox from PageConfig rather than from the
+// already-converted ConvertResult.MarginBoxes, embeds the same body font.
+func stampMarginBoxFont(src map[string]MarginBoxContent, emb *font.EmbeddedFont) {
+	for name, mbc := range src {
+		mbc.Embedded = emb
+		src[name] = mbc
+	}
+}
+
+// defaultMarginBoxFont returns the embedded font that body text resolves to,
+// for use as the default font of @page margin boxes. It computes the <body>
+// element's cascaded style (so an author's `body { font-family: 'X' }` with a
+// matching @font-face is honoured) and resolves that style to an embedded
+// font. Returns nil when the document uses no embedded fonts (pure
+// standard-font document), in which case the renderer keeps the Helvetica
+// fallback. Font-family declared inside the margin box itself is not parsed
+// yet (deferred follow-up); the body font is the default per CSS GCPM.
+func (c *converter) defaultMarginBoxFont(doc *html.Node, root computedStyle) *font.EmbeddedFont {
+	if len(c.embeddedFonts) == 0 {
+		return nil
+	}
+	style := root
+	if body := findBodyNode(doc); body != nil {
+		style = c.computeElementStyle(body, root)
+	}
+	_, emb := c.resolveFontPair(style)
+	return emb
+}
+
+// findBodyNode returns the first <body> element in the parsed tree, or nil.
+func findBodyNode(doc *html.Node) *html.Node {
+	var walk func(*html.Node) *html.Node
+	walk = func(n *html.Node) *html.Node {
+		if n == nil {
+			return nil
+		}
+		if n.Type == html.ElementNode && n.DataAtom == atom.Body {
+			return n
+		}
+		for ch := n.FirstChild; ch != nil; ch = ch.NextSibling {
+			if found := walk(ch); found != nil {
+				return found
+			}
+		}
+		return nil
+	}
+	return walk(doc)
 }
 
 // AbsoluteItem represents an element removed from normal flow via
@@ -447,11 +515,18 @@ func ConvertFullWithContext(ctx context.Context, htmlStr string, opts *Options) 
 	result.PageConfig = pageConfig
 
 	// Build ready-to-use margin box maps so callers can pass them
-	// directly to doc.SetMarginBoxes without type conversion.
+	// directly to doc.SetMarginBoxes without type conversion. The
+	// document's default body font is stamped onto each box (issue #328)
+	// and also onto the MarginBoxContent values in pageConfig so the
+	// document.AddHTML path (which rebuilds layout.MarginBox from
+	// pageConfig) embeds the same font.
 	if pageConfig != nil {
-		result.MarginBoxes = convertMarginBoxes(pageConfig.MarginBoxes)
+		marginFont := c.defaultMarginBoxFont(doc, style)
+		stampMarginBoxFont(pageConfig.MarginBoxes, marginFont)
+		result.MarginBoxes = convertMarginBoxes(pageConfig.MarginBoxes, marginFont)
 		if pageConfig.First != nil {
-			result.FirstMarginBoxes = convertMarginBoxes(pageConfig.First.MarginBoxes)
+			stampMarginBoxFont(pageConfig.First.MarginBoxes, marginFont)
+			result.FirstMarginBoxes = convertMarginBoxes(pageConfig.First.MarginBoxes, marginFont)
 		}
 	}
 

@@ -1503,10 +1503,16 @@ func (c *converter) convertElement(n *html.Node, parentStyle computedStyle) []la
 		} else if style.Right != nil {
 			dx = -style.Right.toPoints(c.containerWidth, style.FontSize)
 		}
+		// Per CSS, top/bottom percentages on a relatively positioned box
+		// resolve against the height of its containing block. We don't track
+		// the containing block height through normal flow here, so we
+		// approximate with the page height (the nearest available basis),
+		// mirroring how left/right use c.containerWidth. Absolute lengths
+		// (px/pt/em) are unaffected since they ignore the percentage basis.
 		if style.Top != nil {
-			dy = style.Top.toPoints(0, style.FontSize)
+			dy = style.Top.toPoints(c.opts.PageHeight, style.FontSize)
 		} else if style.Bottom != nil {
-			dy = -style.Bottom.toPoints(0, style.FontSize)
+			dy = -style.Bottom.toPoints(c.opts.PageHeight, style.FontSize)
 		}
 		if dx != 0 || dy != 0 {
 			var result []layout.Element

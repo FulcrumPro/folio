@@ -62,6 +62,7 @@ type absoluteElement struct {
 	pageIndex    int // -1 = last page
 	rightAligned bool
 	zIndex       int
+	fixed        bool // render on every page (position: fixed)
 }
 
 // Document is the top-level API for building a PDF.
@@ -284,6 +285,7 @@ func (d *Document) AddAbsoluteWithOpts(e layout.Element, x, y, width float64, op
 	d.absolutes = append(d.absolutes, absoluteElement{
 		elem: e, x: x, y: y, width: width,
 		pageIndex: opts.PageIndex, rightAligned: opts.RightAligned, zIndex: opts.ZIndex,
+		fixed: opts.Fixed,
 	})
 }
 
@@ -378,6 +380,7 @@ func (d *Document) buildAllPages(ctx context.Context) (all []*Page, structTags [
 				RightAligned: a.rightAligned,
 				ZIndex:       a.zIndex,
 				PageIndex:    a.pageIndex,
+				Fixed:        a.fixed,
 			})
 		}
 		results, rerr := r.RenderContext(ctx)

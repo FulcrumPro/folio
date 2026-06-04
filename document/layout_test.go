@@ -6,6 +6,7 @@ package document
 import (
 	"bytes"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -283,6 +284,73 @@ func TestDocumentHeaderFooterMultiPage(t *testing.T) {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing %q in PDF", expected)
 		}
+	}
+}
+
+func TestDocumentHTMLFixedMastheadEveryPage(t *testing.T) {
+	doc := NewDocument(PageSizeLetter)
+
+	// Body content spanning several pages plus a position:fixed masthead.
+	var body strings.Builder
+	body.WriteString(`<div style="position: fixed; top: 0; left: 0">MASTHEADMARK</div>`)
+	for range 150 {
+		body.WriteString("<p>Body line of text that fills the page nicely.</p>")
+	}
+	if err := doc.AddHTML(body.String(), nil); err != nil {
+		t.Fatalf("AddHTML: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if _, err := doc.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+
+	// Count leaf page objects in the PDF.
+	pageRe := regexp.MustCompile(`/Type\s*/Page[^s]`)
+	numPages := len(pageRe.FindAll(buf.Bytes(), -1))
+	if numPages < 3 {
+		t.Fatalf("expected the body to span at least 3 pages, got %d", numPages)
+	}
+
+	// The fixed masthead must be drawn once per page.
+	cs := decompressedContentStreams(t, buf.Bytes())
+	occurrences := strings.Count(cs, "MASTHEADMARK")
+	if occurrences != numPages {
+		t.Errorf("fixed masthead should appear on every page: got %d occurrences across %d pages", occurrences, numPages)
+	}
+}
+
+func TestDocumentAddAbsoluteWithOptsFixedEveryPage(t *testing.T) {
+	doc := NewDocument(PageSizeLetter)
+
+	// Flow content spanning several pages.
+	for range 150 {
+		doc.Add(layout.NewParagraph("Body line of text that fills the page nicely.", font.Helvetica, 12))
+	}
+
+	// A position:fixed absolute element added via the opts path (the WASM /
+	// C-ABI ingestion route). This must render on every page, not just the last.
+	doc.AddAbsoluteWithOpts(
+		layout.NewParagraph("FIXEDOPTSMARK", font.Helvetica, 12),
+		72, 720, 200,
+		layout.AbsoluteOpts{Fixed: true},
+	)
+
+	var buf bytes.Buffer
+	if _, err := doc.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+
+	pageRe := regexp.MustCompile(`/Type\s*/Page[^s]`)
+	numPages := len(pageRe.FindAll(buf.Bytes(), -1))
+	if numPages < 3 {
+		t.Fatalf("expected the body to span at least 3 pages, got %d", numPages)
+	}
+
+	cs := decompressedContentStreams(t, buf.Bytes())
+	occurrences := strings.Count(cs, "FIXEDOPTSMARK")
+	if occurrences != numPages {
+		t.Errorf("fixed absolute (via AddAbsoluteWithOpts) should appear on every page: got %d occurrences across %d pages", occurrences, numPages)
 	}
 }
 

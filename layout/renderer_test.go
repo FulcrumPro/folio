@@ -371,6 +371,54 @@ func TestRendererAddAbsoluteOnPage(t *testing.T) {
 	}
 }
 
+func TestRendererAddAbsoluteFixedEveryPage(t *testing.T) {
+	r := NewRenderer(612, 792, Margins{Top: 72, Right: 72, Bottom: 72, Left: 72})
+
+	// Fill enough flow content to span at least three pages.
+	for range 120 {
+		r.Add(NewParagraph("Body line of text that fills the page", font.Helvetica, 12))
+	}
+
+	// A fixed masthead must appear on every page.
+	r.AddAbsoluteWithOpts(NewParagraph("MASTHEAD", font.Helvetica, 14), 72, 740, 200, AbsoluteOpts{Fixed: true})
+
+	pages := r.Render()
+	if len(pages) < 3 {
+		t.Fatalf("expected at least 3 pages, got %d", len(pages))
+	}
+	for i := range pages {
+		s := string(pages[i].Stream.Bytes())
+		if !strings.Contains(s, "MASTHEAD") {
+			t.Errorf("fixed element missing from page %d (should render on every page)", i)
+		}
+	}
+}
+
+func TestRendererAddAbsoluteNonFixedLastPageOnly(t *testing.T) {
+	// A non-fixed absolute with pageIndex -1 must remain on the last page only.
+	r := NewRenderer(612, 792, Margins{Top: 72, Right: 72, Bottom: 72, Left: 72})
+	for range 120 {
+		r.Add(NewParagraph("Body line of text that fills the page", font.Helvetica, 12))
+	}
+	r.AddAbsolute(NewParagraph("ENDMARK", font.Helvetica, 14), 72, 740, 200)
+
+	pages := r.Render()
+	if len(pages) < 3 {
+		t.Fatalf("expected at least 3 pages, got %d", len(pages))
+	}
+	last := len(pages) - 1
+	for i := range pages {
+		s := string(pages[i].Stream.Bytes())
+		has := strings.Contains(s, "ENDMARK")
+		if i == last && !has {
+			t.Errorf("non-fixed absolute should appear on last page %d", i)
+		}
+		if i != last && has {
+			t.Errorf("non-fixed absolute leaked onto non-last page %d", i)
+		}
+	}
+}
+
 func TestRendererAddAbsoluteDefaultWidth(t *testing.T) {
 	r := NewRenderer(612, 792, Margins{Top: 72, Right: 72, Bottom: 72, Left: 72})
 	r.Add(NewParagraph("Flow", font.Helvetica, 12))

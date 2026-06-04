@@ -359,11 +359,11 @@ func buildDocumentFromResult(result *foliohtml.ConvertResult, opts *Options) *do
 
 	// Add absolutely positioned elements.
 	for _, abs := range result.Absolutes {
-		if abs.RightAligned {
-			doc.AddAbsoluteRight(abs.Element, abs.X, abs.Y, abs.Width)
-		} else {
-			doc.AddAbsolute(abs.Element, abs.X, abs.Y, abs.Width)
-		}
+		doc.AddAbsoluteWithOpts(abs.Element, abs.X, abs.Y, abs.Width, layout.AbsoluteOpts{
+			RightAligned: abs.RightAligned,
+			PageIndex:    -1,
+			Fixed:        abs.Fixed,
+		})
 	}
 
 	return doc

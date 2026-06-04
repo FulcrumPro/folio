@@ -338,14 +338,16 @@ func extractMarginBoxes(declStr string, boxes map[string][]cssDecl) string {
 		// Write everything before the @
 		clean.WriteString(remaining[:atIdx])
 
-		// Find the name (e.g. "top-center")
+		// Find the name (e.g. "top-center"). CSS at-rule (margin-box)
+		// names are case-insensitive, so normalize to lower case here;
+		// the renderer switches on lower-case literals.
 		rest := remaining[atIdx+1:]
 		openIdx := strings.IndexByte(rest, '{')
 		if openIdx < 0 {
 			clean.WriteString(remaining[atIdx:])
 			break
 		}
-		name := strings.TrimSpace(rest[:openIdx])
+		name := strings.ToLower(strings.TrimSpace(rest[:openIdx]))
 
 		// Find matching close brace
 		fullStr := remaining[atIdx:]

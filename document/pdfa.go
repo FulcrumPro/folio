@@ -249,7 +249,7 @@ func (d *Document) validatePdfA(allPages []*Page) error {
 		for _, fr := range page.fonts {
 			if fr.standard != nil && fr.embedded == nil {
 				return fmt.Errorf("document: pdfa: page %d uses non-embedded standard font %q; PDF/A requires all fonts to be embedded",
-					i, fr.standard.Name())
+					i+1, fr.standard.Name())
 			}
 		}
 	}
@@ -258,7 +258,7 @@ func (d *Document) validatePdfA(allPages []*Page) error {
 	if isPdfA1(d.pdfA.Level) {
 		for i, page := range allPages {
 			if len(page.extGStates) > 0 {
-				return fmt.Errorf("document: pdfa: page %d uses transparency (ExtGState); PDF/A-1 forbids transparency", i)
+				return fmt.Errorf("document: pdfa: page %d uses transparency (ExtGState); PDF/A-1 forbids transparency", i+1)
 			}
 		}
 	}

@@ -126,6 +126,31 @@ func TestPdfAValidationStandardFont(t *testing.T) {
 	}
 }
 
+// N3: PDF/A validation errors must report 1-based page numbers. The
+// first page is "page 1", never "page 0".
+func TestPdfAErrorPageNumberIsOneBased(t *testing.T) {
+	doc := NewDocument(PageSizeLetter)
+	doc.Info.Title = "Font Test"
+	doc.SetPdfA(PdfAConfig{Level: PdfA2B})
+
+	// First page (index 0) with a non-embedded standard font triggers the
+	// font-embedding error.
+	p := doc.AddPage()
+	p.AddText("Hello", font.Helvetica, 12, 72, 700)
+
+	var buf bytes.Buffer
+	_, err := doc.WriteTo(&buf)
+	if err == nil {
+		t.Fatal("expected validation error for non-embedded font")
+	}
+	if !strings.Contains(err.Error(), "page 1") {
+		t.Errorf("error should report 1-based page (page 1), got: %v", err)
+	}
+	if strings.Contains(err.Error(), "page 0") {
+		t.Errorf("error must not report 0-based page (page 0), got: %v", err)
+	}
+}
+
 func TestPdfADisablesEncryption(t *testing.T) {
 	doc := NewDocument(PageSizeLetter)
 	doc.Info.Title = "No Encryption"

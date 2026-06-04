@@ -625,6 +625,72 @@ func TestRenderDocumentNilMarginsUsesDefaults(t *testing.T) {
 	}
 }
 
+// TestBuildDocumentRoutesThroughResolve proves the tmpl Document-building
+// path resolves @page margin percentages (and the orientation-only swap)
+// via the shared PageConfig.Resolve helper rather than reading the
+// zero-basis eager floats (B-1). Before Resolve runs, a percent margin's
+// eager float is 0; after buildDocumentFromResult it must equal the
+// percentage of the page box.
+func TestBuildDocumentRoutesThroughResolve(t *testing.T) {
+	tpl := `<html><head><style>@page { size: a4; margin: 10%; }</style></head>` +
+		`<body><p>x</p></body></html>`
+	result, err := foliohtml.ConvertFull(tpl, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PageConfig == nil {
+		t.Fatal("expected PageConfig")
+	}
+	// Eager float carries the zero-basis percent value before resolution.
+	if result.PageConfig.MarginTop != 0 {
+		t.Fatalf("pre-build MarginTop = %.2f, want 0 (unresolved percent)", result.PageConfig.MarginTop)
+	}
+
+	doc := buildDocumentFromResult(result, &Options{PageSize: document.PageSizeLetter})
+	if doc == nil {
+		t.Fatal("expected non-nil document")
+	}
+
+	abs := func(f float64) float64 {
+		if f < 0 {
+			return -f
+		}
+		return f
+	}
+	// A4 height 841.89 → 10% ≈ 84.189; A4 width 595.28 → 10% ≈ 59.528.
+	if abs(result.PageConfig.MarginTop-84.189) > 0.2 {
+		t.Errorf("MarginTop = %.3f, want ~84.189 (10%% of A4 height) — tmpl did not route through Resolve",
+			result.PageConfig.MarginTop)
+	}
+	if abs(result.PageConfig.MarginLeft-59.528) > 0.2 {
+		t.Errorf("MarginLeft = %.3f, want ~59.528 (10%% of A4 width)", result.PageConfig.MarginLeft)
+	}
+}
+
+// TestBuildDocumentOrientationOnly proves the tmpl path honors a bare
+// size:landscape keyword (B-1/S-1) by routing through Resolve, which swaps
+// the resolved dimensions.
+func TestBuildDocumentOrientationOnly(t *testing.T) {
+	tpl := `<html><head><style>@page { size: landscape; }</style></head>` +
+		`<body><p>x</p></body></html>`
+	result, err := foliohtml.ConvertFull(tpl, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PageConfig == nil || !result.PageConfig.OrientationOnly {
+		t.Fatal("expected OrientationOnly PageConfig")
+	}
+	// Resolve against an A4-portrait default; expect landscape (w > h).
+	w, h, _ := result.PageConfig.Resolve(document.PageSizeA4.Width, document.PageSizeA4.Height)
+	if w <= h {
+		t.Errorf("size = %.2f x %.2f, want landscape (width > height)", w, h)
+	}
+	// And the tmpl builder must produce a document without error.
+	if doc := buildDocumentFromResult(result, &Options{PageSize: document.PageSizeA4}); doc == nil {
+		t.Fatal("expected non-nil document")
+	}
+}
+
 func TestRenderDocumentPartialMargins(t *testing.T) {
 	// A Margins with only Top set should be used as-is (other fields
 	// stay zero), not trigger the default.

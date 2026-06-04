@@ -275,3 +275,104 @@ func TestAddHTMLTemplateWithCSS(t *testing.T) {
 		t.Fatal("produced empty PDF")
 	}
 }
+
+func nearly(a, b float64) bool {
+	d := a - b
+	if d < 0 {
+		d = -d
+	}
+	return d < 0.5
+}
+
+// B2: @page margin percentages must resolve against the page box —
+// left/right against page width, top/bottom against page height.
+func TestAddHTMLPageMarginPercent(t *testing.T) {
+	doc := NewDocument(PageSizeLetter)
+	err := doc.AddHTML(`<html><head><style>
+		@page { size: A4; margin: 10%; }
+	</style></head><body><p>X</p></body></html>`, nil)
+	if err != nil {
+		t.Fatalf("AddHTML: %v", err)
+	}
+	// A4 = 595.28 x 841.89; 10% of each dimension.
+	wantLR := 0.10 * 595.28
+	wantTB := 0.10 * 841.89
+	if !nearly(doc.margins.Left, wantLR) || !nearly(doc.margins.Right, wantLR) {
+		t.Errorf("L/R margins = %.2f/%.2f, want ~%.2f (10%% of width)",
+			doc.margins.Left, doc.margins.Right, wantLR)
+	}
+	if !nearly(doc.margins.Top, wantTB) || !nearly(doc.margins.Bottom, wantTB) {
+		t.Errorf("T/B margins = %.2f/%.2f, want ~%.2f (10%% of height)",
+			doc.margins.Top, doc.margins.Bottom, wantTB)
+	}
+}
+
+// B2: percentage longhands resolve against the matching page dimension.
+func TestAddHTMLPageMarginPercentLonghand(t *testing.T) {
+	doc := NewDocument(PageSizeLetter)
+	err := doc.AddHTML(`<html><head><style>
+		@page { size: A4; margin-top: 5%; margin-left: 20%; }
+	</style></head><body><p>X</p></body></html>`, nil)
+	if err != nil {
+		t.Fatalf("AddHTML: %v", err)
+	}
+	if want := 0.05 * 841.89; !nearly(doc.margins.Top, want) {
+		t.Errorf("margin-top = %.2f, want ~%.2f (5%% of height)", doc.margins.Top, want)
+	}
+	if want := 0.20 * 595.28; !nearly(doc.margins.Left, want) {
+		t.Errorf("margin-left = %.2f, want ~%.2f (20%% of width)", doc.margins.Left, want)
+	}
+}
+
+// N1: @page margin longhands must be calc-aware. Before the fix
+// margin-top: calc(1in + 2px) resolved to 0 (non-calc parser).
+func TestAddHTMLPageMarginCalcLonghand(t *testing.T) {
+	doc := NewDocument(PageSizeLetter)
+	err := doc.AddHTML(`<html><head><style>
+		@page { size: A4; margin-top: calc(1in + 2px); }
+	</style></head><body><p>X</p></body></html>`, nil)
+	if err != nil {
+		t.Fatalf("AddHTML: %v", err)
+	}
+	// 1in = 72pt, 2px = 1.5pt → 73.5pt.
+	if want := 72.0 + 1.5; !nearly(doc.margins.Top, want) {
+		t.Errorf("margin-top = %.2f, want ~%.2f (calc 1in + 2px)", doc.margins.Top, want)
+	}
+}
+
+// S3: @page { size: landscape } with no explicit size must rotate the
+// document default page size (Letter 612x792 → 792x612).
+func TestAddHTMLPageOrientationOnlyLandscape(t *testing.T) {
+	doc := NewDocument(PageSizeLetter)
+	err := doc.AddHTML(`<html><head><style>
+		@page { size: landscape; }
+	</style></head><body><p>X</p></body></html>`, nil)
+	if err != nil {
+		t.Fatalf("AddHTML: %v", err)
+	}
+	if !nearly(doc.pageSize.Width, 792) || !nearly(doc.pageSize.Height, 612) {
+		t.Errorf("page size = %.0fx%.0f, want 792x612 (landscape Letter)",
+			doc.pageSize.Width, doc.pageSize.Height)
+	}
+}
+
+// S3: portrait keyword on an already-portrait default is a no-op, and a
+// named-size + orientation keyword (size: a4 landscape) keeps working.
+func TestAddHTMLPageOrientationOnlyPortraitNoop(t *testing.T) {
+	doc := NewDocument(PageSizeLetter)
+	if err := doc.AddHTML(`<html><head><style>@page { size: portrait; }</style></head><body><p>X</p></body></html>`, nil); err != nil {
+		t.Fatalf("AddHTML: %v", err)
+	}
+	if !nearly(doc.pageSize.Width, 612) || !nearly(doc.pageSize.Height, 792) {
+		t.Errorf("portrait page size = %.0fx%.0f, want 612x792", doc.pageSize.Width, doc.pageSize.Height)
+	}
+
+	doc2 := NewDocument(PageSizeLetter)
+	if err := doc2.AddHTML(`<html><head><style>@page { size: a4 landscape; }</style></head><body><p>X</p></body></html>`, nil); err != nil {
+		t.Fatalf("AddHTML: %v", err)
+	}
+	// A4 landscape: 841.89 x 595.28 (width > height).
+	if doc2.pageSize.Width <= doc2.pageSize.Height {
+		t.Errorf("a4 landscape = %.0fx%.0f, want width > height", doc2.pageSize.Width, doc2.pageSize.Height)
+	}
+}

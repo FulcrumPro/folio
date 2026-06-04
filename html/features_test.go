@@ -1149,6 +1149,67 @@ func TestCounterPagesPlaceholder(t *testing.T) {
 	}
 }
 
+// N2: margin-box at-rule names are case-insensitive; @TOP-CENTER and
+// @Bottom-Center must be stored under their lower-case keys so the
+// renderer (which switches on lower-case literals) finds them.
+func TestMarginBoxNameCaseInsensitive(t *testing.T) {
+	html := `<html><head><style>
+		@page {
+			margin: 2cm;
+			@TOP-CENTER { content: "Header"; }
+			@Bottom-Center { content: "Footer"; }
+		}
+	</style></head><body><p>X</p></body></html>`
+	result, err := ConvertFull(html, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc := result.PageConfig
+	if pc == nil {
+		t.Fatal("expected PageConfig")
+	}
+	if mb, ok := pc.MarginBoxes["top-center"]; !ok || mb.Content != "Header" {
+		t.Errorf("top-center = %+v ok=%v, want content %q", mb, ok, "Header")
+	}
+	if mb, ok := pc.MarginBoxes["bottom-center"]; !ok || mb.Content != "Footer" {
+		t.Errorf("bottom-center = %+v ok=%v, want content %q", mb, ok, "Footer")
+	}
+}
+
+// B1: counter(page, <style>) must thread the list-style through to the
+// placeholder and never leak the literal "{counter(page, upper-roman)}"
+// call text into the rendered content.
+func TestCounterStyleArgumentNoLeak(t *testing.T) {
+	html := `<html><head><style>
+		@page {
+			margin: 2cm;
+			@bottom-center { content: counter(page, upper-roman); }
+			@top-center { content: "p. " counter(page, lower-alpha) " of " counter(pages, decimal); }
+		}
+	</style></head><body><p>X</p></body></html>`
+	result, err := ConvertFull(html, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bottom := result.PageConfig.MarginBoxes["bottom-center"].Content
+	if want := layout.CounterPlaceholder("page", "upper-roman"); bottom != want {
+		t.Errorf("bottom-center = %q, want %q", bottom, want)
+	}
+	// The stored value must be the opaque placeholder, not the raw CSS
+	// call text (which carried a space after the comma). A raw-call leak
+	// would still contain the original "counter(page, upper-roman)" with
+	// its space; the normalized placeholder has no space.
+	if strings.Contains(bottom, "counter(page, ") {
+		t.Errorf("raw counter() call text leaked into content: %q", bottom)
+	}
+	top := result.PageConfig.MarginBoxes["top-center"].Content
+	wantTop := "p. " + layout.CounterPlaceholder("page", "lower-alpha") +
+		" of " + layout.CounterPlaceholder("pages", "decimal")
+	if top != wantTop {
+		t.Errorf("top-center = %q, want %q", top, wantTop)
+	}
+}
+
 // --- Margin box font-size and color from CSS ---
 
 func TestMarginBoxFontSize(t *testing.T) {
@@ -2652,5 +2713,100 @@ func TestBorderRadiusLengthHasNoPercent(t *testing.T) {
 	// must therefore not be found.
 	if d := findDivWithRadius(elems); d != nil {
 		t.Errorf("length border-radius should not carry a percentage fraction, got %v", d.BorderRadiusPercent())
+	}
+}
+
+// --- PageConfig.Resolve shared helper (B-1 / S-1) ---
+
+// helperPageConfig parses the given @page CSS and returns the PageConfig,
+// failing the test if none is produced.
+func helperPageConfig(t *testing.T, css string) *PageConfig {
+	t.Helper()
+	html := `<html><head><style>` + css + `</style></head><body><p>X</p></body></html>`
+	result, err := ConvertFull(html, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PageConfig == nil {
+		t.Fatal("expected PageConfig")
+	}
+	return result.PageConfig
+}
+
+func TestResolvePercentMarginsAgainstPageBox(t *testing.T) {
+	// margin: 10% must resolve against the resolved page box (A4), NOT the
+	// zero basis the eager floats carry. Left/right vs width, top/bottom vs
+	// height (CSS Paged Media).
+	pc := helperPageConfig(t, `@page { size: a4; margin: 10%; }`)
+	// Eager floats are 0 before Resolve (percent has no absolute value).
+	if pc.MarginTop != 0 {
+		t.Fatalf("pre-Resolve MarginTop = %.2f, want 0 (zero basis)", pc.MarginTop)
+	}
+	w, h, auto := pc.Resolve(595.28, 841.89) // A4 default; @page also A4
+	if auto {
+		t.Error("autoHeight should be false")
+	}
+	if math.Abs(w-595.28) > 0.5 || math.Abs(h-841.89) > 0.5 {
+		t.Errorf("size = %.2f x %.2f, want A4 595.28 x 841.89", w, h)
+	}
+	if math.Abs(pc.MarginLeft-59.528) > 0.1 || math.Abs(pc.MarginRight-59.528) > 0.1 {
+		t.Errorf("L/R margin = %.3f / %.3f, want ~59.528 (10%% of width)", pc.MarginLeft, pc.MarginRight)
+	}
+	if math.Abs(pc.MarginTop-84.189) > 0.1 || math.Abs(pc.MarginBottom-84.189) > 0.1 {
+		t.Errorf("T/B margin = %.3f / %.3f, want ~84.189 (10%% of height)", pc.MarginTop, pc.MarginBottom)
+	}
+}
+
+func TestResolveCalcLonghandMargin(t *testing.T) {
+	// margin-top: calc(1in + 2px) must resolve to 72 + 2 = 74pt.
+	pc := helperPageConfig(t, `@page { margin-top: calc(1in + 2px); }`)
+	pc.Resolve(595.28, 841.89)
+	if math.Abs(pc.MarginTop-74) > 0.5 {
+		t.Errorf("MarginTop = %.2f, want ~74 (1in + 2px)", pc.MarginTop)
+	}
+}
+
+func TestResolveFirstPagefPercentMargin(t *testing.T) {
+	// Percentages in :first margins must also resolve against the page box.
+	pc := helperPageConfig(t, `@page { margin: 1cm; } @page :first { margin-top: 20%; }`)
+	if pc.First == nil {
+		t.Fatal("expected First margins")
+	}
+	pc.Resolve(595.28, 841.89)
+	if math.Abs(pc.First.Top-168.378) > 0.2 {
+		t.Errorf("First.Top = %.3f, want ~168.378 (20%% of A4 height)", pc.First.Top)
+	}
+}
+
+func TestResolveOrientationOnlyRotatesDefault(t *testing.T) {
+	// @page { size: landscape } with no explicit dims rotates the document
+	// default (A4 portrait) to landscape.
+	pc := helperPageConfig(t, `@page { size: landscape; }`)
+	if !pc.OrientationOnly {
+		t.Fatal("expected OrientationOnly")
+	}
+	w, h, _ := pc.Resolve(595.28, 841.89)
+	if w <= h {
+		t.Errorf("landscape size = %.2f x %.2f, want width > height", w, h)
+	}
+	if math.Abs(w-841.89) > 0.5 || math.Abs(h-595.28) > 0.5 {
+		t.Errorf("size = %.2f x %.2f, want A4 rotated 841.89 x 595.28", w, h)
+	}
+}
+
+func TestResolveOrientationOnlyOverridesExplicitDims(t *testing.T) {
+	// S-1: a later size:landscape must rotate an earlier explicit named
+	// size rather than being ignored. @page{size:A4} (portrait) followed by
+	// @page{size:landscape} must yield A4 landscape.
+	pc := helperPageConfig(t, `@page { size: a4; } @page { size: landscape; }`)
+	if !pc.OrientationOnly {
+		t.Fatal("expected OrientationOnly to be set by the later rule")
+	}
+	w, h, _ := pc.Resolve(595.28, 841.89)
+	if w <= h {
+		t.Errorf("S-1: size = %.2f x %.2f, want landscape (width > height)", w, h)
+	}
+	if math.Abs(w-841.89) > 0.5 || math.Abs(h-595.28) > 0.5 {
+		t.Errorf("S-1: size = %.2f x %.2f, want A4 rotated 841.89 x 595.28", w, h)
 	}
 }

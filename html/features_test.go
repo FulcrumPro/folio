@@ -1570,6 +1570,151 @@ func TestInlineBlockDivInParagraph(t *testing.T) {
 	}
 }
 
+func TestInlineBlockShrinkToFitFlowsInline(t *testing.T) {
+	// Issue #330: two display:inline-block spans (no explicit width) should
+	// shrink to fit their content and flow on the same line, rather than each
+	// becoming a full-width block on its own line.
+	src := `<p><span style="display:inline-block; background:#eee;">One</span> <span style="display:inline-block; background:#eee;">Two</span></p>`
+	elems, err := Convert(src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(elems) == 0 {
+		t.Fatal("expected elements")
+	}
+	p, ok := elems[0].(*layout.Paragraph)
+	if !ok {
+		t.Fatalf("expected *layout.Paragraph, got %T", elems[0])
+	}
+
+	const areaWidth = 400.0
+	lines := p.Layout(areaWidth)
+
+	// Collect the inline-block words across all lines.
+	var inlineWords []layout.Word
+	for _, line := range lines {
+		for _, w := range line.Words {
+			if w.InlineBlock != nil {
+				inlineWords = append(inlineWords, w)
+			}
+		}
+	}
+	if len(inlineWords) != 2 {
+		t.Fatalf("expected 2 inline-block words, got %d", len(inlineWords))
+	}
+
+	// Both inline-blocks should land on a single line (shrink-to-fit), so the
+	// paragraph should not have split them onto separate lines.
+	if len(lines) != 1 {
+		t.Errorf("expected inline-blocks to flow on a single line, got %d lines", len(lines))
+	}
+
+	// Each inline-block must be far narrower than the full area width: a
+	// full-width regression would make each one ~areaWidth.
+	for i, w := range inlineWords {
+		if w.InlineWidth >= areaWidth {
+			t.Errorf("inline-block %d width = %.1f, should shrink below area width %.0f", i, w.InlineWidth, areaWidth)
+		}
+		if w.InlineWidth <= 0 {
+			t.Errorf("inline-block %d width = %.1f, should be positive", i, w.InlineWidth)
+		}
+	}
+}
+
+func TestInlineBlockNoWrapperFlowsInline(t *testing.T) {
+	// Issue #330: a display:inline-block span with NO background/padding/border
+	// converts to a Paragraph (not a Div) and is inlined as an InlineElement.
+	// It must still flow inline on one line and hug its content (the inline
+	// element width is well below the full area width).
+	src := `<p>Before <span style="display:inline-block">chip</span> after</p>`
+	elems, err := Convert(src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(elems) == 0 {
+		t.Fatal("expected elements")
+	}
+	p, ok := elems[0].(*layout.Paragraph)
+	if !ok {
+		t.Fatalf("expected *layout.Paragraph, got %T", elems[0])
+	}
+
+	const areaWidth = 400.0
+	lines := p.Layout(areaWidth)
+	if len(lines) != 1 {
+		t.Errorf("expected content to flow on a single line, got %d lines", len(lines))
+	}
+
+	var inlineWords []layout.Word
+	for _, line := range lines {
+		for _, w := range line.Words {
+			if w.InlineBlock != nil {
+				inlineWords = append(inlineWords, w)
+			}
+		}
+	}
+	if len(inlineWords) != 1 {
+		t.Fatalf("expected 1 inline-block word, got %d", len(inlineWords))
+	}
+	w := inlineWords[0]
+	if w.InlineWidth <= 0 {
+		t.Errorf("inline-block width = %.1f, should be positive", w.InlineWidth)
+	}
+	// "chip" is short; it must hug its content well below the 400pt area.
+	if w.InlineWidth >= areaWidth/2 {
+		t.Errorf("inline-block width = %.1f, should hug content (< %.0f)", w.InlineWidth, areaWidth/2)
+	}
+}
+
+func TestInlineBlockChipsWrapAcrossLines(t *testing.T) {
+	// Issue #330: several inline-block chips (with background, so each is a
+	// shrink-to-fit Div) whose combined width exceeds the area must wrap onto
+	// multiple lines, and each chip's width must stay below the area width.
+	src := `<p>` +
+		`<span style="display:inline-block; background:#eee;">Chip One</span> ` +
+		`<span style="display:inline-block; background:#eee;">Chip Two</span> ` +
+		`<span style="display:inline-block; background:#eee;">Chip Three</span> ` +
+		`<span style="display:inline-block; background:#eee;">Chip Four</span>` +
+		`</p>`
+	elems, err := Convert(src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(elems) == 0 {
+		t.Fatal("expected elements")
+	}
+	p, ok := elems[0].(*layout.Paragraph)
+	if !ok {
+		t.Fatalf("expected *layout.Paragraph, got %T", elems[0])
+	}
+
+	// Narrow area forces wrapping across multiple lines.
+	const areaWidth = 120.0
+	lines := p.Layout(areaWidth)
+	if len(lines) < 2 {
+		t.Errorf("expected chips to wrap onto multiple lines at width %.0f, got %d", areaWidth, len(lines))
+	}
+
+	chipCount := 0
+	for _, line := range lines {
+		for _, w := range line.Words {
+			if w.InlineBlock == nil {
+				continue
+			}
+			chipCount++
+			if w.InlineWidth >= areaWidth {
+				t.Errorf("chip width = %.1f, should be < area width %.0f", w.InlineWidth, areaWidth)
+			}
+			if w.InlineWidth <= 0 {
+				t.Errorf("chip width = %.1f, should be positive", w.InlineWidth)
+			}
+		}
+	}
+	if chipCount != 4 {
+		t.Errorf("expected 4 inline-block chips, got %d", chipCount)
+	}
+}
+
 func TestInlineBlockStandalone(t *testing.T) {
 	// A standalone display:inline-block (not inside a paragraph)
 	// should still render as a block element at the top level.

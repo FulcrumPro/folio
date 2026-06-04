@@ -298,6 +298,139 @@ func TestDivMaxWidthAndMaxHeight(t *testing.T) {
 	}
 }
 
+// --- Shrink-to-fit (CSS fit-content) tests for issue #330 ---
+
+func divBlockWidth(plan LayoutPlan) float64 {
+	if len(plan.Blocks) == 0 {
+		return 0
+	}
+	return plan.Blocks[0].Width
+}
+
+func TestDivShrinkToFitSizesToContent(t *testing.T) {
+	d := NewDiv().
+		SetShrinkToFit(true).
+		Add(NewParagraph("Hi", font.Helvetica, 12))
+
+	contentMax := d.MaxWidth()
+	plan := d.PlanLayout(LayoutArea{Width: 400, Height: 1000})
+	got := divBlockWidth(plan)
+
+	// Width should hug the content, not fill the 400pt area.
+	if got >= 400 {
+		t.Errorf("shrinkToFit width should be < area width 400, got %f", got)
+	}
+	if got != contentMax {
+		t.Errorf("shrinkToFit width = %f, want content max-width %f", got, contentMax)
+	}
+}
+
+func TestDivShrinkToFitClampedToArea(t *testing.T) {
+	// Content wider than the available area must clamp to area.Width.
+	d := NewDiv().
+		SetShrinkToFit(true).
+		Add(NewParagraph("This is a very long single word: supercalifragilisticexpialidocious", font.Helvetica, 12))
+
+	area := 100.0
+	plan := d.PlanLayout(LayoutArea{Width: area, Height: 1000})
+	got := divBlockWidth(plan)
+	if got > area {
+		t.Errorf("shrinkToFit width should clamp to area %f, got %f", area, got)
+	}
+}
+
+func TestDivNonShrinkToFitFillsArea(t *testing.T) {
+	// Regression guard: without shrinkToFit, the Div fills the area width.
+	d := NewDiv().
+		Add(NewParagraph("Hi", font.Helvetica, 12))
+
+	plan := d.PlanLayout(LayoutArea{Width: 400, Height: 1000})
+	got := divBlockWidth(plan)
+	if got != 400 {
+		t.Errorf("non-shrinkToFit width should fill area = 400, got %f", got)
+	}
+}
+
+func TestDivShrinkToFitExplicitWidthWins(t *testing.T) {
+	// An explicit width overrides shrink-to-fit.
+	d := NewDiv().
+		SetShrinkToFit(true).
+		SetWidthUnit(Pt(250)).
+		Add(NewParagraph("Hi", font.Helvetica, 12))
+
+	plan := d.PlanLayout(LayoutArea{Width: 400, Height: 1000})
+	got := divBlockWidth(plan)
+	if got != 250 {
+		t.Errorf("explicit width 250 should win over shrinkToFit, got %f", got)
+	}
+}
+
+func TestDivShrinkToFitMinWidthClamps(t *testing.T) {
+	// min-width forces a larger width than the content's fit-content size.
+	d := NewDiv().
+		SetShrinkToFit(true).
+		SetMinWidthUnit(Pt(200)).
+		Add(NewParagraph("Hi", font.Helvetica, 12))
+
+	plan := d.PlanLayout(LayoutArea{Width: 400, Height: 1000})
+	got := divBlockWidth(plan)
+	if got != 200 {
+		t.Errorf("min-width 200 should clamp shrinkToFit width, got %f", got)
+	}
+}
+
+func TestDivShrinkToFitMaxWidthClamps(t *testing.T) {
+	// max-width caps fit-content below the content's natural max-content width.
+	d := NewDiv().
+		SetShrinkToFit(true).
+		SetMaxWidthUnit(Pt(20)).
+		Add(NewParagraph("Hello world content", font.Helvetica, 12))
+
+	plan := d.PlanLayout(LayoutArea{Width: 400, Height: 1000})
+	got := divBlockWidth(plan)
+	if got != 20 {
+		t.Errorf("max-width 20 should clamp shrinkToFit width, got %f", got)
+	}
+}
+
+func TestDivShrinkToFitPercentChildDoesNotCollapse(t *testing.T) {
+	// Issue #330, Change 1: a shrink-to-fit Div whose only child is a
+	// percentage-width box with no intrinsic content is non-intrinsic —
+	// MaxWidth() returns only the box's own padding (here 0). Without the
+	// fallback guard the box would collapse to ~0 width (invisible). It must
+	// instead fall back to area.Width.
+	child := NewDiv().SetWidthUnit(Pct(50))
+	d := NewDiv().SetShrinkToFit(true).Add(child)
+
+	// Sanity: MaxWidth must be ~0 (only padding), confirming the collapse
+	// condition the guard protects against.
+	if mw := d.MaxWidth(); mw > 0.5 {
+		t.Fatalf("test precondition: expected ~0 MaxWidth for percentage child, got %f", mw)
+	}
+
+	const area = 400.0
+	plan := d.PlanLayout(LayoutArea{Width: area, Height: 1000})
+	got := divBlockWidth(plan)
+	if got < area-0.5 {
+		t.Errorf("percentage-child shrinkToFit width = %f, want fallback to area %f (must not collapse)", got, area)
+	}
+}
+
+func TestDivShrinkToFitPercentChildWithPaddingDoesNotCollapse(t *testing.T) {
+	// Same as above but the shrink-to-fit box has its own padding. The
+	// fit-content width equals only that padding (no intrinsic content), so
+	// the guard (fitContent <= padding.Left+padding.Right) must trigger.
+	child := NewDiv().SetWidthUnit(Pct(50))
+	d := NewDiv().SetShrinkToFit(true).SetPadding(10).Add(child)
+
+	const area = 400.0
+	plan := d.PlanLayout(LayoutArea{Width: area, Height: 1000})
+	got := divBlockWidth(plan)
+	if got < area-0.5 {
+		t.Errorf("percentage-child (with padding) shrinkToFit width = %f, want fallback to area %f", got, area)
+	}
+}
+
 func TestDivBackgroundOnlyNoBorders(t *testing.T) {
 	d := NewDiv().
 		SetBackground(RGB(0.95, 0.95, 1)).

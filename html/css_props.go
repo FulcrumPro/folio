@@ -545,28 +545,28 @@ var cssProperties = []cssProperty{
 		Name: "border-top-left-radius", Category: "Borders",
 		Values: []string{"<length>", "<percentage>"},
 		Apply: func(s *computedStyle, value string) {
-			s.BorderRadiusTL = parseLengthPt(value, s.FontSize)
+			s.BorderRadiusTL, s.BorderRadiusTLPct = parseRadiusComponent(value, s.FontSize)
 		},
 	},
 	{
 		Name: "border-top-right-radius", Category: "Borders",
 		Values: []string{"<length>", "<percentage>"},
 		Apply: func(s *computedStyle, value string) {
-			s.BorderRadiusTR = parseLengthPt(value, s.FontSize)
+			s.BorderRadiusTR, s.BorderRadiusTRPct = parseRadiusComponent(value, s.FontSize)
 		},
 	},
 	{
 		Name: "border-bottom-right-radius", Category: "Borders",
 		Values: []string{"<length>", "<percentage>"},
 		Apply: func(s *computedStyle, value string) {
-			s.BorderRadiusBR = parseLengthPt(value, s.FontSize)
+			s.BorderRadiusBR, s.BorderRadiusBRPct = parseRadiusComponent(value, s.FontSize)
 		},
 	},
 	{
 		Name: "border-bottom-left-radius", Category: "Borders",
 		Values: []string{"<length>", "<percentage>"},
 		Apply: func(s *computedStyle, value string) {
-			s.BorderRadiusBL = parseLengthPt(value, s.FontSize)
+			s.BorderRadiusBL, s.BorderRadiusBLPct = parseRadiusComponent(value, s.FontSize)
 		},
 	},
 
@@ -1265,41 +1265,52 @@ var cssProperties = []cssProperty{
 		Values: []string{"<length>", "<percentage>", "<1-4 of these>"},
 		Notes:  "splitTopLevelFields preserves calc()/min()/max()/clamp() as single tokens.",
 		Apply: func(s *computedStyle, value string) {
+			// The `border-radius: <h> / <v>` slash syntax (independent
+			// horizontal/vertical radii) is deferred follow-up work; only the
+			// leading (horizontal) set is consumed here, and a single value per
+			// corner drives both axes. parseRadiusComponent preserves
+			// percentages so they resolve against the box at layout time.
+			if slash := indexByteAtTopLevel(value, '/'); slash >= 0 {
+				value = strings.TrimSpace(value[:slash])
+			}
 			parts := splitTopLevelFields(value)
+			var (
+				tlA, tlP float64
+				trA, trP float64
+				brA, brP float64
+				blA, blP float64
+			)
 			switch len(parts) {
 			case 1:
-				if l := parseLength(parts[0]); l != nil {
-					v := l.toPoints(0, s.FontSize)
-					s.BorderRadius = v
-					s.BorderRadiusTL = v
-					s.BorderRadiusTR = v
-					s.BorderRadiusBR = v
-					s.BorderRadiusBL = v
-				}
+				tlA, tlP = parseRadiusComponent(parts[0], s.FontSize)
+				trA, trP = tlA, tlP
+				brA, brP = tlA, tlP
+				blA, blP = tlA, tlP
 			case 2:
-				tl := parseLengthPt(parts[0], s.FontSize)
-				br := parseLengthPt(parts[1], s.FontSize)
-				s.BorderRadiusTL = tl
-				s.BorderRadiusBR = tl
-				s.BorderRadiusTR = br
-				s.BorderRadiusBL = br
-				s.BorderRadius = tl
+				// parts[0] -> TL & BR (diagonal), parts[1] -> TR & BL.
+				tlA, tlP = parseRadiusComponent(parts[0], s.FontSize)
+				trA, trP = parseRadiusComponent(parts[1], s.FontSize)
+				brA, brP = tlA, tlP
+				blA, blP = trA, trP
 			case 3:
-				tl := parseLengthPt(parts[0], s.FontSize)
-				tr := parseLengthPt(parts[1], s.FontSize)
-				bl := parseLengthPt(parts[2], s.FontSize)
-				s.BorderRadiusTL = tl
-				s.BorderRadiusTR = tr
-				s.BorderRadiusBR = bl
-				s.BorderRadiusBL = tr
-				s.BorderRadius = tl
+				// parts[0] -> TL, parts[1] -> TR & BL, parts[2] -> BR.
+				tlA, tlP = parseRadiusComponent(parts[0], s.FontSize)
+				trA, trP = parseRadiusComponent(parts[1], s.FontSize)
+				brA, brP = parseRadiusComponent(parts[2], s.FontSize)
+				blA, blP = trA, trP
 			case 4:
-				s.BorderRadiusTL = parseLengthPt(parts[0], s.FontSize)
-				s.BorderRadiusTR = parseLengthPt(parts[1], s.FontSize)
-				s.BorderRadiusBR = parseLengthPt(parts[2], s.FontSize)
-				s.BorderRadiusBL = parseLengthPt(parts[3], s.FontSize)
-				s.BorderRadius = s.BorderRadiusTL
+				tlA, tlP = parseRadiusComponent(parts[0], s.FontSize)
+				trA, trP = parseRadiusComponent(parts[1], s.FontSize)
+				brA, brP = parseRadiusComponent(parts[2], s.FontSize)
+				blA, blP = parseRadiusComponent(parts[3], s.FontSize)
+			default:
+				return
 			}
+			s.BorderRadiusTL, s.BorderRadiusTLPct = tlA, tlP
+			s.BorderRadiusTR, s.BorderRadiusTRPct = trA, trP
+			s.BorderRadiusBR, s.BorderRadiusBRPct = brA, brP
+			s.BorderRadiusBL, s.BorderRadiusBLPct = blA, blP
+			s.BorderRadius = tlA
 		},
 	},
 	{

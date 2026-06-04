@@ -79,16 +79,21 @@ type Div struct {
 	hCenter       bool       // true = horizontally center within parent (margin: auto)
 	hRight        bool       // true = right-align within parent (margin-left: auto)
 	borderRadius  [4]float64 // corner radii [TL, TR, BR, BL] (points, 0 = sharp)
-	opacity       float64    // 0..1 (0 = default/opaque, meaning "not set")
-	overflow      string     // "visible" (default), "hidden"
-	boxShadows    []BoxShadow
-	outlineWidth  float64
-	outlineStyle  string
-	outlineColor  Color
-	outlineOffset float64
-	bgImage       *BackgroundImage
-	clear         string // CSS clear: "left", "right", "both"
-	structTag     string // custom structure tag for PDF/UA (empty = default "Div")
+	// Per-corner percentage radii (fraction 0..1; 0 = not a percentage).
+	// A percentage resolves its horizontal radius against the box width and
+	// its vertical radius against the box height at draw time, producing
+	// elliptical corners (CSS Backgrounds & Borders L3 §5.1).
+	borderRadiusPct [4]float64
+	opacity         float64 // 0..1 (0 = default/opaque, meaning "not set")
+	overflow        string  // "visible" (default), "hidden"
+	boxShadows      []BoxShadow
+	outlineWidth    float64
+	outlineStyle    string
+	outlineColor    Color
+	outlineOffset   float64
+	bgImage         *BackgroundImage
+	clear           string // CSS clear: "left", "right", "both"
+	structTag       string // custom structure tag for PDF/UA (empty = default "Div")
 
 	// CSS position:relative offsets (visual only, don't affect layout flow).
 	relOffsetX float64
@@ -345,9 +350,47 @@ func (d *Div) SetBorderRadiusPerCorner(tl, tr, br, bl float64) *Div {
 	return d
 }
 
-// hasRadius returns true if any corner has a non-zero radius.
+// SetBorderRadiusPercent sets per-corner percentage radii as fractions
+// (0..1), indexed [TL, TR, BR, BL]; 0 means the corner is not a percentage.
+// A percentage corner resolves rx against the box width and ry against the
+// box height at draw time, yielding elliptical corners (e.g. 0.5 on a square
+// box draws a circle; on a rectangle it draws a pill). It composes with
+// SetBorderRadius / SetBorderRadiusPerCorner: a corner with a non-zero
+// percentage overrides the absolute radius for that corner.
+func (d *Div) SetBorderRadiusPercent(pct [4]float64) *Div {
+	d.borderRadiusPct = pct
+	return d
+}
+
+// BorderRadiusPercent returns the per-corner percentage radii as fractions
+// (0..1), indexed [TL, TR, BR, BL]. A zero entry means the corner is driven
+// by an absolute radius (or is sharp). Exposed for introspection and tests.
+func (d *Div) BorderRadiusPercent() [4]float64 {
+	return d.borderRadiusPct
+}
+
+// hasRadius returns true if any corner has a non-zero radius, whether
+// absolute or percentage.
 func (d *Div) hasRadius() bool {
-	return d.borderRadius[0] > 0 || d.borderRadius[1] > 0 || d.borderRadius[2] > 0 || d.borderRadius[3] > 0
+	return d.borderRadius[0] > 0 || d.borderRadius[1] > 0 || d.borderRadius[2] > 0 || d.borderRadius[3] > 0 ||
+		d.borderRadiusPct[0] > 0 || d.borderRadiusPct[1] > 0 || d.borderRadiusPct[2] > 0 || d.borderRadiusPct[3] > 0
+}
+
+// resolvedRadii returns the per-corner horizontal (rx) and vertical (ry)
+// radii in points for a box of the given width and height. A percentage
+// corner resolves rx = pct*w and ry = pct*h (elliptical); an absolute
+// corner has rx == ry. Indexed [TL, TR, BR, BL].
+func (d *Div) resolvedRadii(w, h float64) (rx, ry [4]float64) {
+	for i := 0; i < 4; i++ {
+		if d.borderRadiusPct[i] > 0 {
+			rx[i] = d.borderRadiusPct[i] * w
+			ry[i] = d.borderRadiusPct[i] * h
+		} else {
+			rx[i] = d.borderRadius[i]
+			ry[i] = d.borderRadius[i]
+		}
+	}
+	return rx, ry
 }
 
 // SetOpacity sets the opacity for the entire Div (0 = transparent, 1 = opaque).
@@ -679,8 +722,11 @@ func (d *Div) PlanLayout(area LayoutArea) LayoutPlan {
 		Tag: d.resolveTag(),
 		Draw: func(ctx DrawContext, absX, absTopY float64) {
 			bottomY := absTopY - capturedTotalH
-			r := capturedDiv.borderRadius
 			hasR := capturedDiv.hasRadius()
+			// Resolve per-corner rx/ry against the final box size: percentage
+			// corners become elliptical (rx=pct*w, ry=pct*h), absolute corners
+			// stay circular (rx==ry).
+			rx, ry := capturedDiv.resolvedRadii(capturedOuterW, capturedTotalH)
 
 			// Apply CSS transform if set.
 			if len(capturedDiv.transforms) > 0 {
@@ -714,7 +760,7 @@ func (d *Div) PlanLayout(area LayoutArea) LayoutPlan {
 			if capturedDiv.overflow == "hidden" {
 				ctx.Stream.SaveState()
 				if hasR {
-					ctx.Stream.RoundedRectPerCorner(absX, bottomY, capturedOuterW, capturedTotalH, r[0], r[1], r[2], r[3])
+					ctx.Stream.RoundedRectPerCornerXY(absX, bottomY, capturedOuterW, capturedTotalH, rx, ry)
 				} else {
 					ctx.Stream.Rectangle(absX, bottomY, capturedOuterW, capturedTotalH)
 				}
@@ -726,7 +772,7 @@ func (d *Div) PlanLayout(area LayoutArea) LayoutPlan {
 				ctx.Stream.SaveState()
 				setFillColor(ctx.Stream, *capturedDiv.background)
 				if hasR {
-					ctx.Stream.RoundedRectPerCorner(absX, bottomY, capturedOuterW, capturedTotalH, r[0], r[1], r[2], r[3])
+					ctx.Stream.RoundedRectPerCornerXY(absX, bottomY, capturedOuterW, capturedTotalH, rx, ry)
 				} else {
 					ctx.Stream.Rectangle(absX, bottomY, capturedOuterW, capturedTotalH)
 				}
@@ -735,12 +781,15 @@ func (d *Div) PlanLayout(area LayoutArea) LayoutPlan {
 			}
 
 			// Draw background image after background color, before borders.
+			// The bgimage rounded clip is single-radius (rx[0]); elliptical /
+			// per-corner clipping for background images is a separate
+			// enhancement and is not expanded here.
 			if capturedDiv.bgImage != nil && capturedDiv.bgImage.Image != nil {
-				drawBackgroundImage(ctx, capturedDiv.bgImage, absX, bottomY, capturedOuterW, capturedTotalH, r[0])
+				drawBackgroundImage(ctx, capturedDiv.bgImage, absX, bottomY, capturedOuterW, capturedTotalH, rx[0])
 			}
 
 			if hasR {
-				drawRoundedBorders(ctx.Stream, capturedDiv.borders, absX, bottomY, capturedOuterW, capturedTotalH, r)
+				drawRoundedBorders(ctx.Stream, capturedDiv.borders, absX, bottomY, capturedOuterW, capturedTotalH, rx, ry)
 			} else {
 				drawCellBorders(ctx.Stream, capturedDiv.borders, absX, bottomY, capturedOuterW, capturedTotalH)
 			}

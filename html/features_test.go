@@ -2332,3 +2332,58 @@ func TestBaselineShiftThenVerticalAlign(t *testing.T) {
 		}
 	}
 }
+
+// --- border-radius percentage (issue #329) ---
+
+// findDivWithRadius walks the element tree and returns the first *layout.Div
+// that has a non-zero border-radius (absolute or percentage). Returns nil if
+// none is found.
+func findDivWithRadius(elems []layout.Element) *layout.Div {
+	for _, e := range elems {
+		if d, ok := e.(*layout.Div); ok {
+			pct := d.BorderRadiusPercent()
+			if pct[0] > 0 || pct[1] > 0 || pct[2] > 0 || pct[3] > 0 {
+				return d
+			}
+			if c := findDivWithRadius(d.Children()); c != nil {
+				return c
+			}
+		}
+	}
+	return nil
+}
+
+// border-radius: 50% on a 28x28 box must reach the layout Div as a 0.5
+// fraction per corner (not collapse to 0 the way the pre-fix eager parse did).
+func TestBorderRadiusPercentReachesDiv(t *testing.T) {
+	src := `<div style="width:28px;height:28px;background:#130048;border-radius:50%"></div>`
+	elems, err := Convert(src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := findDivWithRadius(elems)
+	if d == nil {
+		t.Fatal("expected a Div carrying a percentage border-radius")
+	}
+	pct := d.BorderRadiusPercent()
+	for i, p := range pct {
+		if p != 0.5 {
+			t.Errorf("corner %d: border-radius percent = %v, want 0.5", i, p)
+		}
+	}
+}
+
+// A length border-radius must NOT set any percentage fraction — the control
+// case that distinguishes the percentage path from the absolute path.
+func TestBorderRadiusLengthHasNoPercent(t *testing.T) {
+	src := `<div style="width:28px;height:28px;background:#130048;border-radius:14pt"></div>`
+	elems, err := Convert(src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// findDivWithRadius only matches percentage corners; a length-only radius
+	// must therefore not be found.
+	if d := findDivWithRadius(elems); d != nil {
+		t.Errorf("length border-radius should not carry a percentage fraction, got %v", d.BorderRadiusPercent())
+	}
+}

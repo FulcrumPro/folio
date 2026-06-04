@@ -108,6 +108,61 @@ func TestDivUniformBorderRadius(t *testing.T) {
 	}
 }
 
+// resolvedRadii must turn a percentage corner into rx=pct*w (horizontal)
+// and ry=pct*h (vertical), and leave absolute corners circular (rx==ry).
+func TestDivResolvedRadiiPercent(t *testing.T) {
+	// 50% on a 28x28 box → circle (rx=ry=14).
+	d := NewDiv().SetBorderRadiusPercent([4]float64{0.5, 0.5, 0.5, 0.5})
+	rx, ry := d.resolvedRadii(28, 28)
+	for i := 0; i < 4; i++ {
+		if rx[i] != 14 || ry[i] != 14 {
+			t.Fatalf("corner %d: expected rx=ry=14 on 28x28, got rx=%v ry=%v", i, rx[i], ry[i])
+		}
+	}
+
+	// 50% on a 100x40 box → elliptical (rx=50, ry=20).
+	rx, ry = d.resolvedRadii(100, 40)
+	for i := 0; i < 4; i++ {
+		if rx[i] != 50 || ry[i] != 20 {
+			t.Fatalf("corner %d: expected rx=50 ry=20 on 100x40, got rx=%v ry=%v", i, rx[i], ry[i])
+		}
+		if rx[i] == ry[i] {
+			t.Fatalf("corner %d: expected elliptical (rx!=ry), got rx==ry==%v", i, rx[i])
+		}
+	}
+}
+
+// An absolute radius equal to half the box (14pt on 28x28) must resolve to
+// the same circle as the 50% percentage case — the length control for the
+// percentage fix.
+func TestDivResolvedRadiiAbsoluteCircle(t *testing.T) {
+	d := NewDiv().SetBorderRadiusPerCorner(14, 14, 14, 14)
+	rx, ry := d.resolvedRadii(28, 28)
+	for i := 0; i < 4; i++ {
+		if rx[i] != 14 || ry[i] != 14 {
+			t.Fatalf("corner %d: expected rx=ry=14, got rx=%v ry=%v", i, rx[i], ry[i])
+		}
+	}
+}
+
+// A percentage-only border-radius (no absolute radius set) must still report
+// hasRadius and render without panicking.
+func TestDivPercentBorderRadiusRenders(t *testing.T) {
+	d := NewDiv().
+		SetBorderRadiusPercent([4]float64{0.5, 0.5, 0.5, 0.5}).
+		SetBackground(RGB(0.9, 0.9, 0.95)).
+		SetPadding(10).
+		Add(NewParagraph("circle", font.Helvetica, 12))
+	if !d.hasRadius() {
+		t.Fatal("expected hasRadius() true for percentage-only border-radius")
+	}
+	r := NewRenderer(612, 792, Margins{Top: 72, Right: 72, Bottom: 72, Left: 72})
+	r.Add(d)
+	if pages := r.Render(); len(pages) == 0 {
+		t.Fatal("expected at least 1 page")
+	}
+}
+
 func TestDivAspectRatio(t *testing.T) {
 	// 2:1 ratio on a 400pt wide area → height should be 200pt.
 	d := NewDiv().

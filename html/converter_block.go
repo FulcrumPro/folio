@@ -159,7 +159,7 @@ func (c *converter) convertBlock(n *html.Node, style computedStyle) []layout.Ele
 	// If no box-model properties, skip the Div wrapper.
 	hasWidthConstraints := style.Width != nil || style.MaxWidth != nil || style.MinWidth != nil
 	hasHeightConstraints := style.Height != nil || style.MinHeight != nil || style.MaxHeight != nil || style.AspectRatio > 0
-	hasVisualEffects := style.BorderRadius > 0 || style.BorderRadiusTL > 0 || style.BorderRadiusTR > 0 || style.BorderRadiusBR > 0 || style.BorderRadiusBL > 0 || (style.Opacity > 0 && style.Opacity < 1) || style.Overflow == "hidden"
+	hasVisualEffects := style.BorderRadius > 0 || style.BorderRadiusTL > 0 || style.BorderRadiusTR > 0 || style.BorderRadiusBR > 0 || style.BorderRadiusBL > 0 || style.BorderRadiusTLPct > 0 || style.BorderRadiusTRPct > 0 || style.BorderRadiusBRPct > 0 || style.BorderRadiusBLPct > 0 || (style.Opacity > 0 && style.Opacity < 1) || style.Overflow == "hidden"
 	hasBoxShadow := len(style.BoxShadows) > 0
 	hasOutline := style.OutlineWidth > 0
 	hasTransform := style.Transform != "" && strings.ToLower(strings.TrimSpace(style.Transform)) != "none"
@@ -290,6 +290,15 @@ func applyDivStyles(div *layout.Div, style computedStyle, containerWidth float64
 		div.SetBorderRadiusPerCorner(style.BorderRadiusTL, style.BorderRadiusTR, style.BorderRadiusBR, style.BorderRadiusBL)
 	} else if style.BorderRadius > 0 {
 		div.SetBorderRadius(style.BorderRadius)
+	}
+	// Percentage radii resolve against the box width/height at draw time
+	// (elliptical corners); pass them through even when no absolute radius
+	// is set so a percentage-only border-radius still rounds.
+	if style.BorderRadiusTLPct > 0 || style.BorderRadiusTRPct > 0 || style.BorderRadiusBRPct > 0 || style.BorderRadiusBLPct > 0 {
+		div.SetBorderRadiusPercent([4]float64{
+			style.BorderRadiusTLPct, style.BorderRadiusTRPct,
+			style.BorderRadiusBRPct, style.BorderRadiusBLPct,
+		})
 	}
 	if style.Clear != "" && style.Clear != "none" {
 		div.SetClear(style.Clear)

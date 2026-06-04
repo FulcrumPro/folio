@@ -616,6 +616,47 @@ func TestCSSPropertyParitySnapshot(t *testing.T) {
 			},
 		},
 		{
+			// border-radius: 50% — percentage must be preserved as a
+			// fraction on every corner (abs stays 0), so it can resolve
+			// against the box at layout time instead of collapsing to 0.
+			name:     "border-radius/percent-shorthand",
+			property: "border-radius", value: "50%", fontSize: 12,
+			expectField: func(s *computedStyle) bool {
+				return s.BorderRadiusTLPct == 0.5 && s.BorderRadiusTRPct == 0.5 &&
+					s.BorderRadiusBRPct == 0.5 && s.BorderRadiusBLPct == 0.5 &&
+					s.BorderRadiusTL == 0 && s.BorderRadiusTR == 0 &&
+					s.BorderRadiusBR == 0 && s.BorderRadiusBL == 0
+			},
+		},
+		{
+			// Per-corner percentage longhand.
+			name:     "border-top-left-radius/percent",
+			property: "border-top-left-radius", value: "25%", fontSize: 12,
+			expectField: func(s *computedStyle) bool {
+				return s.BorderRadiusTLPct == 0.25 && s.BorderRadiusTL == 0
+			},
+		},
+		{
+			// A length corner must leave the percentage fraction at 0 and
+			// resolve to points as before.
+			name:     "border-top-left-radius/length",
+			property: "border-top-left-radius", value: "14pt", fontSize: 12,
+			expectField: func(s *computedStyle) bool {
+				return s.BorderRadiusTLPct == 0 && s.BorderRadiusTL == parseLengthPt("14pt", 12)
+			},
+		},
+		{
+			// Mixed shorthand: percentage and length per corner.
+			name:     "border-radius/mixed-four",
+			property: "border-radius", value: "50% 4px 25% 8px", fontSize: 12,
+			expectField: func(s *computedStyle) bool {
+				return s.BorderRadiusTLPct == 0.5 && s.BorderRadiusTL == 0 &&
+					s.BorderRadiusTRPct == 0 && s.BorderRadiusTR == parseLengthPt("4px", 12) &&
+					s.BorderRadiusBRPct == 0.25 && s.BorderRadiusBR == 0 &&
+					s.BorderRadiusBLPct == 0 && s.BorderRadiusBL == parseLengthPt("8px", 12)
+			},
+		},
+		{
 			// font shorthand sets style, weight, size, line-height, family.
 			// "16px" parses to 12pt (CSS 1px = 0.75pt).
 			name:     "font/full-shorthand",

@@ -989,16 +989,19 @@ func drawOutline(ctx DrawContext, width float64, style string, color Color, offs
 	ctx.Stream.RestoreState()
 }
 
-// drawRoundedBorders draws borders with per-corner rounded corners.
-// Falls back to straight borders when border styles differ per side.
-func drawRoundedBorders(stream *content.Stream, borders CellBorders, x, y, w, h float64, r [4]float64) {
+// drawRoundedBorders draws borders with per-corner rounded corners, using
+// independent horizontal (rx) and vertical (ry) radii per corner so that
+// percentage-driven elliptical corners stroke correctly. The arrays are
+// indexed [TL, TR, BR, BL]. Falls back to straight borders when border styles
+// differ per side.
+func drawRoundedBorders(stream *content.Stream, borders CellBorders, x, y, w, h float64, rx, ry [4]float64) {
 	// If all borders are the same, draw a single rounded rect stroke.
 	if borders.Top.Width > 0 && borders.Top == borders.Right &&
 		borders.Top == borders.Bottom && borders.Top == borders.Left {
 		stream.SaveState()
 		setStrokeColor(stream, borders.Top.Color)
 		stream.SetLineWidth(borders.Top.Width)
-		stream.RoundedRectPerCorner(x, y, w, h, r[0], r[1], r[2], r[3])
+		stream.RoundedRectPerCornerXY(x, y, w, h, rx, ry)
 		stream.Stroke()
 		stream.RestoreState()
 		return

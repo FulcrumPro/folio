@@ -87,12 +87,32 @@ func htmlToDocument(htmlStr string, pageWidth, pageHeight float64) (*document.Do
 
 	doc := document.NewDocument(ps)
 
-	// Apply @page margins.
-	if pc := result.PageConfig; pc != nil && pc.HasMargins {
-		doc.SetMargins(layout.Margins{
-			Top: pc.MarginTop, Right: pc.MarginRight,
-			Bottom: pc.MarginBottom, Left: pc.MarginLeft,
-		})
+	// Apply @page margins (default + :first/:left/:right overrides).
+	if pc := result.PageConfig; pc != nil {
+		if pc.HasMargins {
+			doc.SetMargins(layout.Margins{
+				Top: pc.MarginTop, Right: pc.MarginRight,
+				Bottom: pc.MarginBottom, Left: pc.MarginLeft,
+			})
+		}
+		if pc.First != nil && pc.First.HasMargins {
+			doc.SetFirstMargins(layout.Margins{
+				Top: pc.First.Top, Right: pc.First.Right,
+				Bottom: pc.First.Bottom, Left: pc.First.Left,
+			})
+		}
+		if pc.Left != nil && pc.Left.HasMargins {
+			doc.SetLeftMargins(layout.Margins{
+				Top: pc.Left.Top, Right: pc.Left.Right,
+				Bottom: pc.Left.Bottom, Left: pc.Left.Left,
+			})
+		}
+		if pc.Right != nil && pc.Right.HasMargins {
+			doc.SetRightMargins(layout.Margins{
+				Top: pc.Right.Top, Right: pc.Right.Right,
+				Bottom: pc.Right.Bottom, Left: pc.Right.Left,
+			})
+		}
 	}
 
 	// Apply @page margin boxes (page numbers, headers/footers).
@@ -101,6 +121,12 @@ func htmlToDocument(htmlStr string, pageWidth, pageHeight float64) (*document.Do
 	}
 	if result.FirstMarginBoxes != nil {
 		doc.SetFirstMarginBoxes(result.FirstMarginBoxes)
+	}
+	if result.LeftMarginBoxes != nil {
+		doc.SetLeftMarginBoxes(result.LeftMarginBoxes)
+	}
+	if result.RightMarginBoxes != nil {
+		doc.SetRightMarginBoxes(result.RightMarginBoxes)
 	}
 
 	// Apply metadata.

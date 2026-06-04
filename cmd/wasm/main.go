@@ -110,6 +110,12 @@ func renderHTML(_ js.Value, args []js.Value) any {
 	if result.FirstMarginBoxes != nil {
 		doc.SetFirstMarginBoxes(result.FirstMarginBoxes)
 	}
+	if result.LeftMarginBoxes != nil {
+		doc.SetLeftMarginBoxes(result.LeftMarginBoxes)
+	}
+	if result.RightMarginBoxes != nil {
+		doc.SetRightMarginBoxes(result.RightMarginBoxes)
+	}
 
 	// Apply metadata from HTML <title>/<meta> tags
 	if result.Metadata.Title != "" {

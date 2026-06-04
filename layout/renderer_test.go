@@ -5,6 +5,7 @@ package layout
 
 import (
 	"bytes"
+	"fmt"
 	goimage "image"
 	"image/jpeg"
 	"strings"
@@ -57,6 +58,160 @@ func TestRendererMultipleElements(t *testing.T) {
 	// Should have two fonts registered.
 	if len(pages[0].Fonts) != 2 {
 		t.Errorf("expected 2 fonts, got %d", len(pages[0].Fonts))
+	}
+}
+
+// TestAutoHeightWithFirstMargins verifies that an auto-height page (page
+// height 0) which also has @page :first margins is sized using the :first
+// margins — the same margins used to position its content — rather than the
+// default margin set. Content is positioned at marginsForPage(0).Top from the
+// top, so the computed page height must include that (larger) top margin to
+// avoid clipping.
+//
+// Fail-before/pass-after: before the fix the auto-height height used
+// r.margins.Top (default 10) instead of the :first top (200), so the page was
+// ~190pt too short and the content's top would fall outside the page box.
+func TestAutoHeightWithFirstMargins(t *testing.T) {
+	defaultMargins := Margins{Top: 10, Right: 10, Bottom: 10, Left: 10}
+	r := NewRenderer(612, 0, defaultMargins) // height 0 => auto-height
+	firstTop := 200.0
+	r.SetFirstMargins(Margins{Top: firstTop, Right: 10, Bottom: 10, Left: 10})
+	r.Add(NewParagraph("Hello", font.Helvetica, 12))
+
+	pages := r.Render()
+	if len(pages) != 1 {
+		t.Fatalf("expected 1 page, got %d", len(pages))
+	}
+
+	got := pages[0].PageHeight
+	// The page must be at least as tall as the :first top margin plus the
+	// content. With the default-margin bug the height would be < firstTop.
+	if got < firstTop {
+		t.Errorf("auto-height page too short: got %.1f, want >= %.1f (:first top margin)", got, firstTop)
+	}
+	// Sanity: height should account for the larger :first top, not the
+	// default top (10). It must exceed default top + bottom + content.
+	if got <= defaultMargins.Top+defaultMargins.Bottom {
+		t.Errorf("auto-height page ignored :first top margin: got %.1f", got)
+	}
+}
+
+// firstTextY returns the y-coordinate of the first text-positioning (Td)
+// operator in a content stream. Text is drawn from a bottom-left origin, so a
+// larger top margin pushes content lower and yields a SMALLER y value.
+// Returns -1 if no Td operator is present.
+func firstTextY(t *testing.T, stream string) float64 {
+	t.Helper()
+	for _, line := range strings.Split(stream, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 3 && fields[2] == "Td" {
+			var y float64
+			if _, err := fmt.Sscanf(fields[1], "%g", &y); err == nil {
+				return y
+			}
+		}
+	}
+	return -1
+}
+
+// TestFirstMarginsWithExplicitPageBreaks is the regression guard for the bug
+// where @page :first margins leaked onto EVERY page of a document that uses
+// explicit page breaks (AreaBreak). Natural-overflow pagination correctly
+// increments the cumulative page index, so :first applied only to page 0; the
+// explicit-break path failed to recompute per-page margins after advancing the
+// index, so every break-delimited page kept page 0's (:first) margins.
+//
+// Fail-before/pass-after: before the fix all three pages' first-line Y matched
+// (all used the 144pt :first top). After the fix page 0 sits lower (smaller Y,
+// from the 144pt top) while pages 1 and 2 sit higher (larger Y, from the 36pt
+// base top).
+func TestFirstMarginsWithExplicitPageBreaks(t *testing.T) {
+	base := Margins{Top: 36, Right: 36, Bottom: 36, Left: 36}
+	r := NewRenderer(612, 792, base)
+	first := base
+	first.Top = 144
+	r.SetFirstMargins(first)
+
+	r.Add(NewParagraph("Page one", font.Helvetica, 12))
+	r.Add(NewAreaBreak())
+	r.Add(NewParagraph("Page two", font.Helvetica, 12))
+	r.Add(NewAreaBreak())
+	r.Add(NewParagraph("Page three", font.Helvetica, 12))
+
+	pages := r.Render()
+	if len(pages) != 3 {
+		t.Fatalf("expected 3 pages, got %d", len(pages))
+	}
+
+	y0 := firstTextY(t, string(pages[0].Stream.Bytes()))
+	y1 := firstTextY(t, string(pages[1].Stream.Bytes()))
+	y2 := firstTextY(t, string(pages[2].Stream.Bytes()))
+	for i, y := range []float64{y0, y1, y2} {
+		if y < 0 {
+			t.Fatalf("page %d has no text", i)
+		}
+	}
+
+	// Page 0 (:first, 144pt top) must sit lower on the page than pages 1 and 2
+	// (base, 36pt top): a larger top margin means a smaller y.
+	if !(y0 < y1) {
+		t.Errorf(":first top margin did not apply to page 0 only: y0=%.1f y1=%.1f (want y0 < y1)", y0, y1)
+	}
+	// Pages 1 and 2 (both base margins) must share the same first-line y.
+	if y1 != y2 {
+		t.Errorf("pages 1 and 2 should use the same base margin: y1=%.1f y2=%.1f", y1, y2)
+	}
+	// The gap between page 0 and the base pages must equal the margin delta
+	// (144 - 36 = 108pt), confirming page 0 alone got the :first top.
+	if delta := y1 - y0; delta < 107 || delta > 109 {
+		t.Errorf("page 0 top-margin delta = %.1f, want ~108 (144pt :first - 36pt base)", delta)
+	}
+}
+
+// TestEmptyFirstMarginBoxSuppressesDefault is the regression guard for the bug
+// where @page :first { @bottom-center { content: "" } } failed to blank the
+// first-page footer. An empty-content :first margin box must OVERRIDE the
+// inherited default @bottom-center for page 0 (drawing nothing), while pages 1+
+// keep the default footer.
+//
+// Fail-before/pass-after: before the fix the empty :first box was dropped at
+// parse time, so marginBoxesForPage(0) fell back to the default and page 0
+// showed the footer like every other page.
+func TestEmptyFirstMarginBoxSuppressesDefault(t *testing.T) {
+	r := NewRenderer(612, 792, Margins{Top: 36, Right: 36, Bottom: 36, Left: 36})
+	r.SetMarginBoxes(map[string]MarginBox{
+		"bottom-center": {Content: "FOOTER"},
+	})
+	// Empty :first box overrides (blanks) the default for page 0 only.
+	r.SetFirstMarginBoxes(map[string]MarginBox{
+		"bottom-center": {Content: ""},
+	})
+
+	r.Add(NewParagraph("Page one", font.Helvetica, 12))
+	r.Add(NewAreaBreak())
+	r.Add(NewParagraph("Page two", font.Helvetica, 12))
+
+	pages := r.Render()
+	if len(pages) != 2 {
+		t.Fatalf("expected 2 pages, got %d", len(pages))
+	}
+
+	p0 := string(pages[0].Stream.Bytes())
+	p1 := string(pages[1].Stream.Bytes())
+	if strings.Contains(p0, "FOOTER") {
+		t.Errorf("page 0 footer should be suppressed by empty :first box, but FOOTER is present")
+	}
+	if !strings.Contains(p1, "FOOTER") {
+		t.Errorf("page 1 should keep the default FOOTER, but it is missing")
+	}
+
+	// Per-slot merge sanity: the empty :first box must replace the default box
+	// for page 0, while page 1 retains the default content.
+	if box := r.marginBoxesForPage(0)["bottom-center"]; box.Content != "" {
+		t.Errorf("page 0 bottom-center content = %q, want empty (suppressed)", box.Content)
+	}
+	if box := r.marginBoxesForPage(1)["bottom-center"]; box.Content != "FOOTER" {
+		t.Errorf("page 1 bottom-center content = %q, want \"FOOTER\"", box.Content)
 	}
 }
 

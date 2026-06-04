@@ -98,6 +98,77 @@ func TestAddHTMLProducesPDF(t *testing.T) {
 	}
 }
 
+// TestAddHTMLFirstMarginsMergeOverBase is the Defect B end-to-end regression
+// through the document entry point: a partial @page :first override inherits the
+// base @page {} margins for sides it does not set.
+func TestAddHTMLFirstMarginsMergeOverBase(t *testing.T) {
+	doc := NewDocument(PageSizeLetter)
+	err := doc.AddHTML(`<html><head><style>
+		@page { margin: 2cm; }
+		@page :first { margin-top: 4cm; }
+	</style></head><body><p>X</p></body></html>`, nil)
+	if err != nil {
+		t.Fatalf("AddHTML: %v", err)
+	}
+	if doc.firstMargins == nil {
+		t.Fatal("expected firstMargins to be set")
+	}
+	// 4cm ≈ 113.39pt, 2cm ≈ 56.69pt.
+	const cm2, cm4 = 56.69, 113.39
+	if d := doc.firstMargins.Top - cm4; d > 1 || d < -1 {
+		t.Errorf("firstMargins.Top = %.2f, want ~113.39 (4cm)", doc.firstMargins.Top)
+	}
+	if d := doc.firstMargins.Right - cm2; d > 1 || d < -1 {
+		t.Errorf("firstMargins.Right = %.2f, want ~56.69 (2cm inherited, not 0)", doc.firstMargins.Right)
+	}
+	if d := doc.firstMargins.Bottom - cm2; d > 1 || d < -1 {
+		t.Errorf("firstMargins.Bottom = %.2f, want ~56.69 (2cm inherited, not 0)", doc.firstMargins.Bottom)
+	}
+	if d := doc.firstMargins.Left - cm2; d > 1 || d < -1 {
+		t.Errorf("firstMargins.Left = %.2f, want ~56.69 (2cm inherited, not 0)", doc.firstMargins.Left)
+	}
+}
+
+// TestAddHTMLLeftRightMarginsAndBoxes verifies :left/:right margins and margin
+// boxes are plumbed from HTML through the document to the renderer, and that the
+// resulting multi-page PDF renders without error.
+func TestAddHTMLLeftRightMarginsAndBoxes(t *testing.T) {
+	doc := NewDocument(PageSizeLetter)
+	err := doc.AddHTML(`<html><head><style>
+		@page { margin: 2cm; }
+		@page :left { margin-left: 3cm; @top-left { content: "L"; } }
+		@page :right { margin-right: 3cm; @top-right { content: "R"; } }
+	</style></head><body>
+		<p style="page-break-after: always;">one</p>
+		<p style="page-break-after: always;">two</p>
+		<p>three</p>
+	</body></html>`, nil)
+	if err != nil {
+		t.Fatalf("AddHTML: %v", err)
+	}
+	if doc.leftMargins == nil || doc.rightMargins == nil {
+		t.Fatal("expected left and right margins to be set")
+	}
+	if doc.leftMarginBoxes == nil || doc.rightMarginBoxes == nil {
+		t.Fatal("expected left and right margin boxes to be set")
+	}
+	// 3cm ≈ 85.04pt.
+	if d := doc.leftMargins.Left - 85.04; d > 1 || d < -1 {
+		t.Errorf("leftMargins.Left = %.2f, want ~85.04 (3cm)", doc.leftMargins.Left)
+	}
+	if d := doc.rightMargins.Right - 85.04; d > 1 || d < -1 {
+		t.Errorf("rightMargins.Right = %.2f, want ~85.04 (3cm)", doc.rightMargins.Right)
+	}
+
+	var buf bytes.Buffer
+	if _, err := doc.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+	if !strings.HasPrefix(buf.String(), "%PDF-") {
+		t.Error("output does not start with %PDF-")
+	}
+}
+
 func TestAddHTMLTemplate(t *testing.T) {
 	doc := NewDocument(PageSizeLetter)
 

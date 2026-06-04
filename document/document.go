@@ -74,7 +74,9 @@ type Document struct {
 	leftMargins      *layout.Margins             // @page :left
 	rightMargins     *layout.Margins             // @page :right
 	marginBoxes      map[string]layout.MarginBox // default margin boxes
-	firstMarginBoxes map[string]layout.MarginBox // first-page margin boxes
+	firstMarginBoxes map[string]layout.MarginBox // first-page margin boxes (@page :first)
+	leftMarginBoxes  map[string]layout.MarginBox // left-page margin boxes (@page :left)
+	rightMarginBoxes map[string]layout.MarginBox // right-page margin boxes (@page :right)
 	elements         []layout.Element
 	absolutes        []absoluteElement
 	Info             Info        // document metadata (Title, Author, etc.)
@@ -175,6 +177,16 @@ func (d *Document) SetMarginBoxes(boxes map[string]layout.MarginBox) {
 // SetFirstMarginBoxes sets margin box content for the first page only.
 func (d *Document) SetFirstMarginBoxes(boxes map[string]layout.MarginBox) {
 	d.firstMarginBoxes = boxes
+}
+
+// SetLeftMarginBoxes sets margin box content for left (even-numbered) pages (@page :left).
+func (d *Document) SetLeftMarginBoxes(boxes map[string]layout.MarginBox) {
+	d.leftMarginBoxes = boxes
+}
+
+// SetRightMarginBoxes sets margin box content for right (odd-numbered) pages (@page :right).
+func (d *Document) SetRightMarginBoxes(boxes map[string]layout.MarginBox) {
+	d.rightMarginBoxes = boxes
 }
 
 // SetHeader sets a decorator that draws on every page (e.g. title, logo).
@@ -367,6 +379,12 @@ func (d *Document) buildAllPages(ctx context.Context) (all []*Page, structTags [
 		}
 		if d.firstMarginBoxes != nil {
 			r.SetFirstMarginBoxes(d.firstMarginBoxes)
+		}
+		if d.leftMarginBoxes != nil {
+			r.SetLeftMarginBoxes(d.leftMarginBoxes)
+		}
+		if d.rightMarginBoxes != nil {
+			r.SetRightMarginBoxes(d.rightMarginBoxes)
 		}
 		if d.tagged {
 			r.SetTagged(true)

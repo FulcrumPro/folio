@@ -294,6 +294,14 @@ type ConvertResult struct {
 	// FirstMarginBoxes are margin boxes for @page :first only.
 	// Pass to document.SetFirstMarginBoxes. Nil if not declared.
 	FirstMarginBoxes map[string]layout.MarginBox
+
+	// LeftMarginBoxes are margin boxes for @page :left (even pages, LTR).
+	// Pass to document.SetLeftMarginBoxes. Nil if not declared.
+	LeftMarginBoxes map[string]layout.MarginBox
+
+	// RightMarginBoxes are margin boxes for @page :right (odd pages, LTR).
+	// Pass to document.SetRightMarginBoxes. Nil if not declared.
+	RightMarginBoxes map[string]layout.MarginBox
 }
 
 // DocMetadata holds document metadata extracted from HTML head elements.
@@ -318,9 +326,16 @@ type DocMetadata struct {
 
 // MarginBoxContent holds the parsed content of a CSS margin box (e.g. @top-center).
 type MarginBoxContent struct {
-	Content  string     // resolved content string (after evaluating counter(), string literals, etc.)
-	FontSize float64    // font size in points (0 = use default 9pt)
-	Color    [3]float64 // RGB color (0-1 each)
+	Content string // resolved content string (after evaluating counter(), string literals, etc.)
+	// HasContent is true when a `content` declaration was present in the
+	// margin-box rule, even if it resolved to the empty string (e.g.
+	// `content: ""` or `content: none`). It lets a pseudo-page box
+	// (@page :first { @bottom-center { content: "" } }) be preserved so it
+	// can OVERRIDE — and thereby blank — the inherited default box for that
+	// page/slot, instead of being dropped and falling back to the default.
+	HasContent bool
+	FontSize   float64    // font size in points (0 = use default 9pt)
+	Color      [3]float64 // RGB color (0-1 each)
 	// HasColor is true only when a `color` declaration was present in the
 	// margin-box rule. It lets the renderer distinguish an explicit
 	// `color: black` from an unset color (which defaults to gray).
@@ -527,6 +542,14 @@ func ConvertFullWithContext(ctx context.Context, htmlStr string, opts *Options) 
 		if pageConfig.First != nil {
 			stampMarginBoxFont(pageConfig.First.MarginBoxes, marginFont)
 			result.FirstMarginBoxes = convertMarginBoxes(pageConfig.First.MarginBoxes, marginFont)
+		}
+		if pageConfig.Left != nil {
+			stampMarginBoxFont(pageConfig.Left.MarginBoxes, marginFont)
+			result.LeftMarginBoxes = convertMarginBoxes(pageConfig.Left.MarginBoxes, marginFont)
+		}
+		if pageConfig.Right != nil {
+			stampMarginBoxFont(pageConfig.Right.MarginBoxes, marginFont)
+			result.RightMarginBoxes = convertMarginBoxes(pageConfig.Right.MarginBoxes, marginFont)
 		}
 	}
 

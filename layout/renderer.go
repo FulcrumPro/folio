@@ -102,7 +102,9 @@ type Renderer struct {
 	leftMargins      *Margins             // @page :left margins for even pages (nil = use default)
 	rightMargins     *Margins             // @page :right margins for odd pages (nil = use default)
 	marginBoxes      map[string]MarginBox // default margin boxes
-	firstMarginBoxes map[string]MarginBox // first-page margin boxes
+	firstMarginBoxes map[string]MarginBox // first-page margin boxes (@page :first)
+	leftMarginBoxes  map[string]MarginBox // left-page margin boxes (@page :left)
+	rightMarginBoxes map[string]MarginBox // right-page margin boxes (@page :right)
 	elements         []Element
 	absolutes        []absoluteItem
 	tagged           bool            // if true, emit BDC/EMC marked content
@@ -159,21 +161,69 @@ func (r *Renderer) SetFirstMarginBoxes(boxes map[string]MarginBox) {
 	r.firstMarginBoxes = boxes
 }
 
+// SetLeftMarginBoxes sets margin boxes for left (even-numbered) pages (@page :left).
+func (r *Renderer) SetLeftMarginBoxes(boxes map[string]MarginBox) {
+	r.leftMarginBoxes = boxes
+}
+
+// SetRightMarginBoxes sets margin boxes for right (odd-numbered) pages (@page :right).
+func (r *Renderer) SetRightMarginBoxes(boxes map[string]MarginBox) {
+	r.rightMarginBoxes = boxes
+}
+
 // marginsForPage returns the margins to use for the given page index (0-based).
-// Priority: :first (page 0) > :left/:right > default.
+//
+// Page parity follows CSS paged media for LEFT-TO-RIGHT documents: page 0 (the
+// first page, page number 1) is a :right page, page 1 (page number 2) is a
+// :left page, then alternating. Right-to-left progression is not modelled.
+//
+// Precedence (highest first): :first (page 0 only) > :left/:right by parity >
+// default. :first wins over :right on page 0 because CSS gives :first higher
+// specificity. Each pseudo set already inherits the base @page {} margins for
+// sides it does not specify (the cascade merge happens in html/page.go), so the
+// returned Margins are fully resolved.
 func (r *Renderer) marginsForPage(pageIdx int) Margins {
 	if pageIdx == 0 && r.firstMargins != nil {
 		return *r.firstMargins
 	}
 	if pageIdx%2 == 0 && r.rightMargins != nil {
-		// Page 0 = first right page (odd page number 1), page 2 = page number 3, etc.
+		// Even index = right page (odd page number: 1, 3, 5, ...).
 		return *r.rightMargins
 	}
 	if pageIdx%2 == 1 && r.leftMargins != nil {
-		// Page 1 = page number 2 (left/even), page 3 = page number 4, etc.
+		// Odd index = left page (even page number: 2, 4, 6, ...).
 		return *r.leftMargins
 	}
 	return r.margins
+}
+
+// marginBoxesForPage selects the margin-box set for the given page index,
+// merged over the default set. Parity and precedence mirror marginsForPage:
+// :first (page 0) > :left/:right by parity > default. A parity-specific or
+// first-page box overrides the same-named default box; sides absent from the
+// parity set fall back to the default. LTR progression is assumed (see
+// marginsForPage).
+func (r *Renderer) marginBoxesForPage(pageIdx int) map[string]MarginBox {
+	var override map[string]MarginBox
+	switch {
+	case pageIdx == 0 && r.firstMarginBoxes != nil:
+		override = r.firstMarginBoxes
+	case pageIdx%2 == 0 && r.rightMarginBoxes != nil:
+		override = r.rightMarginBoxes
+	case pageIdx%2 == 1 && r.leftMarginBoxes != nil:
+		override = r.leftMarginBoxes
+	}
+	if override == nil {
+		return r.marginBoxes
+	}
+	merged := make(map[string]MarginBox, len(r.marginBoxes)+len(override))
+	for k, v := range r.marginBoxes {
+		merged[k] = v
+	}
+	for k, v := range override {
+		merged[k] = v
+	}
+	return merged
 }
 
 // NewRenderer creates a renderer for the given page dimensions and margins.
@@ -205,19 +255,8 @@ func (r *Renderer) SetRightMargins(m Margins) {
 
 // drawMarginBoxes renders margin box content (headers/footers) on the current page.
 func (r *Renderer) drawMarginBoxes(ctx *DrawContext, pageIdx int, margins Margins) {
-	// Select margin boxes for this page.
-	boxes := r.marginBoxes
-	if pageIdx == 0 && r.firstMarginBoxes != nil {
-		// Merge: first-page boxes override defaults.
-		merged := make(map[string]MarginBox)
-		for k, v := range r.marginBoxes {
-			merged[k] = v
-		}
-		for k, v := range r.firstMarginBoxes {
-			merged[k] = v
-		}
-		boxes = merged
-	}
+	// Select margin boxes for this page (parity-aware, merged over defaults).
+	boxes := r.marginBoxesForPage(pageIdx)
 	if len(boxes) == 0 {
 		return
 	}

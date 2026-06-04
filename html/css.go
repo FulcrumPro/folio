@@ -196,12 +196,34 @@ func (ss *styleSheet) parseCSS(css string, origin string) {
 		}
 		// Parse @page rules (with optional pseudo-selector like :first, :left, :right).
 		if selectorStr == "@page" || strings.HasPrefix(selectorStr, "@page ") || strings.HasPrefix(selectorStr, "@page:") {
-			sel := ""
 			rest := strings.TrimPrefix(selectorStr, "@page")
 			rest = strings.TrimSpace(rest)
-			if strings.HasPrefix(rest, ":") {
-				sel = strings.TrimPrefix(rest, ":")
-				sel = strings.TrimSpace(sel)
+
+			// Determine the page selector. Only a bare `@page {}` (empty
+			// rest) or a recognised pseudo (:first/:left/:right) are honoured.
+			//
+			// A NAMED page (`@page narrow {}`) or an UNSUPPORTED pseudo
+			// (`@page :blank {}`) must NOT pollute the global default @page {}
+			// rule: a named page has rest="narrow" (no leading ':'), and an
+			// unsupported pseudo has sel="blank" with no case in page.go. Both
+			// previously fell through to the default rule (selector ""), which
+			// applied their margins to every page. We now skip them entirely.
+			sel := ""
+			if rest != "" {
+				if !strings.HasPrefix(rest, ":") {
+					// Named page (e.g. "@page narrow") — drop it.
+					continue
+				}
+				// CSS page pseudo names are case-insensitive.
+				sel = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(rest, ":")))
+				switch sel {
+				case "first", "left", "right":
+					// Recognised pseudo — honour it.
+				default:
+					// Unsupported pseudo (e.g. ":blank") — drop it so it
+					// does not become the default rule.
+					continue
+				}
 			}
 
 			// Extract nested margin box rules (e.g. @top-center { ... }) from declStr.

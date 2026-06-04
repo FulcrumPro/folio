@@ -189,6 +189,17 @@ func (d *Div) SetBackground(c Color) *Div {
 	return d
 }
 
+// Background returns a copy of the Div's background fill color, or nil if the
+// Div has no background. A copy is returned so callers cannot mutate the Div's
+// internal fill through the pointer. Provided for testing.
+func (d *Div) Background() *Color {
+	if d.background == nil {
+		return nil
+	}
+	c := *d.background
+	return &c
+}
+
 // SetSpaceBefore sets extra vertical space before the Div.
 func (d *Div) SetSpaceBefore(pts float64) *Div {
 	d.spaceBefore = pts
@@ -368,6 +379,11 @@ func (d *Div) SetBorderRadiusPercent(pct [4]float64) *Div {
 func (d *Div) BorderRadiusPercent() [4]float64 {
 	return d.borderRadiusPct
 }
+
+// BorderRadii returns the per-corner radii in CSS order
+// (top-left, top-right, bottom-right, bottom-left), in points. A value of 0
+// means the corner is sharp. Provided for testing.
+func (d *Div) BorderRadii() [4]float64 { return d.borderRadius }
 
 // hasRadius returns true if any corner has a non-zero radius, whether
 // absolute or percentage.

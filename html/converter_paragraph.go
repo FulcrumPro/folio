@@ -51,6 +51,12 @@ func (c *converter) convertParagraph(n *html.Node, style computedStyle) []layout
 			div.Add(e)
 		}
 		applyDivStyles(div, style, c.containerWidth)
+		// The Div now owns and draws the box background (honoring
+		// border-radius); clear the redundant paragraph-level background on
+		// the wrapped children to avoid a square-cornered overdraw (issue #329).
+		if style.BackgroundColor != nil {
+			clearMatchingParagraphBackgrounds(div.Children(), *style.BackgroundColor)
+		}
 		return []layout.Element{div}
 	}
 

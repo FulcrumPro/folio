@@ -187,6 +187,10 @@ func (c *converter) convertCSSTable(n *html.Node, style computedStyle) []layout.
 				}
 				if cellStyle.BackgroundColor != nil {
 					layoutCell.SetBackground(*cellStyle.BackgroundColor)
+					// The cell owns and draws the rounded box fill; clear the
+					// same block-level background on its content Paragraph(s)
+					// to avoid a square-cornered overdraw (issue #329).
+					clearCellParagraphBackground(layoutCell, *cellStyle.BackgroundColor)
 				}
 				if cellStyle.hasBorder() {
 					layoutCell.SetBorders(buildCellBorders(cellStyle))
@@ -385,10 +389,15 @@ func (c *converter) convertTableRowKind(n *html.Node, tbl *layout.Table, parentS
 		}
 
 		// Background color: cell CSS > row CSS.
+		// The cell now owns and draws the box fill (honoring border-radius);
+		// clear the same block-level background on the cell's content
+		// Paragraph(s) to avoid a square-cornered overdraw (issue #329).
 		if cellStyle.BackgroundColor != nil {
 			cell.SetBackground(*cellStyle.BackgroundColor)
+			clearCellParagraphBackground(cell, *cellStyle.BackgroundColor)
 		} else if rowStyle.BackgroundColor != nil {
 			cell.SetBackground(*rowStyle.BackgroundColor)
+			clearCellParagraphBackground(cell, *rowStyle.BackgroundColor)
 		}
 
 		// Cell borders: prefer per-cell CSS borders, fall back to table border,

@@ -195,6 +195,28 @@ func (c *Cell) SetBackground(color Color) *Cell {
 	return c
 }
 
+// Content returns the cell's rich content Element, or nil if the cell holds
+// plain text instead. When the cell owns and draws the box fill (background +
+// border-radius), callers use this to detect and clear a redundant
+// block-level background on the content element (see issue #329).
+func (c *Cell) Content() Element { return c.content }
+
+// Background returns a copy of the cell's background fill color, or nil if the
+// cell has no background. A copy is returned so callers cannot mutate the
+// cell's internal fill through the pointer. Provided for testing.
+func (c *Cell) Background() *Color {
+	if c.bgColor == nil {
+		return nil
+	}
+	col := *c.bgColor
+	return &col
+}
+
+// BorderRadii returns the cell's per-corner radii in CSS order
+// (top-left, top-right, bottom-right, bottom-left), in points. A value of 0
+// means the corner is sharp. Provided for testing.
+func (c *Cell) BorderRadii() [4]float64 { return c.borderRadius }
+
 // SetColspan sets the number of columns this cell spans.
 func (c *Cell) SetColspan(n int) *Cell {
 	if n < 1 {
@@ -286,6 +308,13 @@ type Table struct {
 func NewTable() *Table {
 	return &Table{}
 }
+
+// Rows returns the table's rows in order (header, body, and footer rows are
+// all stored in this single slice). Provided for testing.
+func (t *Table) Rows() []*Row { return t.rows }
+
+// Cells returns the row's cells in order. Provided for testing.
+func (r *Row) Cells() []*Cell { return r.cells }
 
 // SetColumnWidths sets explicit column widths in points.
 // If not set, columns are distributed equally within the available width.

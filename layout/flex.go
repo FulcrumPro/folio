@@ -72,6 +72,10 @@ func NewFlexItem(elem Element) *FlexItem {
 	return &FlexItem{element: elem, shrink: 1}
 }
 
+// Element returns the layout element wrapped by this flex item.
+// Provided for testing.
+func (fi *FlexItem) Element() Element { return fi.element }
+
 // SetGrow sets the flex-grow factor.
 func (fi *FlexItem) SetGrow(v float64) *FlexItem { fi.grow = v; return fi }
 
@@ -132,6 +136,10 @@ func (f *Flex) AddItem(item *FlexItem) *Flex {
 	f.items = append(f.items, item)
 	return f
 }
+
+// Items returns the flex container's items in layout order.
+// Provided for testing.
+func (f *Flex) Items() []*FlexItem { return f.items }
 
 // SetDirection sets the main axis direction.
 func (f *Flex) SetDirection(d FlexDirection) *Flex { f.direction = d; return f }

@@ -70,6 +70,9 @@ func (g *Grid) AddChild(e Element) *Grid {
 	return g
 }
 
+// Children returns the grid's child elements in insertion order.
+func (g *Grid) Children() []Element { return g.children }
+
 // SetTemplateColumns sets the column track definitions.
 func (g *Grid) SetTemplateColumns(tracks []GridTrack) *Grid {
 	g.templateCols = tracks

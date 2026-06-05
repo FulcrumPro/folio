@@ -134,7 +134,27 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 			}
 		}
 
-		childElems := c.convertNode(child, style)
+		childStyle := style // default
+		if child.Type == html.ElementNode {
+			childStyle = c.computeElementStyle(child, style)
+		} else {
+			// Text-node children don't carry their own CSS, but they
+			// must not inherit non-inherited properties from the flex
+			// container (notably Order, which would otherwise leak and
+			// reorder text-node siblings alongside element siblings).
+			childStyle.Order = 0
+		}
+
+		// A flex item is blockified (CSS Flexbox §4). When an inline element
+		// (e.g. a bare <span>) carries a visible box (background, border,
+		// and/or border-radius), the bare inline path drops its padding,
+		// border, and radius. Route it through convertBlock so it renders its
+		// full box model identically to display:inline-block (issue #329).
+		// No-op for spans without a box, which stay bare inline Paragraphs.
+		childElems, blockified := c.blockifyInlineBoxChild(child, childStyle)
+		if !blockified {
+			childElems = c.convertNode(child, style)
+		}
 		if len(childElems) == 0 {
 			continue
 		}
@@ -150,17 +170,6 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 				wrapper.Add(ce)
 			}
 			elem = wrapper
-		}
-
-		childStyle := style // default
-		if child.Type == html.ElementNode {
-			childStyle = c.computeElementStyle(child, style)
-		} else {
-			// Text-node children don't carry their own CSS, but they
-			// must not inherit non-inherited properties from the flex
-			// container (notably Order, which would otherwise leak and
-			// reorder text-node siblings alongside element siblings).
-			childStyle.Order = 0
 		}
 
 		// CSS width on a flex child acts as flex-basis (when flex-basis is not set).

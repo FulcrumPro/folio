@@ -171,6 +171,9 @@ func (d *Div) SetPaddingAll(p Padding) *Div {
 	return d
 }
 
+// Padding returns the Div's per-side padding.
+func (d *Div) Padding() Padding { return d.padding }
+
 // SetBorders sets the borders around the Div.
 func (d *Div) SetBorders(b CellBorders) *Div {
 	d.borders = b

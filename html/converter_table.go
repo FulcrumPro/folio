@@ -103,7 +103,7 @@ func (c *converter) convertTable(n *html.Node, style computedStyle) []layout.Ele
 	mb := style.MarginBottomAt(parentContainerWidth)
 	hasTableMargin := mt > 0 || mb > 0
 	hasTableWidth := style.MaxWidth != nil
-	if hasTableMargin || style.BackgroundColor != nil || hasTableWidth {
+	if hasTableMargin || style.BackgroundColor != nil || hasTableWidth || style.hasBorderRadius() {
 		div := layout.NewDiv()
 		div.Add(tbl)
 		if mt > 0 {
@@ -118,6 +118,10 @@ func (c *converter) convertTable(n *html.Node, style computedStyle) []layout.Ele
 		if style.MaxWidth != nil {
 			div.SetMaxWidth(style.MaxWidth.toPoints(parentContainerWidth, style.FontSize))
 		}
+		// Apply the table's CSS border-radius to the wrapper Div so a rounded
+		// table background is honored (issue #329). The child is a Table, not a
+		// matching-bg Paragraph, so no overpaint clearing is needed.
+		applyBorderRadiusToDiv(div, style)
 		// Caption elements come before the table wrapper.
 		elems = append(elems, div)
 		return elems

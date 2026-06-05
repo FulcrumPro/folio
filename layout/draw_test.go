@@ -417,3 +417,55 @@ func TestDrawSaveRestoreBalance(t *testing.T) {
 		t.Errorf("UNBALANCED save/restore: %d q vs %d Q — this will corrupt the graphics state", saves, restores)
 	}
 }
+
+// TestRoundedLeftBorderInnerFill verifies that a solid left-only border on a
+// rounded box is drawn as an INNER filled stripe clipped to the rounded shape
+// (a 're' rectangle filled after a 'W n' clip), not a stroke along the outline.
+// This matches the rounded-blockquote accent fix (issue #329): the accent must
+// sit flush inside the rounded edge, following the corner curves, with no
+// detached outer bracket.
+func TestRoundedLeftBorderInnerFill(t *testing.T) {
+	s := content.NewStream()
+	borders := CellBorders{Left: SolidBorder(3, RGB(0.6, 0.6, 0.6))}
+	rx := [4]float64{10, 10, 10, 10}
+	ry := [4]float64{10, 10, 10, 10}
+	drawRoundedBorders(s, borders, 72, 689.6, 468, 30.4, rx, ry)
+	b := s.Bytes()
+
+	// Must clip (W n), fill a rectangle (re ... f), and NOT stroke (no S).
+	if !containsOp(b, "W") || !containsOp(b, "n") {
+		t.Errorf("rounded solid left border must set a clip (W n); stream:\n%s", b)
+	}
+	if !containsOp(b, "re") {
+		t.Errorf("rounded solid left border must fill a rectangle stripe (re); stream:\n%s", b)
+	}
+	if !containsOp(b, "f") {
+		t.Errorf("rounded solid left border must fill (f) the stripe; stream:\n%s", b)
+	}
+	if containsOp(b, "S") {
+		t.Errorf("rounded solid left border must NOT stroke the outline (no S); stream:\n%s", b)
+	}
+	// Balanced save/restore.
+	if q, qq := countOps(b, "q"), countOps(b, "Q"); q != qq {
+		t.Errorf("unbalanced save/restore: %d q vs %d Q", q, qq)
+	}
+}
+
+// TestRoundedDashedLeftBorderStrokes verifies that a NON-solid (dashed) left
+// border on a rounded box still strokes along the outline (a clipped fill
+// cannot reproduce the dash pattern), so the fallback path is preserved.
+func TestRoundedDashedLeftBorderStrokes(t *testing.T) {
+	s := content.NewStream()
+	borders := CellBorders{Left: DashedBorder(3, RGB(0.6, 0.6, 0.6))}
+	rx := [4]float64{10, 10, 10, 10}
+	ry := [4]float64{10, 10, 10, 10}
+	drawRoundedBorders(s, borders, 72, 689.6, 468, 30.4, rx, ry)
+	b := s.Bytes()
+
+	if !containsOp(b, "S") {
+		t.Errorf("rounded dashed left border must stroke the outline (S); stream:\n%s", b)
+	}
+	if containsOp(b, "re") {
+		t.Errorf("rounded dashed left border must NOT use a filled rect stripe (re); stream:\n%s", b)
+	}
+}

@@ -192,6 +192,39 @@ func (p *Paragraph) ClearBackground() *Paragraph {
 	return p
 }
 
+// ClearMatchingRunBackgrounds removes the per-run/word BackgroundColor highlight
+// from every TextRun whose background equals bg. It returns true if at least one
+// run background was cleared.
+//
+// This exists for the case where an inline element (e.g. a bare <span>) that
+// carries a block-level background is blockified into its own rounded box. The
+// span's CSS background becomes a TextRun.BackgroundColor highlight, which the
+// renderer paints as a plain (square-cornered) rectangle behind the text. When a
+// wrapping Div now owns and draws the rounded box fill, that run highlight is a
+// redundant square overdraw on top of the rounded corners (issue #329). Clearing
+// it leaves a single rounded fill.
+func (p *Paragraph) ClearMatchingRunBackgrounds(bg Color) bool {
+	cleared := false
+	for i := range p.runs {
+		if rc := p.runs[i].BackgroundColor; rc != nil && *rc == bg {
+			p.runs[i].BackgroundColor = nil
+			cleared = true
+		}
+	}
+	return cleared
+}
+
+// HasRunBackground reports whether any TextRun carries a per-run/word
+// BackgroundColor highlight equal to bg.
+func (p *Paragraph) HasRunBackground(bg Color) bool {
+	for i := range p.runs {
+		if rc := p.runs[i].BackgroundColor; rc != nil && *rc == bg {
+			return true
+		}
+	}
+	return false
+}
+
 // SetFirstLineIndent sets the indentation for the first line (in points).
 // This corresponds to the CSS text-indent property.
 func (p *Paragraph) SetFirstLineIndent(pts float64) *Paragraph {

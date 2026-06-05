@@ -5,6 +5,7 @@ package layout
 
 import (
 	"fmt"
+	"math"
 	"unicode/utf8"
 
 	"github.com/carlos7ags/folio/content"
@@ -1006,8 +1007,223 @@ func drawRoundedBorders(stream *content.Stream, borders CellBorders, x, y, w, h 
 		stream.RestoreState()
 		return
 	}
-	// Mixed borders: draw each side individually (straight segments).
-	drawCellBorders(stream, borders, x, y, w, h)
+	// Mixed (or partial) borders. Solid sides are drawn as INNER filled stripes
+	// clipped to the rounded box outline: each side fills the region between the
+	// rounded outer edge and an inset of its border width, so the border sits
+	// fully inside the box and follows the corner curves — flush, with no gap or
+	// detached outer bracket (a centered stroke would straddle the outline and
+	// read as a thin floating arc near the corners; issue #329). Non-solid sides
+	// (dashed/dotted) still stroke along the outline, where a clipped fill cannot
+	// reproduce the dash pattern.
+	if anySolidBorder(borders) {
+		drawRoundedBordersSolidFill(stream, borders, x, y, w, h, rx, ry)
+	}
+	if anyNonSolidBorder(borders) {
+		drawRoundedBordersPerSide(stream, borders, x, y, w, h, rx, ry, true)
+	}
+}
+
+// anySolidBorder reports whether any present side is a solid border.
+func anySolidBorder(b CellBorders) bool {
+	return (b.Top.Width > 0 && b.Top.Style == BorderSolid) ||
+		(b.Right.Width > 0 && b.Right.Style == BorderSolid) ||
+		(b.Bottom.Width > 0 && b.Bottom.Style == BorderSolid) ||
+		(b.Left.Width > 0 && b.Left.Style == BorderSolid)
+}
+
+// anyNonSolidBorder reports whether any present side is a non-solid border
+// (dashed/dotted/double) that still needs the per-side stroked outline.
+func anyNonSolidBorder(b CellBorders) bool {
+	return (b.Top.Width > 0 && b.Top.Style != BorderSolid) ||
+		(b.Right.Width > 0 && b.Right.Style != BorderSolid) ||
+		(b.Bottom.Width > 0 && b.Bottom.Style != BorderSolid) ||
+		(b.Left.Width > 0 && b.Left.Style != BorderSolid)
+}
+
+// drawRoundedBordersSolidFill draws each present SOLID border side as a filled
+// stripe clipped to the rounded box outline. The clip is the same
+// RoundedRectPerCornerXY geometry used for the background, so each stripe is
+// inset from (flush with) the rounded edge and inherits the corner curves:
+// the left side becomes a solid vertical bar [x, x+leftWidth] whose top-left and
+// bottom-left ends are rounded by the clip. Radii are elliptical, indexed
+// [TL, TR, BR, BL] in rx/ry; (x, y) is the bottom-left corner.
+func drawRoundedBordersSolidFill(stream *content.Stream, borders CellBorders, x, y, w, h float64, rx, ry [4]float64) {
+	stream.SaveState()
+	// Clip to the rounded box so every stripe is rounded at the box corners.
+	stream.RoundedRectPerCornerXY(x, y, w, h, rx, ry)
+	stream.ClipNonZero()
+	stream.EndPath()
+
+	if borders.Left.Width > 0 && borders.Left.Style == BorderSolid {
+		stream.SaveState()
+		setFillColor(stream, borders.Left.Color)
+		stream.Rectangle(x, y, borders.Left.Width, h)
+		stream.Fill()
+		stream.RestoreState()
+	}
+	if borders.Right.Width > 0 && borders.Right.Style == BorderSolid {
+		stream.SaveState()
+		setFillColor(stream, borders.Right.Color)
+		stream.Rectangle(x+w-borders.Right.Width, y, borders.Right.Width, h)
+		stream.Fill()
+		stream.RestoreState()
+	}
+	if borders.Top.Width > 0 && borders.Top.Style == BorderSolid {
+		stream.SaveState()
+		setFillColor(stream, borders.Top.Color)
+		stream.Rectangle(x, y+h-borders.Top.Width, w, borders.Top.Width)
+		stream.Fill()
+		stream.RestoreState()
+	}
+	if borders.Bottom.Width > 0 && borders.Bottom.Style == BorderSolid {
+		stream.SaveState()
+		setFillColor(stream, borders.Bottom.Color)
+		stream.Rectangle(x, y, w, borders.Bottom.Width)
+		stream.Fill()
+		stream.RestoreState()
+	}
+
+	stream.RestoreState()
+}
+
+// drawRoundedBordersPerSide strokes each present border side along the rounded
+// box outline, including the two corner arcs adjacent to that side. Radii are
+// elliptical, indexed [TL, TR, BR, BL] in rx/ry; (x, y) is the bottom-left.
+// Each side owns its two corner arcs (corners are stroked by both adjacent
+// sides, matching the all-equal fast path's single closed outline). A side with
+// zero width is skipped, so a left-only accent on a rounded box draws only the
+// left edge plus its TL/BL arcs and never protrudes past the curve.
+// When nonSolidOnly is true, only non-solid sides (dashed/dotted/double) are
+// stroked here; solid sides are drawn separately as clipped inner fills.
+func drawRoundedBordersPerSide(stream *content.Stream, borders CellBorders, x, y, w, h float64, rx, ry [4]float64, nonSolidOnly bool) {
+	if nonSolidOnly {
+		if borders.Top.Style == BorderSolid {
+			borders.Top = Border{}
+		}
+		if borders.Right.Style == BorderSolid {
+			borders.Right = Border{}
+		}
+		if borders.Bottom.Style == BorderSolid {
+			borders.Bottom = Border{}
+		}
+		if borders.Left.Style == BorderSolid {
+			borders.Left = Border{}
+		}
+	}
+	const (
+		tl = 0
+		tr = 1
+		br = 2
+		bl = 3
+	)
+	const k = 0.5522847498 // Bézier approximation for quarter ellipse arcs.
+
+	// Proportionally reduce radii so no edge is over-subscribed by its two
+	// adjacent corners (CSS Backgrounds and Borders L3 §5.5), matching
+	// RoundedRectPerCornerXY so the per-side arcs align with the box outline.
+	for i := range rx {
+		if rx[i] < 0 {
+			rx[i] = 0
+		}
+		if ry[i] < 0 {
+			ry[i] = 0
+		}
+	}
+	f := 1.0
+	if sum := rx[tl] + rx[tr]; sum > 0 {
+		f = math.Min(f, w/sum)
+	}
+	if sum := rx[bl] + rx[br]; sum > 0 {
+		f = math.Min(f, w/sum)
+	}
+	if sum := ry[tl] + ry[bl]; sum > 0 {
+		f = math.Min(f, h/sum)
+	}
+	if sum := ry[tr] + ry[br]; sum > 0 {
+		f = math.Min(f, h/sum)
+	}
+	if f < 1 {
+		for i := range rx {
+			rx[i] *= f
+			ry[i] *= f
+		}
+	}
+
+	// Bottom border: BL corner arc → bottom edge → BR corner arc.
+	if borders.Bottom.Width > 0 {
+		stream.SaveState()
+		setStrokeColor(stream, borders.Bottom.Color)
+		stream.SetLineWidth(borders.Bottom.Width)
+		if rx[bl] > 0 || ry[bl] > 0 {
+			stream.MoveTo(x, y+ry[bl])
+			stream.CurveTo(x, y+ry[bl]-ry[bl]*k, x+rx[bl]-rx[bl]*k, y, x+rx[bl], y)
+		} else {
+			stream.MoveTo(x, y)
+		}
+		stream.LineTo(x+w-rx[br], y)
+		if rx[br] > 0 || ry[br] > 0 {
+			stream.CurveTo(x+w-rx[br]+rx[br]*k, y, x+w, y+ry[br]-ry[br]*k, x+w, y+ry[br])
+		}
+		stream.Stroke()
+		stream.RestoreState()
+	}
+
+	// Right border: BR corner arc → right edge → TR corner arc.
+	if borders.Right.Width > 0 {
+		stream.SaveState()
+		setStrokeColor(stream, borders.Right.Color)
+		stream.SetLineWidth(borders.Right.Width)
+		if rx[br] > 0 || ry[br] > 0 {
+			stream.MoveTo(x+w-rx[br], y)
+			stream.CurveTo(x+w-rx[br]+rx[br]*k, y, x+w, y+ry[br]-ry[br]*k, x+w, y+ry[br])
+		} else {
+			stream.MoveTo(x+w, y)
+		}
+		stream.LineTo(x+w, y+h-ry[tr])
+		if rx[tr] > 0 || ry[tr] > 0 {
+			stream.CurveTo(x+w, y+h-ry[tr]+ry[tr]*k, x+w-rx[tr]+rx[tr]*k, y+h, x+w-rx[tr], y+h)
+		}
+		stream.Stroke()
+		stream.RestoreState()
+	}
+
+	// Top border: TR corner arc → top edge → TL corner arc.
+	if borders.Top.Width > 0 {
+		stream.SaveState()
+		setStrokeColor(stream, borders.Top.Color)
+		stream.SetLineWidth(borders.Top.Width)
+		if rx[tr] > 0 || ry[tr] > 0 {
+			stream.MoveTo(x+w, y+h-ry[tr])
+			stream.CurveTo(x+w, y+h-ry[tr]+ry[tr]*k, x+w-rx[tr]+rx[tr]*k, y+h, x+w-rx[tr], y+h)
+		} else {
+			stream.MoveTo(x+w, y+h)
+		}
+		stream.LineTo(x+rx[tl], y+h)
+		if rx[tl] > 0 || ry[tl] > 0 {
+			stream.CurveTo(x+rx[tl]-rx[tl]*k, y+h, x, y+h-ry[tl]+ry[tl]*k, x, y+h-ry[tl])
+		}
+		stream.Stroke()
+		stream.RestoreState()
+	}
+
+	// Left border: TL corner arc → left edge → BL corner arc.
+	if borders.Left.Width > 0 {
+		stream.SaveState()
+		setStrokeColor(stream, borders.Left.Color)
+		stream.SetLineWidth(borders.Left.Width)
+		if rx[tl] > 0 || ry[tl] > 0 {
+			stream.MoveTo(x+rx[tl], y+h)
+			stream.CurveTo(x+rx[tl]-rx[tl]*k, y+h, x, y+h-ry[tl]+ry[tl]*k, x, y+h-ry[tl])
+		} else {
+			stream.MoveTo(x, y+h)
+		}
+		stream.LineTo(x, y+ry[bl])
+		if rx[bl] > 0 || ry[bl] > 0 {
+			stream.CurveTo(x, y+ry[bl]-ry[bl]*k, x+rx[bl]-rx[bl]*k, y, x+rx[bl], y)
+		}
+		stream.Stroke()
+		stream.RestoreState()
+	}
 }
 
 // resolveBgPositionAxis resolves a single axis of background-position to

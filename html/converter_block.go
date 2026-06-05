@@ -208,17 +208,119 @@ func (c *converter) convertBlock(n *html.Node, style computedStyle) []layout.Ele
 // (issue #329). Since the container already paints the fill, the child's copy
 // is redundant; clearing it removes the overdraw.
 //
-// Only the paragraph-level background is cleared. Per-run/word BackgroundColor
-// (inline <span> highlights) lives on the TextRuns, not on p.background, and is
-// left untouched.
+// Both the paragraph-level background and any matching per-run/word
+// BackgroundColor (inline <span> highlights) are cleared. The run-level case
+// matters for a blockified inline element: a bare <span> with a background
+// produces a Paragraph whose single TextRun also carries that background as a
+// highlight, which the renderer paints as a square rectangle behind the text —
+// a redundant square overdraw on top of the wrapping container's rounded fill
+// (issue #329). Only run backgrounds equal to bg are cleared, so unrelated
+// inline highlights of a different color are preserved.
 func clearMatchingParagraphBackgrounds(elems []layout.Element, bg layout.Color) {
 	for _, e := range elems {
 		if p, ok := e.(*layout.Paragraph); ok {
 			if pbg := p.Background(); pbg != nil && *pbg == bg {
 				p.ClearBackground()
 			}
+			p.ClearMatchingRunBackgrounds(bg)
 		}
 	}
+}
+
+// hasBorderRadius reports whether the computed style declares any border-radius,
+// absolute or percentage, on any corner.
+func (s computedStyle) hasBorderRadius() bool {
+	return s.BorderRadius > 0 ||
+		s.BorderRadiusTL > 0 || s.BorderRadiusTR > 0 ||
+		s.BorderRadiusBR > 0 || s.BorderRadiusBL > 0 ||
+		s.BorderRadiusTLPct > 0 || s.BorderRadiusTRPct > 0 ||
+		s.BorderRadiusBRPct > 0 || s.BorderRadiusBLPct > 0
+}
+
+// applyBorderRadiusToDiv transfers the computed style's border-radius (absolute
+// per-corner / uniform, plus percentage corners) onto a Div. Extracted from
+// applyDivStyles so hand-built wrapper Divs (blockquote, figure, table, and the
+// flex/grid blockified-item wrapper) can paint rounded fills too (issue #329).
+func applyBorderRadiusToDiv(div *layout.Div, style computedStyle) {
+	if style.BorderRadiusTL > 0 || style.BorderRadiusTR > 0 || style.BorderRadiusBR > 0 || style.BorderRadiusBL > 0 {
+		div.SetBorderRadiusPerCorner(style.BorderRadiusTL, style.BorderRadiusTR, style.BorderRadiusBR, style.BorderRadiusBL)
+	} else if style.BorderRadius > 0 {
+		div.SetBorderRadius(style.BorderRadius)
+	}
+	// Percentage radii resolve against the box width/height at draw time
+	// (elliptical corners); pass them through even when no absolute radius
+	// is set so a percentage-only border-radius still rounds.
+	if style.BorderRadiusTLPct > 0 || style.BorderRadiusTRPct > 0 || style.BorderRadiusBRPct > 0 || style.BorderRadiusBLPct > 0 {
+		div.SetBorderRadiusPercent([4]float64{
+			style.BorderRadiusTLPct, style.BorderRadiusTRPct,
+			style.BorderRadiusBRPct, style.BorderRadiusBLPct,
+		})
+	}
+}
+
+// isDefaultInlineAtom reports whether the element's tag is one that defaults to
+// inline display (and would otherwise route through convertInlineContainer).
+func isDefaultInlineAtom(a atom.Atom) bool {
+	switch a {
+	case atom.Span, atom.Em, atom.Strong, atom.B, atom.I, atom.U, atom.S,
+		atom.Del, atom.Mark, atom.Small, atom.Sub, atom.Sup, atom.Code:
+		return true
+	}
+	return false
+}
+
+// blockifyInlineBoxChild handles the issue #329/#340 case where an inline
+// element (e.g. a bare <span>) that carries a rounded box (a border-radius with
+// a background and/or border) is a flex or grid item. CSS blockifies flex/grid
+// items, so such a span must render its full box model — padding, border,
+// background, rounded fill — exactly like display:inline-block already does.
+//
+// The plain inline path (convertInlineContainer) yields a single bare Paragraph
+// that only paints a square run/paragraph background and DROPS the element's
+// padding, border, and border-radius. To render identically to inline-block,
+// this routes the child through convertBlock (the same full box-model path that
+// display:inline-block uses) and marks the resulting Div shrink-to-fit so it
+// sizes to its content and flows like an atomic inline box — leaving the
+// flex/grid basis/grow/shrink sizing to operate on that content width.
+//
+// Returns (elements, true) when it blockified the child; (nil, false) when the
+// child is not a bare inline element carrying a box, so callers fall back to
+// their normal conversion. Spans WITHOUT a box stay bare inline Paragraphs (no
+// regression).
+func (c *converter) blockifyInlineBoxChild(child *html.Node, childStyle computedStyle) ([]layout.Element, bool) {
+	if child.Type != html.ElementNode || !isDefaultInlineAtom(child.DataAtom) {
+		return nil, false
+	}
+	// Only intercept children that would route to the bare inline path. An
+	// explicit display override (block/inline-block/flex/grid/none) is already
+	// handled correctly by convertNode, so leave those alone.
+	switch childStyle.Display {
+	case "block", "inline-block", "flex", "grid", "none":
+		return nil, false
+	}
+	// Only blockify when the element carries a border-radius together with a
+	// fill or border — the box the bare inline path genuinely cannot render
+	// (it drops the radius and paints a square highlight, and also drops the
+	// padding/border). This mirrors the display:block routing in convertNode.
+	// A bare background WITHOUT a radius stays inline (a Paragraph still paints
+	// its own square highlight, matching prior behavior — no regression), so we
+	// do not intercept it.
+	hasBox := childStyle.hasBorderRadius() &&
+		(childStyle.BackgroundColor != nil || childStyle.hasBorder())
+	if !hasBox {
+		return nil, false
+	}
+	elems := c.convertBlock(child, childStyle)
+	if len(elems) == 0 {
+		return nil, false
+	}
+	// Shrink-to-fit so the blockified box sizes to its content (CSS
+	// fit-content) and behaves as an atomic inline box, matching the
+	// display:inline-block path (convertInlineBlockElement).
+	if div, ok := elems[0].(*layout.Div); ok {
+		div.SetShrinkToFit(true)
+	}
+	return elems, true
 }
 
 // clearCellParagraphBackground clears the redundant block-level background on a
@@ -338,20 +440,7 @@ func applyDivStyles(div *layout.Div, style computedStyle, containerWidth float64
 	if style.AspectRatio > 0 {
 		div.SetAspectRatio(style.AspectRatio)
 	}
-	if style.BorderRadiusTL > 0 || style.BorderRadiusTR > 0 || style.BorderRadiusBR > 0 || style.BorderRadiusBL > 0 {
-		div.SetBorderRadiusPerCorner(style.BorderRadiusTL, style.BorderRadiusTR, style.BorderRadiusBR, style.BorderRadiusBL)
-	} else if style.BorderRadius > 0 {
-		div.SetBorderRadius(style.BorderRadius)
-	}
-	// Percentage radii resolve against the box width/height at draw time
-	// (elliptical corners); pass them through even when no absolute radius
-	// is set so a percentage-only border-radius still rounds.
-	if style.BorderRadiusTLPct > 0 || style.BorderRadiusTRPct > 0 || style.BorderRadiusBRPct > 0 || style.BorderRadiusBLPct > 0 {
-		div.SetBorderRadiusPercent([4]float64{
-			style.BorderRadiusTLPct, style.BorderRadiusTRPct,
-			style.BorderRadiusBRPct, style.BorderRadiusBLPct,
-		})
-	}
+	applyBorderRadiusToDiv(div, style)
 	if style.Clear != "" && style.Clear != "none" {
 		div.SetClear(style.Clear)
 	}
@@ -626,7 +715,12 @@ func (c *converter) convertBlockquote(n *html.Node, style computedStyle) []layou
 		div.Add(child)
 	}
 
-	// Left border: 3pt solid gray.
+	// Default accent: a 3pt solid gray left border. With a border-radius the
+	// accent renders as an INNER filled stripe clipped to the rounded box, flush
+	// with the left edge and following the rounded top-left/bottom-left corners
+	// (a solid left portion of the card, not a detached outer stroke) — matching
+	// a browser's border-left + border-radius (issue #329). Without a radius it
+	// stays a straight 3pt left bar. An explicit CSS border overrides this below.
 	gray := layout.RGB(0.6, 0.6, 0.6)
 	div.SetBorders(layout.CellBorders{
 		Left: layout.SolidBorder(3, gray),
@@ -657,6 +751,14 @@ func (c *converter) convertBlockquote(n *html.Node, style computedStyle) []layou
 			Bottom: style.PaddingBottomAt(c.containerWidth),
 			Left:   style.PaddingLeftAt(c.containerWidth),
 		})
+	}
+	// Apply any CSS border-radius so a rounded blockquote background is honored.
+	applyBorderRadiusToDiv(div, style)
+	// The Div now owns and draws the box background (honoring border-radius);
+	// clear the redundant block-level background on direct child paragraphs to
+	// avoid a square-cornered overdraw on top of the rounded fill (issue #329).
+	if style.BackgroundColor != nil {
+		clearMatchingParagraphBackgrounds(div.Children(), *style.BackgroundColor)
 	}
 
 	return []layout.Element{div}
@@ -741,6 +843,10 @@ func (c *converter) convertFigure(n *html.Node, style computedStyle) []layout.El
 	if style.BackgroundColor != nil {
 		div.SetBackground(*style.BackgroundColor)
 	}
+	// Apply any CSS border-radius so a rounded figure background is honored
+	// (issue #329). The figure's children are not matching-bg paragraphs, so
+	// no overpaint clearing is needed here.
+	applyBorderRadiusToDiv(div, style)
 
 	for child := n.FirstChild; child != nil; child = child.NextSibling {
 		if child.Type != html.ElementNode {

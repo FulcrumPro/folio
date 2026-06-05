@@ -1765,6 +1765,18 @@ func (c *converter) convertElementInner(n *html.Node, style computedStyle) []lay
 		return c.convertFigure(n, style)
 	case atom.Span, atom.Em, atom.Strong, atom.B, atom.I, atom.U, atom.S,
 		atom.Del, atom.Mark, atom.Small, atom.Sub, atom.Sup, atom.Code:
+		// A default-inline element set to display:block that carries a
+		// block-level box (a border-radius with a background or border) must
+		// own a rounded fill, like display:inline-block already does. The
+		// inline path (convertInlineContainer) only produces a bare Paragraph
+		// that drops the radius and paints a square background, so route these
+		// through convertBlock, which builds a Div via applyDivStyles and
+		// clears the redundant child-paragraph background (issue #329). Spans
+		// without such a box stay on the inline path (no regression).
+		if style.Display == "block" && style.hasBorderRadius() &&
+			(style.BackgroundColor != nil || style.hasBorder()) {
+			return c.convertBlock(n, style)
+		}
 		return c.convertInlineContainer(n, style)
 	case atom.Table:
 		return c.convertTable(n, style)

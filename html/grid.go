@@ -141,14 +141,23 @@ func (c *converter) convertGrid(n *html.Node, style computedStyle) []layout.Elem
 	// Add children and their placements.
 	childIdx := 0
 	for child := n.FirstChild; child != nil; child = child.NextSibling {
-		childElems := c.convertNode(child, style)
-		if len(childElems) == 0 {
-			continue
-		}
-
 		childStyle := style
 		if child.Type == html.ElementNode {
 			childStyle = c.computeElementStyle(child, style)
+		}
+
+		// A grid item is blockified (CSS Grid §6.4). When an inline element
+		// (e.g. a bare <span>) carries a visible box (background, border,
+		// and/or border-radius), the bare inline path drops its padding,
+		// border, and radius. Route it through convertBlock so it renders its
+		// full box model identically to display:inline-block (issue #329).
+		// No-op for spans without a box.
+		childElems, blockified := c.blockifyInlineBoxChild(child, childStyle)
+		if !blockified {
+			childElems = c.convertNode(child, style)
+		}
+		if len(childElems) == 0 {
+			continue
 		}
 
 		for _, elem := range childElems {

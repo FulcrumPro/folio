@@ -5,9 +5,8 @@ package barcode
 
 import "fmt"
 
-// Code128 generates a Code 128 barcode from a string.
-// Supports the full ASCII character set (Code B).
-// Returns an error if the input contains characters outside ASCII 0-127.
+// NewCode128 generates a Code 128 barcode from a string using Code B.
+// Code B covers ASCII 32-127; characters outside that range return an error.
 func NewCode128(data string) (*Barcode, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("barcode: empty data")

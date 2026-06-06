@@ -271,6 +271,143 @@ func TestLiPercentPaddingResolvesAgainstContentColumn(t *testing.T) {
 	}
 }
 
+// elementBoxWidth returns the width of the styled-box container block for an
+// element list item: the widest block under the "L" wrapper that is not the
+// marker block (leaf "LI" at X==0 width==indent). This is the drawn width of
+// the <li>'s wrapping Div.
+func elementBoxWidth(blocks []layout.PlacedBlock) (float64, bool) {
+	best := 0.0
+	found := false
+	var walk func(bs []layout.PlacedBlock, offX float64)
+	walk = func(bs []layout.PlacedBlock, offX float64) {
+		for _, b := range bs {
+			// Skip the "L" structure wrapper (full-list width) and the marker
+			// leaf (X==0, width==indent), measuring the actual content box.
+			isWrapper := b.Tag == "L"
+			isMarker := b.Tag == "LI" && offX+b.X == 0 && b.Width == 18 && len(b.Children) == 0
+			if !isWrapper && !isMarker && b.Width > 0 {
+				if b.Width > best {
+					best = b.Width
+					found = true
+				}
+			}
+			walk(b.Children, offX+b.X)
+		}
+	}
+	walk(blocks, 0)
+	return best, found
+}
+
+// TestLiInlineBlockHugsVsBlockFills is the key behavioral contrast for #343:
+// the same styled <li> content hugs (narrow box) when display:inline-block and
+// fills the content column when block. The inline-block box must be strictly
+// narrower than the block box.
+func TestLiInlineBlockHugsVsBlockFills(t *testing.T) {
+	const pageW = 400.0
+	inlineHTML := `<ul><li style="display:inline-block;background:#eee;border-radius:6px;padding:3px 8px">chip</li></ul>`
+	blockHTML := `<ul><li style="display:block;background:#eee;border-radius:6px;padding:3px 8px">chip</li></ul>`
+
+	inlineElems, err := Convert(inlineHTML, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockElems, err := Convert(blockHTML, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inlineW, ok := elementBoxWidth(inlineElems[0].PlanLayout(layout.LayoutArea{Width: pageW, Height: 1000}).Blocks)
+	if !ok {
+		t.Fatal("no inline-block element box found")
+	}
+	blockW, ok := elementBoxWidth(blockElems[0].PlanLayout(layout.LayoutArea{Width: pageW, Height: 1000}).Blocks)
+	if !ok {
+		t.Fatal("no block element box found")
+	}
+	if inlineW >= blockW {
+		t.Errorf("inline-block box width %.3f should be < block box width %.3f (it should hug)", inlineW, blockW)
+	}
+}
+
+// TestLiInlineBlockHugsContent confirms an inline-block <li> lays out narrower
+// than the full content column (it hugs its text), with the marker beside it.
+func TestLiInlineBlockHugsContent(t *testing.T) {
+	const pageW = 400.0
+	htmlStr := `<ul><li style="display:inline-block;background:#eee;border-radius:6px;padding:3px 8px">chip</li></ul>`
+	elems, err := Convert(htmlStr, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := elems[0].PlanLayout(layout.LayoutArea{Width: pageW, Height: 1000})
+
+	const indent = 18.0
+	contentCol := pageW - indent // 382
+	boxW, ok := elementBoxWidth(plan.Blocks)
+	if !ok {
+		t.Fatal("no element box found")
+	}
+	if boxW >= contentCol {
+		t.Errorf("inline-block <li> box width %.3f should be < content column %.0f (it should hug)", boxW, contentCol)
+	}
+	// The box must still draw a background (it went through the styled element path).
+	ops := drawPlanToStream(plan)
+	if !strings.Contains(ops, "0.933333 0.933333 0.933333 rg") {
+		t.Errorf("expected #eee background fill on hugging box, got:\n%s", ops)
+	}
+}
+
+// TestLiExplicitWidthBadgeRespectsWidth confirms a badge <li> with an explicit
+// CSS width lays the box out at that width (a ~28pt circle hugging the digit),
+// not the full content column (#343).
+func TestLiExplicitWidthBadgeRespectsWidth(t *testing.T) {
+	const pageW = 400.0
+	htmlStr := `<ul><li style="display:inline-block;background:#4F46E5;color:#fff;border-radius:50%;width:28px;height:28px;text-align:center">4</li></ul>`
+	elems, err := Convert(htmlStr, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := elems[0].PlanLayout(layout.LayoutArea{Width: pageW, Height: 1000})
+
+	boxW, ok := elementBoxWidth(plan.Blocks)
+	if !ok {
+		t.Fatal("no element box found")
+	}
+	// 28px resolves to 21pt (CSS px → PDF points at 0.75). The box must
+	// respect that explicit width, not fill the content column or shrink to
+	// the single digit.
+	if diff := boxW - 21.0; diff < -0.5 || diff > 0.5 {
+		t.Errorf("badge box width = %.3f, want ≈21 (explicit width 28px = 21pt)", boxW)
+	}
+	// Confirm the circle fill is painted.
+	ops := drawPlanToStream(plan)
+	if !strings.Contains(ops, "0.309804 0.27451 0.898039 rg") {
+		t.Errorf("expected indigo badge fill, got:\n%s", ops)
+	}
+}
+
+// TestLiBlockNoWidthFillsColumn is the regression guard: a normal block-flow
+// <li> (no inline-block, no width) still fills the content column.
+func TestLiBlockNoWidthFillsColumn(t *testing.T) {
+	const pageW = 400.0
+	// Block child (a <div>) forces the element path; background makes the box
+	// width observable. No display:inline-block and no explicit width.
+	htmlStr := `<ul><li style="background:#eee"><div>body</div></li></ul>`
+	elems, err := Convert(htmlStr, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := elems[0].PlanLayout(layout.LayoutArea{Width: pageW, Height: 1000})
+
+	const indent = 18.0
+	contentCol := pageW - indent // 382
+	boxW, ok := elementBoxWidth(plan.Blocks)
+	if !ok {
+		t.Fatal("no element box found")
+	}
+	if diff := boxW - contentCol; diff < -1 || diff > 1 {
+		t.Errorf("block <li> box width = %.3f, want ≈%.0f (full content column)", boxW, contentCol)
+	}
+}
+
 // TestLiStyledBoxIsElementItem confirms a styled <li> goes through the element
 // path (single multi-line-capable item) rather than the inline runs path.
 func TestLiStyledBoxIsElementItem(t *testing.T) {

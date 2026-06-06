@@ -227,6 +227,27 @@ func clearMatchingParagraphBackgrounds(elems []layout.Element, bg layout.Color) 
 	}
 }
 
+// clearMatchingBackgroundsRecursive is clearMatchingParagraphBackgrounds applied
+// at every depth: it clears matching paragraph/run backgrounds on direct child
+// Paragraphs and descends into any child Div to reach paragraphs nested inside
+// inner wrapper Divs (e.g. an <li> whose block-flow children are wrapped). It
+// does NOT clear a nested Div's own background — that Div owns and draws its own
+// (possibly rounded) fill, so only redundant paragraph/run overpaints are
+// removed.
+func clearMatchingBackgroundsRecursive(elems []layout.Element, bg layout.Color) {
+	for _, e := range elems {
+		switch v := e.(type) {
+		case *layout.Paragraph:
+			if pbg := v.Background(); pbg != nil && *pbg == bg {
+				v.ClearBackground()
+			}
+			v.ClearMatchingRunBackgrounds(bg)
+		case *layout.Div:
+			clearMatchingBackgroundsRecursive(v.Children(), bg)
+		}
+	}
+}
+
 // hasBorderRadius reports whether the computed style declares any border-radius,
 // absolute or percentage, on any corner.
 func (s computedStyle) hasBorderRadius() bool {

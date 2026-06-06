@@ -37,18 +37,32 @@ type List struct {
 }
 
 // listItem is a single entry in a list, optionally containing a nested sub-list.
-// When runs is non-nil, the item renders as a styled paragraph (supporting
-// links, mixed fonts, etc.); otherwise it uses the plain text field.
+// When element is non-nil, the item renders that rich element (block-level
+// children, a styled box, etc.) and the marker is aligned to the first text
+// line of the element. Otherwise, when runs is non-nil the item renders as a
+// styled paragraph (supporting links, mixed fonts, etc.); otherwise it uses
+// the plain text field.
 type listItem struct {
 	text    string
 	runs    []TextRun // styled runs (nil = use plain text)
+	element Element   // rich content; overrides text/runs when set
 	subList *List     // optional nested list
+
+	// suppressMarker is set on a continuation fragment produced when an
+	// element item splits across pages. The marker (bullet/number) is drawn
+	// only on the first fragment, so continuation fragments suppress it.
+	suppressMarker bool
 }
 
 // listLayoutRef carries list-specific rendering info on a Line.
 type listLayoutRef struct {
 	markerWords []Word  // words for the bullet/number (first line only)
 	indent      float64 // left indent for the item text
+
+	// element item fields (set when the item renders a rich Element)
+	element       Element // non-nil for rich-content items
+	elementWidth  float64 // layout width for the element (content column)
+	markerOffsetY float64 // baseline of the first text line, from the line top
 }
 
 // NewList creates an unordered list with a standard font.
@@ -83,6 +97,14 @@ func (l *List) SetStyle(s ListStyle) *List {
 func (l *List) SetIndent(indent float64) *List {
 	l.indent = indent
 	return l
+}
+
+// Indent returns the left indent for item text. Item content (text runs or a
+// rich element) is laid out in the column from this indent to the available
+// width, so percentage box-model values on an element item must resolve
+// against (availableWidth - Indent).
+func (l *List) Indent() float64 {
+	return l.indent
 }
 
 // SetLeading sets the line height multiplier.
@@ -147,6 +169,31 @@ func (l *List) AddItemRunsWithSubList(runs []TextRun) *List {
 	return sub
 }
 
+// AddItemElement adds an item whose content is a rich Element (for
+// block-level <li> children or a styled <li> box). The list marker is
+// aligned to the first text line of the element rather than rendered
+// inline with text runs. The element is laid out within the item's
+// content column (to the right of the marker).
+func (l *List) AddItemElement(elem Element) *List {
+	l.items = append(l.items, listItem{element: elem})
+	return l
+}
+
+// AddItemElementWithSubList adds a rich-element item and returns a nested
+// sub-list under it. The sub-list inherits the parent's font and font size.
+func (l *List) AddItemElementWithSubList(elem Element) *List {
+	sub := &List{
+		style:    ListUnordered,
+		font:     l.font,
+		embedded: l.embedded,
+		fontSize: l.fontSize,
+		indent:   l.indent,
+		leading:  l.leading,
+	}
+	l.items = append(l.items, listItem{element: elem, subList: sub})
+	return sub
+}
+
 // AddItemWithSubList adds a text item and returns a nested sub-list
 // under that item. The sub-list inherits the parent's font and font size.
 func (l *List) AddItemWithSubList(text string) *List {
@@ -176,23 +223,17 @@ func (l *List) layoutAt(maxWidth float64, baseIndent float64) []Line {
 	itemWidth := maxWidth - totalIndent
 
 	for i, item := range l.items {
-		marker := l.marker(i)
+		// Element items: lay the element out in the content column and
+		// align the marker to the first text line of the element.
+		if item.element != nil {
+			allLines = append(allLines, l.layoutElementItem(item, i, maxWidth, totalIndent, itemWidth)...)
+			if item.subList != nil {
+				allLines = append(allLines, item.subList.layoutAt(maxWidth, totalIndent)...)
+			}
+			continue
+		}
 
-		// Create a paragraph for the marker.
-		markerSize := l.fontSize
-		if l.markerFontSize > 0 {
-			markerSize = l.markerFontSize
-		}
-		var markerPara *Paragraph
-		if l.embedded != nil {
-			markerPara = NewParagraphEmbedded(marker, l.embedded, markerSize)
-		} else {
-			markerPara = NewParagraph(marker, l.font, markerSize)
-		}
-		if l.markerColor != nil {
-			markerPara.runs[0].Color = *l.markerColor
-		}
-		markerPara.SetLeading(l.leading)
+		markerPara := l.markerParagraph(i)
 		markerLines := markerPara.Layout(l.indent)
 
 		// Create a paragraph for the item text.
@@ -239,12 +280,57 @@ func (l *List) layoutAt(maxWidth float64, baseIndent float64) []Line {
 	return allLines
 }
 
+// layoutElementItem produces the lines for a rich-element list item. The
+// element is laid out in the content column (width = itemWidth) and emitted
+// as a single synthetic line carrying the element; the marker is aligned to
+// the first text line of the element via markerOffsetY.
+func (l *List) layoutElementItem(item listItem, index int, maxWidth, totalIndent, itemWidth float64) []Line {
+	plan := item.element.PlanLayout(LayoutArea{Width: itemWidth, Height: 1e9})
+
+	markerPara := l.markerParagraph(index)
+	markerLines := markerPara.Layout(l.indent)
+	var markerWords []Word
+	if len(markerLines) > 0 {
+		markerWords = markerLines[0].Words
+	}
+
+	// Align the marker baseline to the first text line of the element.
+	firstY, firstH, ok := firstLeafLine(plan.Blocks)
+	markerOffsetY := 0.0
+	if ok {
+		markerOffsetY = firstY + computeBaseline(markerWords, firstH)
+	} else {
+		markerOffsetY = computeBaseline(markerWords, l.fontSize*l.leading)
+	}
+
+	line := Line{
+		Height: plan.Consumed,
+		IsLast: true,
+		listRef: &listLayoutRef{
+			markerWords:   markerWords,
+			indent:        totalIndent,
+			element:       item.element,
+			elementWidth:  itemWidth,
+			markerOffsetY: markerOffsetY,
+		},
+	}
+	return []Line{line}
+}
+
 // MinWidth implements Measurable. Returns indent + widest word.
 func (l *List) MinWidth() float64 {
 	maxW := 0.0
+	measurer := l.measurer()
 	for _, item := range l.items {
+		if item.element != nil {
+			if m, ok := item.element.(Measurable); ok {
+				if w := m.MinWidth(); w > maxW {
+					maxW = w
+				}
+			}
+			continue
+		}
 		text := l.itemText(item)
-		measurer := l.measurer()
 		for _, w := range splitWords(text) {
 			ww := measurer.MeasureString(w, l.fontSize)
 			if ww > maxW {
@@ -260,6 +346,14 @@ func (l *List) MaxWidth() float64 {
 	maxW := 0.0
 	measurer := l.measurer()
 	for _, item := range l.items {
+		if item.element != nil {
+			if m, ok := item.element.(Measurable); ok {
+				if w := m.MaxWidth(); w > maxW {
+					maxW = w
+				}
+			}
+			continue
+		}
 		text := l.itemText(item)
 		ww := measurer.MeasureString(text, l.fontSize)
 		if ww > maxW {
@@ -279,6 +373,57 @@ func (l *List) itemParagraph(item listItem) *Paragraph {
 		return NewParagraphEmbedded(item.text, l.embedded, l.fontSize)
 	}
 	return NewParagraph(item.text, l.font, l.fontSize)
+}
+
+// markerParagraph builds the marker paragraph for the item at index,
+// applying the list's marker font size and color overrides.
+func (l *List) markerParagraph(index int) *Paragraph {
+	marker := l.marker(index)
+	markerSize := l.fontSize
+	if l.markerFontSize > 0 {
+		markerSize = l.markerFontSize
+	}
+	var markerPara *Paragraph
+	if l.embedded != nil {
+		markerPara = NewParagraphEmbedded(marker, l.embedded, markerSize)
+	} else {
+		markerPara = NewParagraph(marker, l.font, markerSize)
+	}
+	if l.markerColor != nil {
+		markerPara.runs[0].Color = *l.markerColor
+	}
+	markerPara.SetLeading(l.leading)
+	return markerPara
+}
+
+// firstLeafLine descends a placed-block tree and returns the relative Y
+// offset and height of the first (topmost, then leftmost) leaf block that
+// carries content (non-zero height). The Y is accumulated through container
+// blocks so it is relative to the top of the supplied block slice. The
+// boolean is false when no content leaf is found (e.g. an empty element).
+func firstLeafLine(blocks []PlacedBlock) (y, height float64, ok bool) {
+	bestSet := false
+	var bestY, bestH float64
+	var walk func(bs []PlacedBlock, offY float64)
+	walk = func(bs []PlacedBlock, offY float64) {
+		for _, b := range bs {
+			absY := offY + b.Y
+			if len(b.Children) > 0 {
+				walk(b.Children, absY)
+				continue
+			}
+			if b.Height <= 0 {
+				continue
+			}
+			if !bestSet || absY < bestY {
+				bestSet = true
+				bestY = absY
+				bestH = b.Height
+			}
+		}
+	}
+	walk(blocks, 0)
+	return bestY, bestH, bestSet
 }
 
 // itemText returns the plain text of a list item for measurement.
@@ -323,23 +468,66 @@ func (l *List) planAt(area LayoutArea, baseIndent float64) LayoutPlan {
 	allFit := true
 
 	for i, item := range l.items {
-		marker := l.marker(i)
+		// Element items: lay the element out in the content column and
+		// align the marker to the first text line of the element.
+		if item.element != nil {
+			elemBlocks, consumed, status, elemOverflow := l.planElementItem(item, i, area, totalIndent, itemWidth, curY)
 
-		// Measure marker words.
-		markerSize := l.fontSize
-		if l.markerFontSize > 0 {
-			markerSize = l.markerFontSize
+			// The element could not place anything in the remaining area.
+			// If other content already sits on this page, defer the whole
+			// item (and the rest of the list) to the next page. Otherwise we
+			// are at the top of an empty area: fall through to place whatever
+			// the element can produce (LayoutNothing yields no blocks) so we
+			// never loop forever on a too-tall first item.
+			if status == LayoutNothing && len(blocks) > 0 {
+				return LayoutPlan{
+					Status: LayoutPartial, Consumed: curY,
+					Blocks: wrapListBlocks(blocks, area.Width, curY), Overflow: l.overflowFrom(i),
+				}
+			}
+
+			// The element partially fit: emit the part that fit (marker on
+			// this fragment only) and continue the remaining list with the
+			// element replaced by its overflow, marker suppressed.
+			if status == LayoutPartial {
+				// Guard against an infinite loop: if nothing actually fit
+				// (consumed == 0) and there is already content on the page,
+				// move the whole item to a fresh page instead of emitting an
+				// empty fragment. At the top of an empty page we fall through
+				// and accept the partial fragment to make progress.
+				if consumed == 0 && len(blocks) > 0 {
+					return LayoutPlan{
+						Status: LayoutPartial, Consumed: curY,
+						Blocks: wrapListBlocks(blocks, area.Width, curY), Overflow: l.overflowFrom(i),
+					}
+				}
+				blocks = append(blocks, elemBlocks...)
+				curY += consumed
+				return LayoutPlan{
+					Status: LayoutPartial, Consumed: curY,
+					Blocks:   wrapListBlocks(blocks, area.Width, curY),
+					Overflow: l.overflowContinuingElement(i, elemOverflow),
+				}
+			}
+
+			blocks = append(blocks, elemBlocks...)
+			curY += consumed
+
+			if item.subList != nil {
+				subPlan := item.subList.planAt(
+					LayoutArea{Width: area.Width, Height: area.Height - curY},
+					totalIndent,
+				)
+				for _, b := range subPlan.Blocks {
+					b.Y += curY
+					blocks = append(blocks, b)
+				}
+				curY += subPlan.Consumed
+			}
+			continue
 		}
-		var markerPara *Paragraph
-		if l.embedded != nil {
-			markerPara = NewParagraphEmbedded(marker, l.embedded, markerSize)
-		} else {
-			markerPara = NewParagraph(marker, l.font, markerSize)
-		}
-		if l.markerColor != nil {
-			markerPara.runs[0].Color = *l.markerColor
-		}
-		markerPara.SetLeading(l.leading)
+
+		markerPara := l.markerParagraph(i)
 		markerWords, _ := markerPara.measureWords(l.indent)
 
 		// Measure and wrap item text directly.
@@ -401,15 +589,7 @@ func (l *List) planAt(area LayoutArea, baseIndent float64) LayoutPlan {
 
 		if !allFit {
 			// Build overflow with remaining items.
-			overflowList := &List{
-				items:    l.items[i+1:],
-				style:    l.style,
-				font:     l.font,
-				embedded: l.embedded,
-				fontSize: l.fontSize,
-				indent:   l.indent,
-				leading:  l.leading,
-			}
+			overflowList := l.overflowFrom(i + 1)
 			return LayoutPlan{
 				Status: LayoutPartial, Consumed: curY,
 				Blocks: wrapListBlocks(blocks, area.Width, curY), Overflow: overflowList,
@@ -431,6 +611,122 @@ func (l *List) planAt(area LayoutArea, baseIndent float64) LayoutPlan {
 	}
 
 	return LayoutPlan{Status: LayoutFull, Consumed: curY, Blocks: wrapListBlocks(blocks, area.Width, curY)}
+}
+
+// overflowFrom builds a List carrying the items from index start onward,
+// preserving the list's rendering attributes for page-break continuation.
+func (l *List) overflowFrom(start int) *List {
+	return l.cloneWithItems(l.items[start:])
+}
+
+// overflowContinuingElement builds the continuation List for a partially-laid-out
+// element item at index i. The item at i is replaced by a continuation whose
+// element is the element's overflow and whose marker is suppressed (the
+// bullet/number is drawn only on the first fragment). Remaining items i+1...
+// follow unchanged. The nested sub-list (if any) is preserved on the
+// continuation so it still renders after the element's tail content.
+func (l *List) overflowContinuingElement(i int, elemOverflow Element) *List {
+	cont := l.items[i]
+	cont.element = elemOverflow
+	cont.suppressMarker = true
+
+	items := make([]listItem, 0, len(l.items)-i)
+	items = append(items, cont)
+	items = append(items, l.items[i+1:]...)
+	return l.cloneWithItems(items)
+}
+
+// cloneWithItems returns a List with the supplied items and this list's
+// rendering attributes, for page-break continuation.
+func (l *List) cloneWithItems(items []listItem) *List {
+	return &List{
+		items:          items,
+		style:          l.style,
+		font:           l.font,
+		embedded:       l.embedded,
+		fontSize:       l.fontSize,
+		indent:         l.indent,
+		leading:        l.leading,
+		direction:      l.direction,
+		markerColor:    l.markerColor,
+		markerFontSize: l.markerFontSize,
+	}
+}
+
+// planElementItem lays out a rich-element list item into placed blocks. The
+// element occupies the content column (offset by totalIndent); the marker is
+// drawn aligned to the baseline of the element's first text line (unless the
+// item is a continuation fragment, in which case the marker is suppressed).
+// Returns the blocks (Y offsets relative to the list, already shifted by curY),
+// the height consumed, and the element's own LayoutPlan status and overflow so
+// the caller can split the item across pages.
+func (l *List) planElementItem(item listItem, index int, area LayoutArea, totalIndent, itemWidth, curY float64) (blocks []PlacedBlock, consumed float64, status LayoutStatus, overflow Element) {
+	plan := item.element.PlanLayout(LayoutArea{Width: itemWidth, Height: area.Height - curY})
+	if plan.Status == LayoutNothing {
+		return nil, 0, LayoutNothing, nil
+	}
+
+	var markerWords []Word
+	if !item.suppressMarker {
+		markerPara := l.markerParagraph(index)
+		markerWords, _ = markerPara.measureWords(l.indent)
+	}
+
+	// Marker baseline: align to the first text line of the element.
+	firstY, firstH, ok := firstLeafLine(plan.Blocks)
+	markerBaseline := 0.0
+	if ok {
+		markerBaseline = firstY + computeBaseline(markerWords, firstH)
+	} else {
+		markerBaseline = computeBaseline(markerWords, l.fontSize*l.leading)
+	}
+
+	// Shift the element's blocks into the content column at curY.
+	contentBlocks := offsetBlocks(plan.Blocks, totalIndent, curY)
+
+	out := make([]PlacedBlock, 0, len(contentBlocks)+1)
+
+	// Only emit a marker block when there is a marker to draw. Continuation
+	// fragments suppress the marker (markerWords is nil), so they carry no
+	// marker block and the bullet/number is never repeated on later pages.
+	if len(markerWords) > 0 {
+		capturedMarker := markerWords
+		capturedIndent := totalIndent
+		capturedMaxW := area.Width
+		capturedBaseline := markerBaseline
+		capturedRTL := l.direction == DirectionRTL
+
+		// The marker is drawn relative to its block's top, which sits at the
+		// element's top (curY). markerBaseline is measured from that top.
+		markerBlock := PlacedBlock{
+			X: 0, Y: curY, Width: l.indent, Height: firstH,
+			Tag: "LI",
+			Draw: func(ctx DrawContext, absX, absTopY float64) {
+				baselineY := absTopY - capturedBaseline
+				if capturedRTL {
+					drawTextLine(ctx, capturedMarker, absX+capturedMaxW-capturedIndent, baselineY, capturedIndent, AlignRight, true)
+				} else {
+					drawTextLine(ctx, capturedMarker, absX, baselineY, capturedIndent, AlignLeft, true)
+				}
+			},
+		}
+		out = append(out, markerBlock)
+	}
+
+	out = append(out, contentBlocks...)
+	return out, plan.Consumed, plan.Status, plan.Overflow
+}
+
+// offsetBlocks returns a deep-enough copy of blocks shifted by (dx, dy) at the
+// top level. Child blocks keep their relative offsets.
+func offsetBlocks(blocks []PlacedBlock, dx, dy float64) []PlacedBlock {
+	out := make([]PlacedBlock, len(blocks))
+	for i, b := range blocks {
+		b.X += dx
+		b.Y += dy
+		out[i] = b
+	}
+	return out
 }
 
 // wrapListBlocks wraps list item blocks in a parent "L" block for structure tree nesting.

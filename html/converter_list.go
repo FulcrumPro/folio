@@ -86,30 +86,115 @@ func (c *converter) convertList(n *html.Node, style computedStyle, ordered bool)
 }
 
 // populateList fills a list with items from <li> children, handling nesting.
-// Uses collectRuns (instead of collectDirectText) so inline elements like
-// <a href="..."> are preserved as styled TextRuns with LinkURI.
+//
+// Each <li> takes one of two paths:
+//
+//   - Fast (inline) path: the <li> has no box-model styles and contains only
+//     inline content (optionally followed by a nested <ul>/<ol>). The item
+//     renders as styled TextRuns with the marker inline, exactly as before.
+//     Uses collectListItemRuns so inline elements like <a href="..."> are
+//     preserved as styled TextRuns with LinkURI.
+//
+//   - Element path: the <li> has block-level flow children (<div>, <p>, <br>,
+//     display:block) and/or its own box-model styles. The <li>'s children are
+//     run through the normal block-flow converter (walkChildren) and wrapped
+//     in a Div, so block children flow onto separate lines and any
+//     background/border/border-radius/padding on the <li> is painted. The
+//     marker is aligned to the first text line of the element.
 func (c *converter) populateList(n *html.Node, list *layout.List, style computedStyle) {
 	for child := n.FirstChild; child != nil; child = child.NextSibling {
 		if child.Type != html.ElementNode || child.DataAtom != atom.Li {
 			continue
 		}
 
-		runs := c.collectListItemRuns(child, style)
+		liStyle := c.computeElementStyle(child, style)
+		hasBox := liHasBoxModel(liStyle)
 		nestedList := findNestedList(child)
 
-		if nestedList != nil {
-			if len(runs) == 0 {
-				runs = []layout.TextRun{{Text: " ", Font: font.Helvetica, FontSize: style.FontSize}}
-			}
-			sub := list.AddItemRunsWithSubList(runs)
-			if nestedList.DataAtom == atom.Ol {
-				sub.SetStyle(layout.ListOrdered)
-			}
-			c.populateList(nestedList, sub, style)
-		} else {
-			if len(runs) > 0 {
+		// Fast path: plain inline item (optionally with a nested list as a
+		// sub-list) and no box-model styles. Preserves existing rendering
+		// and indentation for the common case.
+		if !hasBox && !liHasBlockFlowChildren(c, child, liStyle) {
+			runs := c.collectListItemRuns(child, style)
+			if nestedList != nil {
+				if len(runs) == 0 {
+					runs = []layout.TextRun{{Text: " ", Font: font.Helvetica, FontSize: style.FontSize}}
+				}
+				sub := list.AddItemRunsWithSubList(runs)
+				if nestedList.DataAtom == atom.Ol {
+					sub.SetStyle(layout.ListOrdered)
+				}
+				c.populateList(nestedList, sub, style)
+			} else if len(runs) > 0 {
 				list.AddItemRuns(runs)
 			}
+			continue
+		}
+
+		// Element path: convert the <li>'s children via the normal
+		// block-flow path so block elements, <br>, and nested lists lay
+		// out correctly. Apply the <li>'s own box styles when present.
+		c.addElementListItem(child, list, liStyle, hasBox)
+	}
+}
+
+// addElementListItem converts an <li> with block-level children and/or
+// box-model styles into a rich-element list item.
+func (c *converter) addElementListItem(li *html.Node, list *layout.List, liStyle computedStyle, hasBox bool) {
+	children := c.walkChildren(li, liStyle)
+	if len(children) == 0 {
+		// Nothing renderable; still emit an (empty) marker for an empty <li>.
+		list.AddItemElement(layout.NewDiv())
+		return
+	}
+
+	div := layout.NewDiv()
+	if hasBox {
+		// The element item is laid out in the content column (to the right of
+		// the marker), i.e. the available width minus the list indent. Resolve
+		// percentage box-model values (padding, border, border-radius) against
+		// that narrower width so they match where the box is actually placed
+		// rather than overflowing against the full container width.
+		contentWidth := c.containerWidth - list.Indent()
+		if contentWidth < 0 {
+			contentWidth = 0
+		}
+		applyDivStyles(div, liStyle, contentWidth)
+	}
+	for _, e := range children {
+		div.Add(e)
+	}
+	list.AddItemElement(div)
+}
+
+// liHasBoxModel reports whether an <li>'s computed style carries box-model
+// decoration that requires a Div wrapper to render (background, border,
+// border-radius, or padding).
+func liHasBoxModel(s computedStyle) bool {
+	return s.hasPadding() || s.hasBorder() || s.hasBorderRadius() ||
+		s.BackgroundColor != nil
+}
+
+// liHasBlockFlowChildren reports whether an <li> contains any child that
+// participates in block flow (block element, <br>, or display:block), which
+// requires the block-flow conversion path rather than inline text runs. A
+// nested <ul>/<ol> alone does not count: it is handled by the sub-list fast
+// path.
+func liHasBlockFlowChildren(c *converter, li *html.Node, liStyle computedStyle) bool {
+	for child := li.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type != html.ElementNode {
+			continue
+		}
+		// A nested list is handled by the sub-list fast path.
+		if child.DataAtom == atom.Ul || child.DataAtom == atom.Ol {
+			continue
+		}
+		if child.DataAtom == atom.Br {
+			return true
+		}
+		if !c.isInlineFlowChild(child, liStyle) {
+			return true
 		}
 	}
+	return false
 }

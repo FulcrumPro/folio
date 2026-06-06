@@ -17,6 +17,7 @@ examples/
 ├── indic/          # Indic script shaping (Devanagari first)
 ├── cjk/            # Chinese, Japanese, Korean with font subsetting
 ├── fonts/          # standard, custom, and Unicode fonts (CJK, Cyrillic)
+├── barcodes/       # QR Code (all ECC levels), Code 128, and EAN-13
 ├── links/          # hyperlinks, bookmarks, internal navigation
 ├── forms/          # interactive AcroForm fields (text, checkbox, radio, dropdown)
 ├── html-to-pdf/    # rich HTML+CSS report (flexbox, tables, page breaks)

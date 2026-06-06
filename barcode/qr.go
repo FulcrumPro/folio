@@ -303,26 +303,26 @@ var qrECCPerBlock = [41][4]int{
 	{30, 26, 28, 28}, // version 18
 	{28, 26, 26, 26}, // version 19
 	{28, 26, 30, 28}, // version 20
-	{28, 26, 28, 28}, // version 21
-	{28, 28, 30, 28}, // version 22
-	{30, 28, 30, 28}, // version 23
-	{30, 28, 30, 28}, // version 24
-	{26, 28, 30, 28}, // version 25
-	{28, 28, 28, 28}, // version 26
-	{30, 28, 30, 28}, // version 27
-	{30, 28, 30, 28}, // version 28
-	{30, 28, 30, 28}, // version 29
-	{30, 28, 30, 28}, // version 30
-	{30, 28, 30, 28}, // version 31
-	{30, 28, 30, 28}, // version 32
-	{30, 28, 30, 28}, // version 33
-	{30, 28, 30, 28}, // version 34
-	{30, 28, 30, 28}, // version 35
-	{30, 28, 30, 28}, // version 36
-	{30, 28, 30, 28}, // version 37
-	{30, 28, 30, 28}, // version 38
-	{30, 28, 30, 28}, // version 39
-	{30, 28, 30, 28}, // version 40
+	{28, 26, 28, 30}, // version 21
+	{28, 28, 30, 24}, // version 22
+	{30, 28, 30, 30}, // version 23
+	{30, 28, 30, 30}, // version 24
+	{26, 28, 30, 30}, // version 25
+	{28, 28, 28, 30}, // version 26
+	{30, 28, 30, 30}, // version 27
+	{30, 28, 30, 30}, // version 28
+	{30, 28, 30, 30}, // version 29
+	{30, 28, 30, 30}, // version 30
+	{30, 28, 30, 30}, // version 31
+	{30, 28, 30, 30}, // version 32
+	{30, 28, 30, 30}, // version 33
+	{30, 28, 30, 30}, // version 34
+	{30, 28, 30, 30}, // version 35
+	{30, 28, 30, 30}, // version 36
+	{30, 28, 30, 30}, // version 37
+	{30, 28, 30, 30}, // version 38
+	{30, 28, 30, 30}, // version 39
+	{30, 28, 30, 30}, // version 40
 }
 
 // qrBlockInfo describes the block structure for a version/ECC combination.
@@ -810,8 +810,8 @@ func rsGeneratorPoly(n int) []byte {
 	for i := range n {
 		ng := make([]byte, len(g)+1)
 		for j, coeff := range g {
-			ng[j] ^= gfMul(coeff, gfExp[i])
-			ng[j+1] ^= coeff
+			ng[j] ^= coeff
+			ng[j+1] ^= gfMul(coeff, gfExp[i])
 		}
 		g = ng
 	}
@@ -1093,7 +1093,7 @@ func placeFormatInfo(modules [][]bool, size int, level ECCLevel, mask int) {
 		{8, 7}, {8, 5}, {8, 4}, {8, 3}, {8, 2}, {8, 1}, {8, 0},
 	}
 	for i, pos := range positions {
-		modules[pos[0]][pos[1]] = formatBits[i]
+		modules[pos[0]][pos[1]] = formatBits[14-i]
 	}
 
 	// Place along bottom-left and top-right.
@@ -1114,7 +1114,7 @@ func placeVersionInfo(modules [][]bool, size, version int) {
 	info := qrVersionInfo[version]
 
 	for i := range 18 {
-		bit := (info>>(17-i))&1 == 1
+		bit := (info>>i)&1 == 1
 		// i maps to position: row = i/3, col = i%3
 		// Bottom-left block: rows (size-11)..(size-9), cols 0..5
 		r := i / 3

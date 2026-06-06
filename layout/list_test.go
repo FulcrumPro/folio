@@ -292,3 +292,263 @@ func TestListBulletCharacter(t *testing.T) {
 		t.Errorf("expected bullet character U+2022 (%q), got %q", "\u2022", bullet)
 	}
 }
+
+// TestListElementItemMultipleLines verifies that an element list item with
+// multiple block children produces multiple content lines (not flattened
+// onto one line) and that the marker is aligned to the first text line.
+// Regression test for #342.
+func TestListElementItemMultipleLines(t *testing.T) {
+	div := NewDiv()
+	div.Add(NewParagraph("Title.", font.Helvetica, 12))
+	div.Add(NewParagraph("First body.", font.Helvetica, 12))
+	div.Add(NewParagraph("Second body.", font.Helvetica, 12))
+
+	l := NewList(font.Helvetica, 12).SetStyle(ListOrdered)
+	l.AddItemElement(div)
+
+	plan := l.PlanLayout(LayoutArea{Width: 400, Height: 1000})
+	if plan.Status != LayoutFull {
+		t.Fatalf("expected LayoutFull, got %v", plan.Status)
+	}
+
+	// Gather distinct y positions of leaf text blocks.
+	ys := map[float64]bool{}
+	var walk func(bs []PlacedBlock, off float64)
+	walk = func(bs []PlacedBlock, off float64) {
+		for _, b := range bs {
+			if len(b.Children) > 0 {
+				walk(b.Children, off+b.Y)
+				continue
+			}
+			if b.Height > 0 {
+				ys[off+b.Y] = true
+			}
+		}
+	}
+	walk(plan.Blocks, 0)
+	if len(ys) < 3 {
+		t.Errorf("expected >=3 distinct content lines, got %d", len(ys))
+	}
+}
+
+// TestListElementItemMarkerAligned verifies the marker baseline aligns to the
+// first text line of the element rather than the item top or center.
+func TestListElementItemMarkerAligned(t *testing.T) {
+	div := NewDiv()
+	div.Add(NewParagraph("Title.", font.Helvetica, 12))
+	div.Add(NewParagraph("Body.", font.Helvetica, 12))
+
+	l := NewList(font.Helvetica, 12).SetStyle(ListOrdered)
+	l.AddItemElement(div)
+
+	lines := l.Layout(400)
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 synthetic line for element item, got %d", len(lines))
+	}
+	ref := lines[0].listRef
+	if ref == nil || ref.element == nil {
+		t.Fatal("expected listRef with element on element item line")
+	}
+	if len(ref.markerWords) == 0 || ref.markerWords[0].Text != "1." {
+		t.Fatalf("expected marker '1.', got %+v", ref.markerWords)
+	}
+	// The marker baseline must fall within the first text line, i.e. less
+	// than one line height from the top — not the item center or bottom.
+	firstLineH := 12 * 1.2
+	if ref.markerOffsetY <= 0 || ref.markerOffsetY > firstLineH {
+		t.Errorf("markerOffsetY %f not within first line [0,%f]", ref.markerOffsetY, firstLineH)
+	}
+}
+
+// TestListElementItemWithSubList verifies a nested sub-list under an element
+// item still renders with its own marker and indentation.
+func TestListElementItemWithSubList(t *testing.T) {
+	div := NewDiv()
+	div.Add(NewParagraph("Parent.", font.Helvetica, 12))
+
+	l := NewList(font.Helvetica, 12)
+	sub := l.AddItemElementWithSubList(div)
+	sub.AddItem("Child")
+
+	plan := l.PlanLayout(LayoutArea{Width: 400, Height: 1000})
+	if plan.Consumed <= 0 {
+		t.Fatalf("expected positive consumed, got %f", plan.Consumed)
+	}
+	// The sub-list child should be more indented than the parent content.
+	var indents []float64
+	var walk func(bs []PlacedBlock, off float64)
+	walk = func(bs []PlacedBlock, off float64) {
+		for _, b := range bs {
+			if len(b.Children) > 0 {
+				walk(b.Children, off+b.Y)
+				continue
+			}
+			if b.Height > 0 {
+				indents = append(indents, b.X)
+			}
+		}
+	}
+	walk(plan.Blocks, 0)
+	if len(indents) < 2 {
+		t.Fatalf("expected parent and child content blocks, got %d", len(indents))
+	}
+}
+
+// markerBlockCount returns the number of drawn list markers in a block tree.
+// A drawn marker is a leaf "LI" block at X==0 with positive height (see
+// planElementItem, which only emits a marker block when there is a marker).
+func markerBlockCount(blocks []PlacedBlock, indent float64) int {
+	n := 0
+	var walk func(bs []PlacedBlock)
+	walk = func(bs []PlacedBlock) {
+		for _, b := range bs {
+			if len(b.Children) > 0 {
+				walk(b.Children)
+				continue
+			}
+			if b.Tag == "LI" && b.X == 0 && b.Width == indent && b.Height > 0 {
+				n++
+			}
+		}
+	}
+	walk(blocks)
+	return n
+}
+
+// contentLineCount returns the number of distinct content text leaves (height
+// > 0) that are NOT marker blocks, i.e. the actual element body lines.
+func contentLineCount(blocks []PlacedBlock, indent float64) int {
+	n := 0
+	var walk func(bs []PlacedBlock)
+	walk = func(bs []PlacedBlock) {
+		for _, b := range bs {
+			if len(b.Children) > 0 {
+				walk(b.Children)
+				continue
+			}
+			if b.Height <= 0 {
+				continue
+			}
+			// Skip marker blocks (leaf LI at X==0, width==indent).
+			if b.Tag == "LI" && b.X == 0 && b.Width == indent {
+				continue
+			}
+			n++
+		}
+	}
+	walk(blocks)
+	return n
+}
+
+// TestListElementItemSplitFirstItem verifies that an oversized element list
+// item that is the FIRST thing on the page splits across pages: the List
+// returns LayoutPartial with a non-nil Overflow, no content is lost across the
+// fragments, and the marker is drawn only on the first fragment. Regression
+// for the dropped-tail BLOCKER (#342/#339 follow-up).
+func TestListElementItemSplitFirstItem(t *testing.T) {
+	const nParas = 60
+	div := NewDiv()
+	for i := 0; i < nParas; i++ {
+		div.Add(NewParagraph("Line.", font.Helvetica, 12))
+	}
+
+	l := NewList(font.Helvetica, 12).SetStyle(ListOrdered)
+	l.AddItemElement(div)
+
+	const pageH = 100.0
+	indent := l.Indent()
+
+	// Walk the page chain, summing content lines and markers.
+	totalContent := 0
+	totalMarkers := 0
+	fragments := 0
+	var cur Element = l
+	for cur != nil {
+		plan := cur.PlanLayout(LayoutArea{Width: 400, Height: pageH})
+		fragments++
+		totalContent += contentLineCount(plan.Blocks, indent)
+		totalMarkers += markerBlockCount(plan.Blocks, indent)
+
+		if fragments == 1 {
+			if plan.Status != LayoutPartial {
+				t.Fatalf("first page: expected LayoutPartial, got %v", plan.Status)
+			}
+			if plan.Overflow == nil {
+				t.Fatal("first page: expected non-nil Overflow")
+			}
+			if markerBlockCount(plan.Blocks, indent) != 1 {
+				t.Fatalf("first fragment: expected exactly 1 marker, got %d", markerBlockCount(plan.Blocks, indent))
+			}
+		} else {
+			// Continuation fragments must NOT repeat the marker.
+			if markerBlockCount(plan.Blocks, indent) != 0 {
+				t.Errorf("continuation fragment %d: marker repeated", fragments)
+			}
+		}
+
+		if plan.Status == LayoutFull {
+			break
+		}
+		cur = plan.Overflow
+		if fragments > nParas+5 {
+			t.Fatal("did not converge: too many fragments (possible infinite loop)")
+		}
+	}
+
+	if fragments < 2 {
+		t.Fatalf("expected the item to split across >=2 pages, got %d", fragments)
+	}
+	if totalContent != nParas {
+		t.Errorf("content lost: expected %d content lines across fragments, got %d", nParas, totalContent)
+	}
+	if totalMarkers != 1 {
+		t.Errorf("marker drawn %d times across fragments, want exactly 1 (first fragment only)", totalMarkers)
+	}
+}
+
+// TestListElementItemSplitAfterItem verifies the same split behavior when the
+// oversized element item is NOT first: a preceding plain item occupies part of
+// the page, then the tall element item splits, and no content is lost.
+func TestListElementItemSplitAfterItem(t *testing.T) {
+	const nParas = 60
+	div := NewDiv()
+	for i := 0; i < nParas; i++ {
+		div.Add(NewParagraph("Line.", font.Helvetica, 12))
+	}
+
+	l := NewList(font.Helvetica, 12).SetStyle(ListOrdered)
+	l.AddItem("First plain item.")
+	l.AddItemElement(div)
+
+	const pageH = 100.0
+	indent := l.Indent()
+
+	totalContent := 0
+	fragments := 0
+	sawOverflow := false
+	var cur Element = l
+	for cur != nil {
+		plan := cur.PlanLayout(LayoutArea{Width: 400, Height: pageH})
+		fragments++
+		totalContent += contentLineCount(plan.Blocks, indent)
+
+		if plan.Status == LayoutPartial && plan.Overflow != nil {
+			sawOverflow = true
+		}
+		if plan.Status == LayoutFull {
+			break
+		}
+		cur = plan.Overflow
+		if fragments > nParas+5 {
+			t.Fatal("did not converge: too many fragments (possible infinite loop)")
+		}
+	}
+
+	if !sawOverflow {
+		t.Fatal("expected the list to overflow across pages")
+	}
+	// nParas element body lines + 1 plain item line.
+	if totalContent != nParas+1 {
+		t.Errorf("content lost: expected %d content lines, got %d", nParas+1, totalContent)
+	}
+}

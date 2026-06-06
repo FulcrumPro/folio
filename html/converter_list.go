@@ -160,6 +160,26 @@ func (c *converter) addElementListItem(li *html.Node, list *layout.List, liStyle
 			contentWidth = 0
 		}
 		applyDivStyles(div, liStyle, contentWidth)
+
+		// The Div now owns and draws the box background (honoring border-radius).
+		// Clear the redundant block-level/run background that the <li>'s
+		// background propagated onto the inner content paragraph and its text
+		// runs, so it does not re-draw a square fill over the rounded corners
+		// (same double-paint #340 fixed for convertBlock/blockquote/cells). The
+		// content may sit directly in the Div (a badge's single Paragraph) or
+		// nested inside an inner wrapper Div (block children), so clear at every
+		// depth. The children are cleared before being added below.
+		if liStyle.BackgroundColor != nil {
+			clearMatchingBackgroundsRecursive(children, *liStyle.BackgroundColor)
+		}
+	}
+	// An inline-block <li> (e.g. a badge "circle around a number") should HUG
+	// its content rather than fill the content column. Enable shrink-to-fit
+	// (CSS fit-content); an explicit CSS width still wins, since
+	// Div.PlanLayout resolves the width unit before applying shrink-to-fit
+	// (and applyDivStyles already set the width unit from liStyle.Width).
+	if liStyle.Display == "inline-block" {
+		div.SetShrinkToFit(true)
 	}
 	for _, e := range children {
 		div.Add(e)

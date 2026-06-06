@@ -142,6 +142,47 @@ func TestBorderRadiusNoSquareOverpaint(t *testing.T) {
 	}
 }
 
+// TestLiBorderRadiusNoSquareOverpaint guards the #343 fix: a styled <li> routed
+// through the element path builds a Div that paints a rounded (or circular) fill,
+// but the <li>'s background also propagated onto the inner content paragraph and
+// its text runs. Without clearing those, they re-draw a square `re` fill over the
+// rounded fill, squaring off the corners. This mirrors TestBorderRadiusNoSquareOverpaint
+// for the list-item path and FAILS before the fix (the badge emitted a full-box
+// and a run-highlight indigo square).
+func TestLiBorderRadiusNoSquareOverpaint(t *testing.T) {
+	// #4F46E5 -> 0.309804 0.27451 0.898039
+	const indigo = "0.309804 0.27451 0.898039"
+
+	cases := []struct {
+		name  string
+		html  string
+		color string
+	}{
+		{
+			name:  "InlineBlockCircleBadge",
+			html:  `<ul><li style="display:inline-block;background:#4F46E5;color:#fff;border-radius:50%;width:28px;height:28px;text-align:center">4</li></ul>`,
+			color: indigo,
+		},
+		{
+			name:  "RoundedSingleLine",
+			html:  `<ul><li style="border-radius:12px;background:#4F46E5;color:#fff;padding:4px 10px">Rounded item</li></ul>`,
+			color: indigo,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := renderHTMLStream(t, tc.html)
+			if !hasRoundedFillInColor(cs, tc.color) {
+				t.Errorf("expected a rounded fill (curve ops) in color %s; stream:\n%s", tc.color, cs)
+			}
+			if sq := squareFillsInColor(cs, tc.color); len(sq) > 0 {
+				t.Errorf("found square `re` fill(s) in box color %s (square overpaint over rounded <li> fill): %v\nstream:\n%s", tc.color, sq, cs)
+			}
+		})
+	}
+}
+
 // grayFillStripeInColor reports whether the stream fills a ` re` rectangle
 // stripe while the current non-stroking color is gray (0.6 0.6 0.6) — the
 // signature of the inner accent fill. It also returns the matching ` re` line.

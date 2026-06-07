@@ -287,6 +287,20 @@ func buildDocument(htmlSource string) (*document.Document, error) {
 		doc.Add(e)
 	}
 
+	// Forward absolutely/fixed-positioned elements. These live in a separate
+	// slice from the normal flow, so a manual ConvertFull pipeline that only
+	// adds result.Elements silently drops every position:fixed/absolute box
+	// (page watermarks, pinned footers). Document.AddHTML does this for you;
+	// when wiring ConvertFull by hand, this loop is mandatory.
+	for _, a := range result.Absolutes {
+		doc.AddAbsoluteWithOpts(a.Element, a.X, a.Y, a.Width, layout.AbsoluteOpts{
+			RightAligned: a.RightAligned,
+			ZIndex:       a.ZIndex,
+			Fixed:        a.Fixed,
+			PageIndex:    -1,
+		})
+	}
+
 	// Apply metadata from <title> and <meta> tags.
 	if result.Metadata.Title != "" {
 		doc.Info.Title = result.Metadata.Title

@@ -42,7 +42,9 @@ node_modules/
 *~
 
 # Local Claude Code state (worktrees, session artifacts)
-.claude/
+.claude/*
+# ...but track shared, version-controlled skills.
+!.claude/skills/
 
 # OS
 .DS_Store

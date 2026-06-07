@@ -64,8 +64,9 @@ func coreBits(bc *Barcode) string {
 
 // decodeCode128 reads a generated Code 128 symbol back to its text. It segments
 // the symbol into 11-module characters, recovers each value from the pattern
-// table, checks the start code, modulo-103 checksum, and stop pattern, and maps
-// the data values back to ASCII.
+// table, checks the start code, modulo-103 checksum, and stop pattern, then
+// interprets the values according to the active code set, following A/B/C
+// switches.
 func decodeCode128(t *testing.T, bc *Barcode) string {
 	t.Helper()
 	row := bc.modules[0]
@@ -73,7 +74,7 @@ func decodeCode128(t *testing.T, bc *Barcode) string {
 	hi := len(row) - trailingLight(row)
 	sym := row[lo:hi]
 
-	if len(sym) < 11*3+13 {
+	if len(sym) < 11*2+13 {
 		t.Fatalf("symbol too short: %d modules", len(sym))
 	}
 	if !bitsEqual(sym[len(sym)-13:], code128Stop) {
@@ -99,12 +100,9 @@ func decodeCode128(t *testing.T, bc *Barcode) string {
 		values = append(values, v)
 	}
 
-	if values[0] != 104 {
-		t.Fatalf("expected Start B (104), got %d", values[0])
-	}
 	data := values[1 : len(values)-1]
 	want := values[len(values)-1]
-	sum := 104
+	sum := values[0]
 	for k, v := range data {
 		sum += v * (k + 1)
 	}
@@ -112,22 +110,78 @@ func decodeCode128(t *testing.T, bc *Barcode) string {
 		t.Fatalf("checksum = %d, encoded %d", sum%103, want)
 	}
 
-	out := make([]byte, len(data))
-	for i, v := range data {
-		out[i] = byte(v + 32)
+	var set c128Set
+	switch values[0] {
+	case c128StartA:
+		set = c128A
+	case c128StartB:
+		set = c128B
+	case c128StartC:
+		set = c128C
+	default:
+		t.Fatalf("unexpected start code %d", values[0])
+	}
+
+	var out []byte
+	for _, v := range data {
+		switch set {
+		case c128C:
+			switch {
+			case v <= 99:
+				out = append(out, byte('0'+v/10), byte('0'+v%10))
+			case v == c128SwitchB:
+				set = c128B
+			case v == c128SwitchA:
+				set = c128A
+			default:
+				t.Fatalf("unexpected Code C symbol %d", v)
+			}
+		case c128B:
+			switch {
+			case v <= 95:
+				out = append(out, byte(v+32))
+			case v == c128SwitchC:
+				set = c128C
+			case v == c128SwitchA:
+				set = c128A
+			default:
+				t.Fatalf("unexpected Code B symbol %d", v)
+			}
+		default: // c128A
+			switch {
+			case v <= 63:
+				out = append(out, byte(v+32))
+			case v <= 95:
+				out = append(out, byte(v-64)) // control characters
+			case v == c128SwitchC:
+				set = c128C
+			case v == c128SwitchB:
+				set = c128B
+			default:
+				t.Fatalf("unexpected Code A symbol %d", v)
+			}
+		}
 	}
 	return string(out)
 }
 
 func TestCode128RoundTrip(t *testing.T) {
 	inputs := []string{
-		"FOLIO-2026",
-		"Hello, World!",
-		"1234567890",
-		"ABC abc 123",
-		" !\"#$%&'()*+,-./",
-		":;<=>?@[\\]^_`{|}~",
-		"\x7f", // DEL, the top of Code B
+		"FOLIO-2026",         // Code B then Code C
+		"Hello, World!",      // Code B
+		"1234567890",         // all digits, Code C
+		"12345",              // odd digit run
+		"AB12CD",             // short digit run stays in Code B
+		"ABCD1234567890WXYZ", // Code B, Code C, Code B
+		"ABC abc 123",        // mixed case and a short digit run
+		" !\"#$%&'()*+,-./",  // Code B symbols
+		":;<=>?@[\\]^_`{|}~", // Code B symbols
+		"\x7f",               // DEL, the top of Code B
+		"\x00\x01\x1f",       // Code A control characters
+		"line1\nline2\ttab",  // control characters mixed with Code B text
+		"\t\t007 agent",      // Code A then Code B
+		"\x011234",           // Code A then Code C
+		"1234\x01",           // Code C then Code A
 	}
 	for _, in := range inputs {
 		bc, err := NewCode128(in)
@@ -155,15 +209,22 @@ func TestCode128RoundTripAllPrintable(t *testing.T) {
 }
 
 // TestCode128GoldenPattern pins the core module pattern (between quiet zones)
-// for a known input, so a change to the pattern tables is caught.
+// for known inputs across code sets B, C, and A, so a change to the pattern
+// tables is caught.
 func TestCode128GoldenPattern(t *testing.T) {
-	const want = "1101001000010001100010100011101101000110111011000100010100011101101001101110011001110010100111011001100111001011001110100110100010001100011101011"
-	bc, err := NewCode128("FOLIO-2026")
-	if err != nil {
-		t.Fatal(err)
+	cases := map[string]string{
+		"FOLIO-2026": "11010010000100011000101000111011010001101110110001000101000111011010011011100101110111101100100111011100100110110000101001100011101011",
+		"1234567890": "110100111001011001110010001011000111000101101100001010011011110110100111100101100011101011",
+		"AB\x01CD":   "11010010000101000110001000101100011101011110100101100001000100011010110001000111001001101100011101011",
 	}
-	if got := coreBits(bc); got != want {
-		t.Errorf("core modules =\n%s\nwant\n%s", got, want)
+	for in, want := range cases {
+		bc, err := NewCode128(in)
+		if err != nil {
+			t.Fatalf("NewCode128(%q): %v", in, err)
+		}
+		if got := coreBits(bc); got != want {
+			t.Errorf("%q: core modules =\n%s\nwant\n%s", in, got, want)
+		}
 	}
 }
 

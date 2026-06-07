@@ -40,9 +40,11 @@ func TestCode128Empty(t *testing.T) {
 }
 
 func TestCode128InvalidChar(t *testing.T) {
-	_, err := NewCode128("Hello\x01World")
+	// Bytes above ASCII 127 are not encodable; control characters (handled by
+	// Code A) are.
+	_, err := NewCode128("Hello\xffWorld")
 	if err == nil {
-		t.Error("expected error for control character")
+		t.Error("expected error for non-ASCII byte")
 	}
 }
 

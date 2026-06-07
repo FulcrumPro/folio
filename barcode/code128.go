@@ -5,45 +5,61 @@ package barcode
 
 import "fmt"
 
-// NewCode128 generates a Code 128 barcode from a string using Code B.
-// Code B covers ASCII 32-127; characters outside that range return an error.
+// Code 128 symbol values for the start codes and code-set switches. A switch
+// value selects the named code set from whichever set is currently active.
+const (
+	c128StartA  = 103
+	c128StartB  = 104
+	c128StartC  = 105
+	c128SwitchC = 99
+	c128SwitchB = 100
+	c128SwitchA = 101
+)
+
+// c128Set identifies a Code 128 code set.
+type c128Set int
+
+const (
+	c128None c128Set = iota
+	c128A
+	c128B
+	c128C
+)
+
+// NewCode128 generates a Code 128 barcode from a string. It encodes the full
+// ASCII range (0-127) by selecting code sets A, B, and C automatically, using
+// Code C for runs of digits. Bytes above 127 return an error.
 func NewCode128(data string) (*Barcode, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("barcode: empty data")
 	}
 
-	// Encode using Code B (ASCII 32-127).
-	values, err := encodeCode128B(data)
+	symbols, err := encodeCode128(data)
 	if err != nil {
 		return nil, err
 	}
 
-	// Build the module pattern.
 	var modules []bool
 
-	// Quiet zone (10 modules of white).
+	// Left quiet zone (10 modules).
 	for range 10 {
 		modules = append(modules, false)
 	}
 
-	// Start code B.
-	modules = append(modules, code128Patterns[104]...)
-
-	// Data characters.
-	checksum := 104 // start code B value
-	for i, v := range values {
+	// Symbol values, accumulating the modulo-103 checksum (start code has
+	// weight 1, each following symbol weight 1, 2, 3, ...).
+	checksum := symbols[0]
+	modules = append(modules, code128Patterns[symbols[0]]...)
+	for k, v := range symbols[1:] {
 		modules = append(modules, code128Patterns[v]...)
-		checksum += v * (i + 1)
+		checksum += v * (k + 1)
 	}
-
-	// Checksum character.
-	checksum %= 103
-	modules = append(modules, code128Patterns[checksum]...)
+	modules = append(modules, code128Patterns[checksum%103]...)
 
 	// Stop pattern (13 modules: 2331112).
 	modules = append(modules, code128Stop...)
 
-	// Quiet zone.
+	// Right quiet zone (10 modules).
 	for range 10 {
 		modules = append(modules, false)
 	}
@@ -51,16 +67,110 @@ func NewCode128(data string) (*Barcode, error) {
 	return new1D(modules, 50), nil
 }
 
-// encodeCode128B converts ASCII text to Code 128 Code B values.
-func encodeCode128B(data string) ([]int, error) {
-	values := make([]int, len(data))
-	for i, ch := range data {
-		if ch < 32 || ch > 127 {
-			return nil, fmt.Errorf("barcode: Code 128B does not support character %d at position %d", ch, i)
-		}
-		values[i] = int(ch) - 32
+// isDigit128 reports whether b is an ASCII digit.
+func isDigit128(b byte) bool { return b >= '0' && b <= '9' }
+
+// digitRun128 returns the number of consecutive ASCII digits in data from i.
+func digitRun128(data string, i int) int {
+	n := 0
+	for i+n < len(data) && isDigit128(data[i+n]) {
+		n++
 	}
-	return values, nil
+	return n
+}
+
+// valueA returns the Code A value for an ASCII byte 0-95: 32-95 map to 0-63,
+// and the control characters 0-31 map to 64-95.
+func valueA(b byte) int {
+	if b < 32 {
+		return int(b) + 64
+	}
+	return int(b) - 32
+}
+
+// encodeCode128 converts data to Code 128 symbol values, beginning with a start
+// code and ending before the checksum. Code C is used for digit runs, Code A
+// for control characters, and Code B otherwise.
+func encodeCode128(data string) ([]int, error) {
+	for i := range len(data) {
+		if data[i] > 127 {
+			return nil, fmt.Errorf("barcode: Code 128 does not support byte %d at position %d", data[i], i)
+		}
+	}
+
+	n := len(data)
+	var symbols []int
+	set := c128None
+
+	for i := 0; i < n; {
+		if set == c128C {
+			// In Code C a value 0-99 is a digit pair. The encoder never
+			// switches C to C, so the value 99 is always the pair "99" and not
+			// the switch-to-C code.
+			if i+1 < n && isDigit128(data[i]) && isDigit128(data[i+1]) {
+				symbols = append(symbols, int(data[i]-'0')*10+int(data[i+1]-'0'))
+				i += 2
+				continue
+			}
+			// Leave Code C for the character at i.
+			if data[i] < 32 {
+				symbols = append(symbols, c128SwitchA)
+				set = c128A
+			} else {
+				symbols = append(symbols, c128SwitchB)
+				set = c128B
+			}
+			continue
+		}
+
+		run := digitRun128(data, i)
+		// Code C pays off for runs of four or more digits, or for an all-digit
+		// payload of even length.
+		wantC := run >= 4 || (run == n && run >= 2 && run%2 == 0)
+
+		if set == c128None {
+			switch {
+			case wantC:
+				symbols = append(symbols, c128StartC)
+				set = c128C
+			case data[i] < 32:
+				symbols = append(symbols, c128StartA)
+				set = c128A
+			default:
+				symbols = append(symbols, c128StartB)
+				set = c128B
+			}
+			continue
+		}
+
+		if run >= 4 {
+			symbols = append(symbols, c128SwitchC)
+			set = c128C
+			continue
+		}
+
+		c := data[i]
+		switch set {
+		case c128A:
+			if c <= 95 {
+				symbols = append(symbols, valueA(c))
+				i++
+			} else { // 96-127 needs Code B
+				symbols = append(symbols, c128SwitchB)
+				set = c128B
+			}
+		default: // c128B
+			if c >= 32 {
+				symbols = append(symbols, int(c)-32)
+				i++
+			} else { // control character needs Code A
+				symbols = append(symbols, c128SwitchA)
+				set = c128A
+			}
+		}
+	}
+
+	return symbols, nil
 }
 
 // code128Patterns contains the bar/space patterns for Code 128.

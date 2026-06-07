@@ -34,6 +34,14 @@ type List struct {
 	direction      Direction // text direction for list items
 	markerColor    *Color    // optional override color for markers
 	markerFontSize float64   // optional override font size for markers (0 = use list fontSize)
+
+	// start is the ordinal offset for marker numbering. The marker for the
+	// item at slice index i is numbered (i + 1 + start). It defaults to 0 so
+	// numbering begins at 1. SetStart adjusts it for <ol start="N">, and
+	// overflowFrom threads the count of items already emitted on prior pages
+	// into the continuation List so numbering continues across page breaks
+	// instead of restarting at 1.
+	start int
 }
 
 // listItem is a single entry in a list, optionally containing a nested sub-list.
@@ -49,9 +57,17 @@ type listItem struct {
 	subList *List     // optional nested list
 
 	// suppressMarker is set on a continuation fragment produced when an
-	// element item splits across pages. The marker (bullet/number) is drawn
-	// only on the first fragment, so continuation fragments suppress it.
+	// element item (or a plain runs item, see contPara) splits across pages.
+	// The marker (bullet/number) is drawn only on the first fragment, so
+	// continuation fragments suppress it.
 	suppressMarker bool
+
+	// contPara holds a pre-wrapped continuation paragraph for a plain
+	// (text/runs) item that was split across a page break. When non-nil it is
+	// used verbatim as the item's paragraph (overriding text/runs) so the tail
+	// lines that did not fit on the prior page render on the next one without
+	// re-deriving them from text.
+	contPara *Paragraph
 }
 
 // listLayoutRef carries list-specific rendering info on a Line.
@@ -91,6 +107,24 @@ func NewListEmbedded(ef *font.EmbeddedFont, fontSize float64) *List {
 func (l *List) SetStyle(s ListStyle) *List {
 	l.style = s
 	return l
+}
+
+// SetStart sets the ordinal of the first item's marker for ordered lists,
+// matching the HTML <ol start="N"> attribute. The first item is numbered n,
+// the second n+1, and so on. Values below 1 are clamped to 1.
+func (l *List) SetStart(n int) *List {
+	if n < 1 {
+		n = 1
+	}
+	l.start = n - 1
+	return l
+}
+
+// Start returns the ordinal of the first item's marker for ordered lists,
+// i.e. the value set via SetStart (or the HTML <ol start="N"> attribute).
+// It defaults to 1 when no start was configured.
+func (l *List) Start() int {
+	return l.start + 1
 }
 
 // SetIndent sets the left indent for item text (default 18pt).
@@ -366,6 +400,9 @@ func (l *List) MaxWidth() float64 {
 // itemParagraph creates a Paragraph for a list item's text content.
 // Uses styled runs when available, falling back to plain text.
 func (l *List) itemParagraph(item listItem) *Paragraph {
+	if item.contPara != nil {
+		return item.contPara
+	}
 	if len(item.runs) > 0 {
 		return NewStyledParagraph(item.runs...)
 	}
@@ -527,8 +564,13 @@ func (l *List) planAt(area LayoutArea, baseIndent float64) LayoutPlan {
 			continue
 		}
 
-		markerPara := l.markerParagraph(i)
-		markerWords, _ := markerPara.measureWords(l.indent)
+		// Continuation fragments (a runs item split from a prior page)
+		// suppress the marker so the bullet/number is drawn only once.
+		var markerWords []Word
+		if !item.suppressMarker {
+			markerPara := l.markerParagraph(i)
+			markerWords, _ = markerPara.measureWords(l.indent)
+		}
 
 		// Measure and wrap item text directly.
 		textPara := l.itemParagraph(item)
@@ -540,12 +582,16 @@ func (l *List) planAt(area LayoutArea, baseIndent float64) LayoutPlan {
 		lineHeight := maxFS * l.leading
 		wordLines := textPara.wrapWords(textWords, itemWidth)
 
-		// Build PlacedBlocks for each text line.
+		// Build PlacedBlocks for each text line. fitCount tracks how many of
+		// this item's lines fit on the current page; if not all fit, the item
+		// is split (or deferred whole) so it is never dropped.
+		fitCount := 0
 		for j, wl := range wordLines {
 			if curY+lineHeight > area.Height && len(blocks) > 0 {
 				allFit = false
 				break
 			}
+			fitCount = j + 1
 
 			capturedWords := wl
 			capturedHeight := lineHeight
@@ -588,8 +634,19 @@ func (l *List) planAt(area LayoutArea, baseIndent float64) LayoutPlan {
 		}
 
 		if !allFit {
-			// Build overflow with remaining items.
-			overflowList := l.overflowFrom(i + 1)
+			// The item at i did not fully fit. Never skip it: if none of its
+			// lines fit, defer the whole item to the next page (overflow starts
+			// at i, marker intact). If some lines fit, split the item — emit the
+			// fitting head here and continue the tail on the next page with the
+			// marker suppressed. Either way the continuation List continues the
+			// ordinal sequence (overflowFrom threads the start offset).
+			var overflowList *List
+			if fitCount == 0 {
+				overflowList = l.overflowFrom(i)
+			} else {
+				_, tail := textPara.SplitAfterLine(fitCount, itemWidth)
+				overflowList = l.overflowSplitting(i, tail)
+			}
 			return LayoutPlan{
 				Status: LayoutPartial, Consumed: curY,
 				Blocks: wrapListBlocks(blocks, area.Width, curY), Overflow: overflowList,
@@ -613,10 +670,38 @@ func (l *List) planAt(area LayoutArea, baseIndent float64) LayoutPlan {
 	return LayoutPlan{Status: LayoutFull, Consumed: curY, Blocks: wrapListBlocks(blocks, area.Width, curY)}
 }
 
-// overflowFrom builds a List carrying the items from index start onward,
+// overflowFrom builds a List carrying the items from index from onward,
 // preserving the list's rendering attributes for page-break continuation.
-func (l *List) overflowFrom(start int) *List {
-	return l.cloneWithItems(l.items[start:])
+// The continuation's start offset is advanced by from so ordered-list markers
+// continue the sequence across the page break instead of restarting at 1: the
+// item now at continuation slice index 0 was originally at index from, so its
+// marker (0 + 1 + cont.start) equals (from + 1 + l.start), its true ordinal.
+func (l *List) overflowFrom(from int) *List {
+	cont := l.cloneWithItems(l.items[from:])
+	cont.start = l.start + from
+	return cont
+}
+
+// overflowSplitting builds the continuation List for a plain (text/runs) item
+// at index i that was split across a page break. The item at i is replaced by a
+// continuation carrying the tail paragraph (the lines that did not fit) with the
+// marker suppressed; remaining items i+1... follow unchanged. The start offset
+// is advanced by i so the suppressed item still "occupies" its ordinal and the
+// following items continue numbering correctly.
+func (l *List) overflowSplitting(i int, tail *Paragraph) *List {
+	cont := l.items[i]
+	cont.contPara = tail
+	cont.suppressMarker = true
+	cont.text = ""
+	cont.runs = nil
+
+	items := make([]listItem, 0, len(l.items)-i)
+	items = append(items, cont)
+	items = append(items, l.items[i+1:]...)
+
+	out := l.cloneWithItems(items)
+	out.start = l.start + i
+	return out
 }
 
 // overflowContinuingElement builds the continuation List for a partially-laid-out
@@ -633,7 +718,9 @@ func (l *List) overflowContinuingElement(i int, elemOverflow Element) *List {
 	items := make([]listItem, 0, len(l.items)-i)
 	items = append(items, cont)
 	items = append(items, l.items[i+1:]...)
-	return l.cloneWithItems(items)
+	out := l.cloneWithItems(items)
+	out.start = l.start + i
+	return out
 }
 
 // cloneWithItems returns a List with the supplied items and this list's
@@ -743,7 +830,7 @@ func wrapListBlocks(blocks []PlacedBlock, width, height float64) []PlacedBlock {
 
 // marker returns the marker string (bullet, number, letter) for the item at index.
 func (l *List) marker(index int) string {
-	n := index + 1
+	n := index + 1 + l.start
 	switch l.style {
 	case ListNone:
 		return ""

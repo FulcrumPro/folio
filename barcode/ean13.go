@@ -32,8 +32,8 @@ func NewEAN13(data string) (*Barcode, error) {
 	// Build module pattern.
 	var modules []bool
 
-	// Quiet zone (9 modules).
-	for range 9 {
+	// Left quiet zone (11 modules).
+	for range 11 {
 		modules = append(modules, false)
 	}
 
@@ -65,8 +65,8 @@ func NewEAN13(data string) (*Barcode, error) {
 	// End guard: 101.
 	modules = append(modules, true, false, true)
 
-	// Quiet zone.
-	for range 9 {
+	// Right quiet zone (7 modules).
+	for range 7 {
 		modules = append(modules, false)
 	}
 

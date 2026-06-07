@@ -20,10 +20,10 @@ func FuzzNewCode128(f *testing.F) {
 		"1234567890",
 		"SKU-12345",
 		"ISBN 978-0-596-00712-6",
-		string([]byte{0x00}), // NUL (out of Code B range)
+		string([]byte{0x00}), // NUL (Code A)
 		string([]byte{0xFF}), // high-byte (out of ASCII)
-		"\t\n\r",             // control whitespace (out of range)
-		"é",                  // UTF-8 multi-byte (out of range)
+		"\t\n\r",             // control whitespace (Code A)
+		"é",                  // UTF-8 multi-byte (out of ASCII)
 	}
 	for _, s := range seeds {
 		f.Add(s)

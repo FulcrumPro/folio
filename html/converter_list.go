@@ -4,6 +4,9 @@
 package html
 
 import (
+	"strconv"
+	"strings"
+
 	"github.com/carlos7ags/folio/font"
 	"github.com/carlos7ags/folio/layout"
 
@@ -71,6 +74,20 @@ func (c *converter) convertList(n *html.Node, style computedStyle, ordered bool)
 	default:
 		if ordered {
 			list.SetStyle(layout.ListOrdered)
+		}
+	}
+
+	// Honor the <ol start="N"> attribute so ordered-list numbering begins at
+	// N (and, via List.overflowFrom, continues correctly across page breaks).
+	// SetStart clamps values below 1 to 1: zero/negative ordinals (which the
+	// HTML spec technically permits) are intentionally not rendered, since the
+	// alpha/roman marker styles have no representation for them.
+	// <reversed> is not yet supported.
+	if ordered {
+		if s := getAttr(n, "start"); s != "" {
+			if start, err := strconv.Atoi(strings.TrimSpace(s)); err == nil {
+				list.SetStart(start)
+			}
 		}
 	}
 

@@ -540,6 +540,34 @@ func TestListStyleTypeAlpha(t *testing.T) {
 	}
 }
 
+// TestOrderedListStartAttribute verifies that <ol start="N"> is honored: the
+// converted list renders and carries the start offset. Cross-page numbering
+// continuation for a started list is covered at the layout level by
+// TestOrderedListMultiPageRespectsStart.
+func TestOrderedListStartAttribute(t *testing.T) {
+	html := `<ol start="5"><li>First</li><li>Second</li><li>Third</li></ol>`
+	elems, err := Convert(html, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(elems) == 0 {
+		t.Fatal("expected list elements")
+	}
+	list, ok := elems[0].(*layout.List)
+	if !ok {
+		t.Fatalf("expected first element to be *layout.List, got %T", elems[0])
+	}
+	// The wiring must carry the start="5" through to the list so the first
+	// marker is numbered 5 rather than restarting at 1.
+	if got := list.Start(); got != 5 {
+		t.Errorf("ordered list start = %d, want 5 (from <ol start=\"5\">)", got)
+	}
+	plan := list.PlanLayout(layout.LayoutArea{Width: 400, Height: 1000})
+	if plan.Consumed <= 0 {
+		t.Error("ordered list with start should render")
+	}
+}
+
 // --- display: inline-block ---
 
 func TestDisplayInlineBlock(t *testing.T) {

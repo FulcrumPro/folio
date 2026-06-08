@@ -837,20 +837,21 @@ func (l *List) marker(index int) string {
 	case ListOrdered:
 		return fmt.Sprintf("%d.", n)
 	case ListOrderedRoman:
-		return toRoman(n, false) + "."
+		return ToRoman(n, false) + "."
 	case ListOrderedRomanUp:
-		return toRoman(n, true) + "."
+		return ToRoman(n, true) + "."
 	case ListOrderedAlpha:
-		return toAlpha(n, 'a') + "."
+		return ToAlpha(n, 'a') + "."
 	case ListOrderedAlphaUp:
-		return toAlpha(n, 'A') + "."
+		return ToAlpha(n, 'A') + "."
 	default:
 		return "\u2022" // bullet character •
 	}
 }
 
-// toRoman converts n to a Roman numeral string.
-func toRoman(n int, upper bool) string {
+// ToRoman converts n to a Roman numeral string (lower-case, or upper-case when
+// upper is true). Values outside 1..3999 fall back to decimal.
+func ToRoman(n int, upper bool) string {
 	if n <= 0 || n > 3999 {
 		return fmt.Sprintf("%d", n)
 	}
@@ -875,8 +876,9 @@ func toRoman(n int, upper bool) string {
 	return result
 }
 
-// toAlpha converts n to alphabetic numbering (1=a, 2=b, ..., 26=z, 27=aa).
-func toAlpha(n int, base byte) string {
+// ToAlpha converts n to alphabetic numbering using base as the first letter
+// ('a' or 'A'): 1=a, 2=b, ..., 26=z, 27=aa. Non-positive n falls back to decimal.
+func ToAlpha(n int, base byte) string {
 	if n <= 0 {
 		return fmt.Sprintf("%d", n)
 	}

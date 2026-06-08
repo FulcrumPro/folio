@@ -41,9 +41,9 @@ func TestToRoman(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := toRoman(tt.n, tt.upper)
+		got := ToRoman(tt.n, tt.upper)
 		if got != tt.want {
-			t.Errorf("toRoman(%d, %v) = %q, want %q", tt.n, tt.upper, got, tt.want)
+			t.Errorf("ToRoman(%d, %v) = %q, want %q", tt.n, tt.upper, got, tt.want)
 		}
 	}
 }
@@ -67,9 +67,9 @@ func TestToAlpha(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := toAlpha(tt.n, tt.base)
+		got := ToAlpha(tt.n, tt.base)
 		if got != tt.want {
-			t.Errorf("toAlpha(%d, %q) = %q, want %q", tt.n, string(tt.base), got, tt.want)
+			t.Errorf("ToAlpha(%d, %q) = %q, want %q", tt.n, string(tt.base), got, tt.want)
 		}
 	}
 }

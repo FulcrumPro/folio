@@ -128,9 +128,22 @@ func (c *converter) populateList(n *html.Node, list *layout.List, style computed
 		hasBox := liHasBoxModel(liStyle)
 		nestedList := findNestedList(child)
 
+		// Apply the <li>'s own counters before its content is resolved so a
+		// counter-increment fires for each item and any counter-reset scopes
+		// the subtree. convertElement does this for the element path's block
+		// children, but the fast path and the li itself bypass it, so we mirror
+		// the reset-then-increment ordering here.
+		for _, cr := range liStyle.CounterReset {
+			c.resetCounter(cr.Name, cr.Value)
+		}
+		for _, ci := range liStyle.CounterIncrement {
+			c.incrementCounter(ci.Name, ci.Value)
+		}
+
 		// Fast path: plain inline item (optionally with a nested list as a
 		// sub-list) and no box-model styles. Preserves existing rendering
-		// and indentation for the common case.
+		// and indentation for the common case. Use if/else (not continue) so
+		// the shared counter pop below runs for both paths.
 		if !hasBox && !liHasBlockFlowChildren(c, child, liStyle) {
 			runs := c.collectListItemRuns(child, style)
 			if nestedList != nil {
@@ -141,17 +154,37 @@ func (c *converter) populateList(n *html.Node, list *layout.List, style computed
 				if nestedList.DataAtom == atom.Ol {
 					sub.SetStyle(layout.ListOrdered)
 				}
+				// The fast path bypasses convertElement for the nested
+				// list, so apply the nested list's own counter-reset and
+				// counter-increment around the recursion. The element path's
+				// nested list goes through convertElement, which already
+				// handles both.
+				nestedStyle := c.computeElementStyle(nestedList, style)
+				for _, cr := range nestedStyle.CounterReset {
+					c.resetCounter(cr.Name, cr.Value)
+				}
+				for _, ci := range nestedStyle.CounterIncrement {
+					c.incrementCounter(ci.Name, ci.Value)
+				}
 				c.populateList(nestedList, sub, style)
+				for _, cr := range nestedStyle.CounterReset {
+					c.popCounter(cr.Name)
+				}
 			} else if len(runs) > 0 {
 				list.AddItemRuns(runs)
 			}
-			continue
+		} else {
+			// Element path: convert the <li>'s children via the normal
+			// block-flow path so block elements, <br>, and nested lists lay
+			// out correctly. Apply the <li>'s own box styles when present.
+			c.addElementListItem(child, list, liStyle, hasBox)
 		}
 
-		// Element path: convert the <li>'s children via the normal
-		// block-flow path so block elements, <br>, and nested lists lay
-		// out correctly. Apply the <li>'s own box styles when present.
-		c.addElementListItem(child, list, liStyle, hasBox)
+		// Pop the li's own counter-reset after its subtree is processed so
+		// sibling items see the restored nesting (runs on both paths).
+		for _, cr := range liStyle.CounterReset {
+			c.popCounter(cr.Name)
+		}
 	}
 }
 

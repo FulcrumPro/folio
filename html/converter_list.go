@@ -140,6 +140,12 @@ func (c *converter) populateList(n *html.Node, list *layout.List, style computed
 			c.incrementCounter(ci.Name, ci.Value)
 		}
 
+		// Resolve the li::marker { content } string now that this item's
+		// counters reflect counter-reset/increment, so counter()/counters() in
+		// the marker render the right values. Applied per path below once the
+		// item has been appended.
+		markerText, hasMarker := c.resolveMarkerContent(child)
+
 		// Fast path: plain inline item (optionally with a nested list as a
 		// sub-list) and no box-model styles. Preserves existing rendering
 		// and indentation for the common case. Use if/else (not continue) so
@@ -151,6 +157,9 @@ func (c *converter) populateList(n *html.Node, list *layout.List, style computed
 					runs = []layout.TextRun{{Text: " ", Font: font.Helvetica, FontSize: style.FontSize}}
 				}
 				sub := list.AddItemRunsWithSubList(runs)
+				if hasMarker {
+					list.SetLastItemMarker(markerText)
+				}
 				if nestedList.DataAtom == atom.Ol {
 					sub.SetStyle(layout.ListOrdered)
 				}
@@ -172,12 +181,18 @@ func (c *converter) populateList(n *html.Node, list *layout.List, style computed
 				}
 			} else if len(runs) > 0 {
 				list.AddItemRuns(runs)
+				if hasMarker {
+					list.SetLastItemMarker(markerText)
+				}
 			}
 		} else {
 			// Element path: convert the <li>'s children via the normal
 			// block-flow path so block elements, <br>, and nested lists lay
 			// out correctly. Apply the <li>'s own box styles when present.
 			c.addElementListItem(child, list, liStyle, hasBox)
+			if hasMarker {
+				list.SetLastItemMarker(markerText)
+			}
 		}
 
 		// Pop the li's own counter-reset after its subtree is processed so
@@ -186,6 +201,35 @@ func (c *converter) populateList(n *html.Node, list *layout.List, style computed
 			c.popCounter(cr.Name)
 		}
 	}
+}
+
+// resolveMarkerContent reads the li::marker { content } declaration for an
+// <li> and resolves it (counter()/counters()/strings). The bool reports whether
+// a content declaration exists at all: an explicit `content: none` (or empty)
+// returns ("", true) to suppress the marker, while the absence of any content
+// declaration returns ("", false) so the default style-derived marker stands.
+func (c *converter) resolveMarkerContent(li *html.Node) (string, bool) {
+	if c.sheet == nil {
+		return "", false
+	}
+	// matchingPseudoElementDeclarations sorts ascending by specificity (stable
+	// for ties), so the last matching `content` declaration is the cascade
+	// winner. Take it — matching the last-wins color/font-size handling in
+	// convertList rather than returning on the first (lowest-specificity) decl.
+	decls := c.sheet.matchingPseudoElementDeclarations(li, "marker")
+	text, found := "", false
+	for _, d := range decls {
+		if d.property != "content" {
+			continue
+		}
+		found = true
+		if val := strings.TrimSpace(d.value); val == "none" || val == "" {
+			text = ""
+		} else {
+			text = c.resolveContentValue(val)
+		}
+	}
+	return text, found
 }
 
 // addElementListItem converts an <li> with block-level children and/or

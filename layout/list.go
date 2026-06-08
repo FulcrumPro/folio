@@ -68,6 +68,13 @@ type listItem struct {
 	// lines that did not fit on the prior page render on the next one without
 	// re-deriving them from text.
 	contPara *Paragraph
+
+	// markerText/markerSet hold a verbatim marker string supplied by CSS
+	// (li::marker { content: ... }). When markerSet is true the item's marker
+	// is exactly markerText, overriding the style-derived marker entirely —
+	// including ListNone — and an empty markerText suppresses the marker.
+	markerText string
+	markerSet  bool
 }
 
 // listLayoutRef carries list-specific rendering info on a Line.
@@ -243,6 +250,18 @@ func (l *List) AddItemWithSubList(text string) *List {
 	return sub
 }
 
+// SetLastItemMarker sets a verbatim CSS marker string on the most recently
+// appended item (from li::marker { content }), overriding the style-derived
+// marker. It is a no-op when the list has no items.
+func (l *List) SetLastItemMarker(text string) *List {
+	if len(l.items) == 0 {
+		return l
+	}
+	l.items[len(l.items)-1].markerText = text
+	l.items[len(l.items)-1].markerSet = true
+	return l
+}
+
 // Layout implements Element. Each item is rendered as a paragraph
 // with a bullet or number prefix, indented from the left margin.
 func (l *List) Layout(maxWidth float64) []Line {
@@ -268,7 +287,7 @@ func (l *List) layoutAt(maxWidth float64, baseIndent float64) []Line {
 		}
 
 		markerPara := l.markerParagraph(i)
-		markerLines := markerPara.Layout(l.indent)
+		markerLines := markerPara.Layout(l.markerLayoutWidth(i))
 
 		// Create a paragraph for the item text.
 		textPara := l.itemParagraph(item)
@@ -322,7 +341,7 @@ func (l *List) layoutElementItem(item listItem, index int, maxWidth, totalIndent
 	plan := item.element.PlanLayout(LayoutArea{Width: itemWidth, Height: 1e9})
 
 	markerPara := l.markerParagraph(index)
-	markerLines := markerPara.Layout(l.indent)
+	markerLines := markerPara.Layout(l.markerLayoutWidth(index))
 	var markerWords []Word
 	if len(markerLines) > 0 {
 		markerWords = markerLines[0].Words
@@ -410,6 +429,18 @@ func (l *List) itemParagraph(item listItem) *Paragraph {
 		return NewParagraphEmbedded(item.text, l.embedded, l.fontSize)
 	}
 	return NewParagraph(item.text, l.font, l.fontSize)
+}
+
+// markerLayoutWidth returns the width to lay the marker paragraph out at.
+// Default (style-derived) markers wrap at the indent gutter as before. A custom
+// CSS marker (markerSet) may legitimately exceed the gutter, so it is laid out
+// at a width wide enough to keep it on a single line; the gutter is unchanged in
+// this phase, so such a marker simply extends past it.
+func (l *List) markerLayoutWidth(index int) float64 {
+	if l.items[index].markerSet {
+		return 1e9
+	}
+	return l.indent
 }
 
 // markerParagraph builds the marker paragraph for the item at index,
@@ -830,6 +861,9 @@ func wrapListBlocks(blocks []PlacedBlock, width, height float64) []PlacedBlock {
 
 // marker returns the marker string (bullet, number, letter) for the item at index.
 func (l *List) marker(index int) string {
+	if l.items[index].markerSet {
+		return l.items[index].markerText
+	}
 	n := index + 1 + l.start
 	switch l.style {
 	case ListNone:

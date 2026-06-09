@@ -37,10 +37,10 @@ but unknown CSS properties are always silent.
 | MultiColumn | 9 |
 | Tables | 2 |
 | Pagination | 5 |
-| Lists | 1 |
+| Lists | 2 |
 | Effects | 12 |
 | PDF | 6 |
-| **Total** | **138** |
+| **Total** | **139** |
 
 ## Value-form glossary
 
@@ -257,7 +257,8 @@ also takes effect on flex containers as the gap between items.
 
 | Property | Aliases | Accepted values | Notes |
 |---|---|---|---|
-| `list-style-type` | `list-style` | `disc`, `circle`, `square`, `decimal`, `lower-alpha`, `upper-alpha`, `lower-roman`, `upper-roman`, `none` | list-style is a shorthand; only the type is extracted. |
+| `list-style-position` | — | `inside`, `outside` | — |
+| `list-style-type` | `list-style` | `disc`, `circle`, `square`, `decimal`, `lower-alpha`, `upper-alpha`, `lower-roman`, `upper-roman`, `none` | list-style is a shorthand; type and position tokens are extracted. |
 
 ## Effects
 

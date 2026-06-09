@@ -135,6 +135,7 @@ type computedStyle struct {
 
 	// List
 	ListStyleType      string
+	ListStylePosition  string        // "inside" or "outside" (empty = outside default)
 	ListMarkerColor    *layout.Color // marker color from ::marker pseudo-element
 	ListMarkerFontSize float64       // marker font size from ::marker (0 = use default)
 

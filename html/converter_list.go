@@ -97,6 +97,12 @@ func (c *converter) convertList(n *html.Node, style computedStyle, ordered bool)
 		list.SetDirection(style.Direction)
 	}
 
+	// list-style-position: inside flows the marker inline with the first
+	// content line; outside (the default) keeps it in the left gutter.
+	if style.ListStylePosition == "inside" {
+		list.SetMarkerInside(true)
+	}
+
 	c.populateList(n, list, style)
 
 	return []layout.Element{list}

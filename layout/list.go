@@ -34,6 +34,7 @@ type List struct {
 	direction      Direction // text direction for list items
 	markerColor    *Color    // optional override color for markers
 	markerFontSize float64   // optional override font size for markers (0 = use list fontSize)
+	markerInside   bool      // CSS list-style-position: inside (marker flows inline)
 
 	// start is the ordinal offset for marker numbering. The marker for the
 	// item at slice index i is numbered (i + 1 + start). It defaults to 0 so
@@ -174,6 +175,15 @@ func (l *List) SetMarkerFontSize(size float64) *List {
 	return l
 }
 
+// SetMarkerInside controls marker placement. When inside is true (CSS
+// list-style-position: inside) the marker flows inline with the first content
+// line and wrapped lines align under the marker. The default (false) is
+// outside: the marker sits in the left gutter with a hanging indent.
+func (l *List) SetMarkerInside(inside bool) *List {
+	l.markerInside = inside
+	return l
+}
+
 // AddItem adds a text item to the list.
 func (l *List) AddItem(text string) *List {
 	l.items = append(l.items, listItem{text: normalizeText(text)})
@@ -272,7 +282,8 @@ func (l *List) Layout(maxWidth float64) []Line {
 // from parent lists (for nesting).
 func (l *List) layoutAt(maxWidth float64, baseIndent float64) []Line {
 	var allLines []Line
-	totalIndent := baseIndent + l.indent
+	effIndent := l.effectiveIndent()
+	totalIndent := baseIndent + effIndent
 	itemWidth := maxWidth - totalIndent
 
 	for i, item := range l.items {
@@ -298,6 +309,8 @@ func (l *List) layoutAt(maxWidth float64, baseIndent float64) []Line {
 		textLines := textPara.Layout(itemWidth)
 
 		// Combine: the first line has both marker and text side by side.
+		// (This Layout path feeds measurement/Columns; the marker is drawn by
+		// the paginated planAt path, which carries inside/gutter placement.)
 		for j, tl := range textLines {
 			line := Line{
 				Words:  make([]Word, 0, len(tl.Words)),
@@ -309,14 +322,9 @@ func (l *List) layoutAt(maxWidth float64, baseIndent float64) []Line {
 			}
 
 			if j == 0 && len(markerLines) > 0 {
-				line.listRef = &listLayoutRef{
-					markerWords: markerLines[0].Words,
-					indent:      totalIndent,
-				}
+				line.listRef = &listLayoutRef{markerWords: markerLines[0].Words, indent: totalIndent}
 			} else {
-				line.listRef = &listLayoutRef{
-					indent: totalIndent,
-				}
+				line.listRef = &listLayoutRef{indent: totalIndent}
 			}
 
 			line.Words = append(line.Words, tl.Words...)
@@ -391,7 +399,7 @@ func (l *List) MinWidth() float64 {
 			}
 		}
 	}
-	return l.indent + maxW
+	return l.effectiveIndent() + maxW
 }
 
 // MaxWidth implements Measurable. Returns indent + widest item line.
@@ -413,7 +421,7 @@ func (l *List) MaxWidth() float64 {
 			maxW = ww
 		}
 	}
-	return l.indent + maxW
+	return l.effectiveIndent() + maxW
 }
 
 // itemParagraph creates a Paragraph for a list item's text content.
@@ -429,6 +437,61 @@ func (l *List) itemParagraph(item listItem) *Paragraph {
 		return NewParagraphEmbedded(item.text, l.embedded, l.fontSize)
 	}
 	return NewParagraph(item.text, l.font, l.fontSize)
+}
+
+// effectiveIndent returns the left indent that defines the marker gutter (for
+// outside) or content offset (for inside). For inside it is l.indent unchanged.
+// For outside it grows only when the widest marker would overflow the default
+// indent, so a long custom marker does not overlap the item text; short-marker
+// lists are unaffected and stay byte-identical to before.
+func (l *List) effectiveIndent() float64 {
+	if l.markerInside {
+		return l.indent
+	}
+	widest := 0.0
+	for i := range l.items {
+		if l.items[i].suppressMarker {
+			continue
+		}
+		if w := l.markerWidth(i); w > widest {
+			widest = w
+		}
+	}
+	// Only grow when a marker is wider than the gutter (i.e. it would overlap
+	// the item text). Markers that already fit leave the indent untouched, so
+	// short-marker lists stay byte-identical. When growing, add a space gap so
+	// the marker and text are visibly separated.
+	if widest > l.indent {
+		return widest + l.spaceWidth()
+	}
+	return l.indent
+}
+
+// markerWidth returns the unbroken width of the item's marker (its widest
+// single-line extent), used to size the outside gutter so a long marker does
+// not overlap the item text. Zero when the marker is empty/suppressed.
+func (l *List) markerWidth(index int) float64 {
+	words, _ := l.markerParagraph(index).measureWords(1e9)
+	return wordsWidth(words)
+}
+
+// wordsWidth sums word widths plus the inter-word SpaceAfter gaps (the trailing
+// word's SpaceAfter is excluded, matching the rendered content extent).
+func wordsWidth(words []Word) float64 {
+	w := 0.0
+	for i := range words {
+		w += words[i].Width
+		if i < len(words)-1 {
+			w += words[i].SpaceAfter
+		}
+	}
+	return w
+}
+
+// spaceWidth returns the width of a single space in the list font at the
+// list font size — the gap between an inline/gutter marker and the item text.
+func (l *List) spaceWidth() float64 {
+	return l.measurer().MeasureString(" ", l.fontSize)
 }
 
 // markerLayoutWidth returns the width to lay the marker paragraph out at.
@@ -528,7 +591,7 @@ func (l *List) planAt(area LayoutArea, baseIndent float64) LayoutPlan {
 		return LayoutPlan{Status: LayoutNothing}
 	}
 
-	totalIndent := baseIndent + l.indent
+	totalIndent := baseIndent + l.effectiveIndent()
 	itemWidth := area.Width - totalIndent
 
 	var blocks []PlacedBlock
@@ -598,16 +661,28 @@ func (l *List) planAt(area LayoutArea, baseIndent float64) LayoutPlan {
 		// Continuation fragments (a runs item split from a prior page)
 		// suppress the marker so the bullet/number is drawn only once.
 		var markerWords []Word
+		markerW := 0.0
 		if !item.suppressMarker {
 			markerPara := l.markerParagraph(i)
 			markerWords, _ = markerPara.measureWords(l.indent)
+			// markerW is the drawn marker's content width (sum of the same
+			// words), so inside text starts exactly where the marker ends.
+			markerW = wordsWidth(markerWords)
 		}
 
-		// Measure and wrap item text directly.
+		// inside places the marker inline as the leading content of the first
+		// line (RTL still uses the outside gutter path; see drawTextLine below).
+		inside := l.markerInside && l.direction != DirectionRTL
+
+		// Measure and wrap item text directly. For inside, the first line is
+		// narrowed by the marker width so wrapped lines align under the marker.
 		textPara := l.itemParagraph(item)
 		textPara.SetLeading(l.leading)
 		if l.direction != DirectionAuto {
 			textPara.SetDirection(l.direction)
+		}
+		if inside && markerW > 0 {
+			textPara.SetFirstLineIndent(markerW)
 		}
 		textWords, maxFS := textPara.measureWords(itemWidth)
 		lineHeight := maxFS * l.leading
@@ -630,9 +705,16 @@ func (l *List) planAt(area LayoutArea, baseIndent float64) LayoutPlan {
 			capturedIndent := totalIndent
 			capturedIsLast := j == len(wordLines)-1
 			capturedRTL := l.direction == DirectionRTL
+			capturedInside := inside
+			// For inside, the marker leads the first line inline at the content
+			// edge; the text then starts markerW further right on that line.
+			capturedMarkerW := 0.0
 			var capturedMarker []Word
 			if j == 0 {
 				capturedMarker = markerWords
+				if capturedInside {
+					capturedMarkerW = markerW
+				}
 			}
 
 			block := PlacedBlock{
@@ -641,13 +723,22 @@ func (l *List) planAt(area LayoutArea, baseIndent float64) LayoutPlan {
 				Links: linkSpans(wl),
 				Draw: func(ctx DrawContext, absX, absTopY float64) {
 					baselineY := absTopY - computeBaseline(capturedWords, capturedHeight)
-					if capturedRTL {
+					switch {
+					case capturedRTL:
 						// RTL: marker on the right, text indented from the right.
 						if len(capturedMarker) > 0 {
 							drawTextLine(ctx, capturedMarker, absX+capturedMaxW-capturedIndent, baselineY, capturedIndent, AlignRight, true)
 						}
 						drawTextLine(ctx, capturedWords, absX, baselineY, capturedMaxW-capturedIndent, AlignRight, capturedIsLast)
-					} else {
+					case capturedInside:
+						// Inside: marker is inline at the content edge; the first
+						// line's text follows it, wrapped lines align under it.
+						contentX := absX + capturedIndent
+						if len(capturedMarker) > 0 {
+							drawTextLine(ctx, capturedMarker, contentX, baselineY, capturedMarkerW, AlignLeft, true)
+						}
+						drawTextLine(ctx, capturedWords, contentX+capturedMarkerW, baselineY, capturedMaxW-capturedIndent-capturedMarkerW, AlignLeft, capturedIsLast)
+					default:
 						if len(capturedMarker) > 0 {
 							drawTextLine(ctx, capturedMarker, absX, baselineY, capturedIndent, AlignLeft, true)
 						}
@@ -655,10 +746,11 @@ func (l *List) planAt(area LayoutArea, baseIndent float64) LayoutPlan {
 					}
 				},
 			}
-			// Offset link annotation x-coords by the indent since the
-			// text starts after the marker column.
+			// Offset link annotation x-coords. Text starts after the gutter
+			// (outside) or after the inline marker on the first line (inside).
+			linkBase := capturedIndent + capturedMarkerW
 			for k := range block.Links {
-				block.Links[k].X += capturedIndent
+				block.Links[k].X += linkBase
 			}
 			blocks = append(blocks, block)
 			curY += lineHeight
@@ -768,6 +860,7 @@ func (l *List) cloneWithItems(items []listItem) *List {
 		direction:      l.direction,
 		markerColor:    l.markerColor,
 		markerFontSize: l.markerFontSize,
+		markerInside:   l.markerInside,
 	}
 }
 
@@ -784,6 +877,8 @@ func (l *List) planElementItem(item listItem, index int, area LayoutArea, totalI
 		return nil, 0, LayoutNothing, nil
 	}
 
+	// inside is honored for text/runs items only; element items keep the
+	// gutter (outside) marker placement even when inside is requested.
 	var markerWords []Word
 	if !item.suppressMarker {
 		markerPara := l.markerParagraph(index)

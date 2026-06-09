@@ -703,6 +703,11 @@ func (l *List) planAt(area LayoutArea, baseIndent float64) LayoutPlan {
 			capturedHeight := lineHeight
 			capturedMaxW := area.Width
 			capturedIndent := totalIndent
+			// Indent the marker by the accumulated parent indent so each
+			// nesting level's marker steps right under its parent's content
+			// rather than stacking at the container's left edge (issue #358).
+			// (RTL already steps via its depth-dependent x term below.)
+			capturedBase := baseIndent
 			capturedIsLast := j == len(wordLines)-1
 			capturedRTL := l.direction == DirectionRTL
 			capturedInside := inside
@@ -740,7 +745,7 @@ func (l *List) planAt(area LayoutArea, baseIndent float64) LayoutPlan {
 						drawTextLine(ctx, capturedWords, contentX+capturedMarkerW, baselineY, capturedMaxW-capturedIndent-capturedMarkerW, AlignLeft, capturedIsLast)
 					default:
 						if len(capturedMarker) > 0 {
-							drawTextLine(ctx, capturedMarker, absX, baselineY, capturedIndent, AlignLeft, true)
+							drawTextLine(ctx, capturedMarker, absX+capturedBase, baselineY, capturedIndent-capturedBase, AlignLeft, true)
 						}
 						drawTextLine(ctx, capturedWords, absX+capturedIndent, baselineY, capturedMaxW-capturedIndent, AlignLeft, capturedIsLast)
 					}
@@ -908,6 +913,10 @@ func (l *List) planElementItem(item listItem, index int, area LayoutArea, totalI
 		capturedMaxW := area.Width
 		capturedBaseline := markerBaseline
 		capturedRTL := l.direction == DirectionRTL
+		// Indent the marker by the accumulated parent indent so nested element
+		// items step right under their parent's content, matching the text-item
+		// path in planAt (issue #358).
+		capturedBase := totalIndent - l.effectiveIndent()
 
 		// The marker is drawn relative to its block's top, which sits at the
 		// element's top (curY). markerBaseline is measured from that top.
@@ -919,7 +928,7 @@ func (l *List) planElementItem(item listItem, index int, area LayoutArea, totalI
 				if capturedRTL {
 					drawTextLine(ctx, capturedMarker, absX+capturedMaxW-capturedIndent, baselineY, capturedIndent, AlignRight, true)
 				} else {
-					drawTextLine(ctx, capturedMarker, absX, baselineY, capturedIndent, AlignLeft, true)
+					drawTextLine(ctx, capturedMarker, absX+capturedBase, baselineY, capturedIndent-capturedBase, AlignLeft, true)
 				}
 			},
 		}

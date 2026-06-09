@@ -196,3 +196,77 @@ func TestListGutterAutoSizeWideMarker(t *testing.T) {
 		t.Errorf("short-marker text x = %v, want 18", x)
 	}
 }
+
+// TestNestedMarkerIndentsPerLevel verifies that nested-list markers step right
+// per nesting level (each level's marker aligns under its parent's content
+// edge) rather than all stacking at the container's left margin (issue #358).
+// With short markers the gutter stays at the default 18pt, so successive
+// levels indent by 18pt: 0, 18, 36.
+func TestNestedMarkerIndentsPerLevel(t *testing.T) {
+	l := NewList(font.Helvetica, 12).SetStyle(ListOrdered)
+	a := l.AddItemWithSubList("Level one")
+	a.SetStyle(ListOrdered)
+	b := a.AddItemWithSubList("Level two")
+	b.SetStyle(ListOrdered)
+	b.AddItem("Level three")
+
+	plan := l.PlanLayout(LayoutArea{Width: 400, Height: 1000})
+	lines := drawnLines(t, plan)
+
+	// The first token of each list line is its marker; in document order the
+	// three "1." markers are level 1, 2, 3.
+	var markerX []float64
+	for _, ln := range lines {
+		if len(ln) > 0 && ln[0].text == "1." {
+			markerX = append(markerX, ln[0].x)
+		}
+	}
+	if len(markerX) != 3 {
+		t.Fatalf("expected 3 nested '1.' markers, got %d: %+v", len(markerX), markerX)
+	}
+	want := []float64{0, 18, 36}
+	for i, x := range markerX {
+		if !approxEqual(x, want[i], 0.01) {
+			t.Errorf("level %d marker x = %v, want %v (markers must indent per level)", i+1, x, want[i])
+		}
+	}
+	// Guard against regressing to the old behavior (all markers at x=0).
+	if markerX[1] == 0 || markerX[2] == 0 {
+		t.Errorf("nested markers stacked at the left margin: %+v", markerX)
+	}
+}
+
+// TestNestedElementMarkerIndentsPerLevel covers the element-item path
+// (planElementItem, used for <li> with block children): its marker must also
+// indent per nesting level, matching the text-item path.
+func TestNestedElementMarkerIndentsPerLevel(t *testing.T) {
+	mkDiv := func(s string) Element {
+		d := NewDiv()
+		d.Add(NewParagraph(s, font.Helvetica, 12))
+		return d
+	}
+	l := NewList(font.Helvetica, 12).SetStyle(ListOrdered)
+	a := l.AddItemElementWithSubList(mkDiv("Level one"))
+	a.SetStyle(ListOrdered)
+	b := a.AddItemElementWithSubList(mkDiv("Level two"))
+	b.SetStyle(ListOrdered)
+	b.AddItemElement(mkDiv("Level three"))
+
+	plan := l.PlanLayout(LayoutArea{Width: 400, Height: 1000})
+	lines := drawnLines(t, plan)
+
+	var markerX []float64
+	for _, ln := range lines {
+		if len(ln) == 1 && ln[0].text == "1." { // element marker draws alone
+			markerX = append(markerX, ln[0].x)
+		}
+	}
+	if len(markerX) != 3 {
+		t.Fatalf("expected 3 element-item '1.' markers, got %d: %+v", len(markerX), markerX)
+	}
+	for i, want := range []float64{0, 18, 36} {
+		if !approxEqual(markerX[i], want, 0.01) {
+			t.Errorf("element level %d marker x = %v, want %v", i+1, markerX[i], want)
+		}
+	}
+}

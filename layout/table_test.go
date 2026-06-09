@@ -401,6 +401,74 @@ func TestTableRowspan(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("expected 2 lines, got %d", len(lines))
 	}
+
+	// The spanning cell must cover both rows, not just its starting row.
+	grid := tbl.buildGrid(tbl.resolveColWidths(400))
+	span := grid[0].cells[0]
+	if span.cell.text != "Span" {
+		t.Fatalf("expected first cell to be the span cell, got %q", span.cell.text)
+	}
+	want := grid[0].height + grid[1].height // sv == 0 by default
+	if span.spanHeight != want {
+		t.Errorf("span height: got %g, want %g (row0 %g + row1 %g)",
+			span.spanHeight, want, grid[0].height, grid[1].height)
+	}
+	if span.spanHeight <= grid[0].height {
+		t.Errorf("span height %g should exceed a single row height %g",
+			span.spanHeight, grid[0].height)
+	}
+	// Single-row cells carry no spanHeight.
+	if b1 := grid[0].cells[1]; b1.spanHeight != 0 {
+		t.Errorf("non-spanning cell B1: spanHeight got %g, want 0", b1.spanHeight)
+	}
+}
+
+func TestTableRowspanIncludesVerticalSpacing(t *testing.T) {
+	tbl := NewTable()
+	tbl.SetCellSpacing(0, 6) // 6pt vertical gap between rows
+
+	r1 := tbl.AddRow()
+	r1.AddCell("Span", font.Helvetica, 10).SetRowspan(2)
+	r1.AddCell("B1", font.Helvetica, 10)
+	r2 := tbl.AddRow()
+	r2.AddCell("B2", font.Helvetica, 10)
+
+	grid := tbl.buildGrid(tbl.resolveColWidths(400))
+	span := grid[0].cells[0]
+	// Span reaches the bottom of row 1, so it must include the gap between rows.
+	want := grid[0].height + grid[1].height + 6
+	if span.spanHeight != want {
+		t.Errorf("span height with spacing: got %g, want %g", span.spanHeight, want)
+	}
+}
+
+func TestTableRowspanDeficitGrowsLastRow(t *testing.T) {
+	// A tall rowspan cell whose content needs more height than its spanned
+	// rows naturally provide must grow the last spanned row, and its
+	// spanHeight must cover the grown rows.
+	tbl := NewTable()
+	tbl.SetColumnWidths([]float64{60, 200})
+
+	r1 := tbl.AddRow()
+	// Narrow column forces the span cell's text to wrap into many lines.
+	r1.AddCell("one two three four five six seven eight nine ten", font.Helvetica, 10).SetRowspan(2)
+	r1.AddCell("B1", font.Helvetica, 10)
+	r2 := tbl.AddRow()
+	r2.AddCell("B2", font.Helvetica, 10)
+
+	grid := tbl.buildGrid(tbl.resolveColWidths(400))
+	span := grid[0].cells[0]
+
+	// spanHeight equals the (possibly grown) two rows plus their gap (sv == 0).
+	wantSpan := grid[0].height + grid[1].height
+	if span.spanHeight != wantSpan {
+		t.Errorf("span height: got %g, want %g", span.spanHeight, wantSpan)
+	}
+	// The cell's full content must fit within the span.
+	need := tbl.cellContentHeight(&grid[0].cells[0])
+	if span.spanHeight+0.01 < need {
+		t.Errorf("span height %g does not cover content height %g", span.spanHeight, need)
+	}
 }
 
 func TestTableDefaultBorder(t *testing.T) {
@@ -417,6 +485,56 @@ func TestTableAllBorders(t *testing.T) {
 	b := AllBorders(SolidBorder(1, ColorRed))
 	if b.Top.Width != 1 || b.Right.Width != 1 || b.Bottom.Width != 1 || b.Left.Width != 1 {
 		t.Error("all borders should have width 1")
+	}
+}
+
+func TestTableRowspanThreeRows(t *testing.T) {
+	// A cell spanning three rows must cover all three (plus the two gaps
+	// between them), not just the first.
+	tbl := NewTable()
+	tbl.SetColumnWidths([]float64{100, 100})
+	tbl.SetCellSpacing(0, 5)
+
+	r1 := tbl.AddRow()
+	r1.AddCell("Span3", font.Helvetica, 10).SetRowspan(3)
+	r1.AddCell("B1", font.Helvetica, 10)
+	r2 := tbl.AddRow()
+	r2.AddCell("B2", font.Helvetica, 10)
+	r3 := tbl.AddRow()
+	r3.AddCell("B3", font.Helvetica, 10)
+
+	grid := tbl.buildGrid(tbl.resolveColWidths(400))
+	span := grid[0].cells[0]
+	want := grid[0].height + grid[1].height + grid[2].height + 2*5 // two inter-row gaps
+	if span.spanHeight != want {
+		t.Errorf("3-row span height: got %g, want %g", span.spanHeight, want)
+	}
+}
+
+func TestTableColspanAndRowspanCombined(t *testing.T) {
+	// A cell with both colspan=2 and rowspan=2: width spans two columns,
+	// height spans two rows, and the following row's cell lands past the
+	// spanned columns.
+	tbl := NewTable()
+	tbl.SetColumnWidths([]float64{50, 50, 50})
+
+	r1 := tbl.AddRow()
+	r1.AddCell("Big", font.Helvetica, 10).SetColspan(2).SetRowspan(2)
+	r1.AddCell("C1", font.Helvetica, 10)
+	r2 := tbl.AddRow()
+	// Cols 0-1 occupied by the rowspan; this cell goes to col 2.
+	r2.AddCell("C2", font.Helvetica, 10)
+
+	grid := tbl.buildGrid(tbl.resolveColWidths(400))
+	big := grid[0].cells[0]
+	if big.spanWidth != 100 {
+		t.Errorf("colspan width: got %g, want 100", big.spanWidth)
+	}
+	if want := grid[0].height + grid[1].height; big.spanHeight != want {
+		t.Errorf("rowspan height: got %g, want %g", big.spanHeight, want)
+	}
+	if c2 := grid[1].cells[0]; c2.col != 2 {
+		t.Errorf("row 2 cell should start at col 2, got %d", c2.col)
 	}
 }
 

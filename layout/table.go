@@ -722,9 +722,10 @@ func cellIntrinsicWidths(cell *Cell, availWidth float64) (minW, maxW float64) {
 
 // gridCell is a cell positioned in the flat grid.
 type gridCell struct {
-	cell      *Cell
-	col       int     // starting column index
-	spanWidth float64 // total width across spanned columns
+	cell       *Cell
+	col        int     // starting column index
+	spanWidth  float64 // total width across spanned columns
+	spanHeight float64 // total height across spanned rows (0 = single row)
 }
 
 // gridRow is a row in the flat grid with computed height.
@@ -798,10 +799,15 @@ func (t *Table) buildGrid(colWidths []float64) []gridRow {
 			col++
 		}
 
-		// Compute row height: tallest cell content + padding.
+		// Compute row height: tallest cell content + padding. Rowspanning
+		// cells are excluded here so they don't inflate their starting row;
+		// their height is distributed across the spanned rows below.
 		maxH := 0.0
 		for i := range gr.cells {
 			h := t.cellContentHeight(&gr.cells[i])
+			if gr.cells[i].cell.rowspan > 1 {
+				continue
+			}
 			if h > maxH {
 				maxH = h
 			}
@@ -810,7 +816,56 @@ func (t *Table) buildGrid(colWidths []float64) []gridRow {
 		grid = append(grid, gr)
 	}
 
+	t.resolveRowspanHeights(grid)
 	return grid
+}
+
+// resolveRowspanHeights computes spanHeight for every rowspanning cell once
+// all natural row heights are known. If a spanning cell needs more height than
+// its spanned rows provide, the deficit grows the last spanned row; spanHeight
+// is then the total covered height (spanned row heights plus the spacing gaps
+// between them).
+//
+// Note: a rowspan that straddles a page break is not handled — PlanLayout
+// splits between rows without span awareness, so such a cell draws its full
+// height past the page bottom. Tracked as a known limitation (issue #357).
+func (t *Table) resolveRowspanHeights(grid []gridRow) {
+	sv := t.effectiveSpacingV()
+
+	// Pass 1: grow the last spanned row to cover any content deficit.
+	for r := range grid {
+		for i := range grid[r].cells {
+			gc := &grid[r].cells[i]
+			if gc.cell.rowspan <= 1 {
+				continue
+			}
+			end := min(r+gc.cell.rowspan, len(grid))
+			avail := float64(end-r-1) * sv
+			for k := r; k < end; k++ {
+				avail += grid[k].height
+			}
+			if need := t.cellContentHeight(gc); need > avail {
+				grid[end-1].height += need - avail
+			}
+		}
+	}
+
+	// Pass 2: record each spanning cell's total height from the final row
+	// heights (rows may have grown in pass 1).
+	for r := range grid {
+		for i := range grid[r].cells {
+			gc := &grid[r].cells[i]
+			if gc.cell.rowspan <= 1 {
+				continue
+			}
+			end := min(r+gc.cell.rowspan, len(grid))
+			h := float64(end-r-1) * sv
+			for k := r; k < end; k++ {
+				h += grid[k].height
+			}
+			gc.spanHeight = h
+		}
+	}
 }
 
 // cellContentHeight computes the height needed for a cell's content.
@@ -1357,31 +1412,37 @@ func drawTableRowDirect(ctx DrawContext, tbl *Table, grid []gridRow, rowIndex in
 				cellX += colWidths[c] + sh
 			}
 		}
-		cellBottomY := topY - gr.height
+		// Rowspanning cells extend below their starting row; spanHeight
+		// covers the full span (0 for single-row cells).
+		cellH := gr.height
+		if gc.spanHeight > 0 {
+			cellH = gc.spanHeight
+		}
+		cellBottomY := topY - cellH
 
 		// Background fill (with optional rounded corners).
 		r := gc.cell.borderRadius
 		hasRadius := r[0] > 0 || r[1] > 0 || r[2] > 0 || r[3] > 0
 		if gc.cell.bgColor != nil {
 			if hasRadius {
-				drawBackgroundRounded(ctx, *gc.cell.bgColor, cellX, cellBottomY, gc.spanWidth, gr.height, r)
+				drawBackgroundRounded(ctx, *gc.cell.bgColor, cellX, cellBottomY, gc.spanWidth, cellH, r)
 			} else {
-				drawBackground(ctx, *gc.cell.bgColor, cellX, topY, gc.spanWidth, gr.height)
+				drawBackground(ctx, *gc.cell.bgColor, cellX, topY, gc.spanWidth, cellH)
 			}
 		}
 
 		// Borders (with optional rounded corners).
 		if hasRadius {
-			drawCellBordersRounded(ctx.Stream, gc.cell.borders, cellX, cellBottomY, gc.spanWidth, gr.height, r)
+			drawCellBordersRounded(ctx.Stream, gc.cell.borders, cellX, cellBottomY, gc.spanWidth, cellH, r)
 		} else {
-			drawCellBorders(ctx.Stream, gc.cell.borders, cellX, cellBottomY, gc.spanWidth, gr.height)
+			drawCellBorders(ctx.Stream, gc.cell.borders, cellX, cellBottomY, gc.spanWidth, cellH)
 		}
 
 		// Cell content.
 		if gc.cell.content != nil {
-			drawCellElementDirect(ctx, gc, cellX, topY, gr.height)
+			drawCellElementDirect(ctx, gc, cellX, topY, cellH)
 		} else {
-			drawCellTextDirect(ctx, gc.cell, cellX, topY, gc.spanWidth, gr.height)
+			drawCellTextDirect(ctx, gc.cell, cellX, topY, gc.spanWidth, cellH)
 		}
 	}
 }

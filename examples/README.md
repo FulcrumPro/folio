@@ -25,6 +25,7 @@ examples/
 ├── merge/          # parse, merge, and extract text from PDFs
 ├── redact/         # permanently remove sensitive text (SSNs, emails, PII)
 ├── report/         # multi-page report with layout API (tables, lists, columns)
+├── table-rowspan/  # table cells spanning multiple rows and columns
 ├── sign/           # PAdES digital signature with self-signed certificate
 ├── zugferd/        # PDF/A-3B invoice with Factur-X XML attachment
 └── README.md

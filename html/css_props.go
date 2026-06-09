@@ -652,11 +652,34 @@ var cssProperties = []cssProperty{
 	{
 		Name: "list-style-type", Aliases: []string{"list-style"}, Category: "Lists",
 		Values: []string{"disc", "circle", "square", "decimal", "lower-alpha", "upper-alpha", "lower-roman", "upper-roman", "none"},
-		Notes:  "list-style is a shorthand; only the type is extracted.",
+		Notes:  "list-style is a shorthand; type and position tokens are extracted.",
 		Apply: func(s *computedStyle, value string) {
 			v := strings.TrimSpace(strings.ToLower(value))
-			if parts := strings.Fields(v); len(parts) > 0 {
-				s.ListStyleType = parts[0]
+			parts := strings.Fields(v)
+			typeSet := false
+			for _, p := range parts {
+				switch p {
+				case "inside", "outside":
+					s.ListStylePosition = p
+				default:
+					// First non-position, non-url token is the marker type.
+					// A url(...) token is a marker image, not a type keyword.
+					if !typeSet && !strings.HasPrefix(p, "url(") {
+						s.ListStyleType = p
+						typeSet = true
+					}
+				}
+			}
+		},
+	},
+	{
+		Name: "list-style-position", Category: "Lists",
+		Values: []string{"inside", "outside"},
+		Apply: func(s *computedStyle, value string) {
+			v := strings.TrimSpace(strings.ToLower(value))
+			switch v {
+			case "inside", "outside":
+				s.ListStylePosition = v
 			}
 		},
 	},

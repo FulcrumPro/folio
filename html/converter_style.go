@@ -410,16 +410,23 @@ func (c *converter) resolveContentValue(val string) string {
 			closeIdx := strings.IndexByte(remaining, ')')
 			if closeIdx >= 0 {
 				inner := remaining[len("counters("):closeIdx]
-				parts := strings.SplitN(inner, ",", 2)
+				// Split on top-level commas only: the separator argument is a
+				// quoted string that may itself contain commas (e.g.
+				// counters(item, ", ")), so a naive split would corrupt it.
+				parts := splitCounterArgs(inner)
 				name := strings.TrimSpace(parts[0])
 				sep := "."
 				if len(parts) > 1 {
 					sep = strings.Trim(strings.TrimSpace(parts[1]), `"'`)
 				}
+				style := ""
+				if len(parts) > 2 {
+					style = strings.TrimSpace(parts[2])
+				}
 				stack := c.counters[name]
 				strs := make([]string, len(stack))
 				for i, v := range stack {
-					strs[i] = strconv.Itoa(v)
+					strs[i] = formatCounterValue(v, style)
 				}
 				result.WriteString(strings.Join(strs, sep))
 				remaining = remaining[closeIdx+1:]
@@ -448,7 +455,7 @@ func (c *converter) resolveContentValue(val string) string {
 				case "pages":
 					result.WriteString(layout.CounterPlaceholder("pages", style))
 				default:
-					result.WriteString(strconv.Itoa(c.getCounter(name)))
+					result.WriteString(formatCounterValue(c.getCounter(name), style))
 				}
 				remaining = remaining[closeIdx+1:]
 				continue
@@ -463,6 +470,63 @@ func (c *converter) resolveContentValue(val string) string {
 		}
 	}
 	return result.String()
+}
+
+// splitCounterArgs splits a counters() argument list on top-level commas,
+// ignoring commas inside single- or double-quoted strings so a quoted
+// separator like ", " is preserved intact.
+func splitCounterArgs(inner string) []string {
+	var args []string
+	var buf strings.Builder
+	var quote byte
+	for i := 0; i < len(inner); i++ {
+		ch := inner[i]
+		switch {
+		case quote != 0:
+			if ch == quote {
+				quote = 0
+			}
+			buf.WriteByte(ch)
+		case ch == '"' || ch == '\'':
+			quote = ch
+			buf.WriteByte(ch)
+		case ch == ',':
+			args = append(args, buf.String())
+			buf.Reset()
+		default:
+			buf.WriteByte(ch)
+		}
+	}
+	args = append(args, buf.String())
+	return args
+}
+
+// formatCounterValue renders a counter value using a CSS list-style keyword.
+// The style is matched case-insensitively; unknown keywords fall back to
+// decimal. Roman/alpha conversion is shared with the layout package so list
+// markers and counter() output stay consistent.
+func formatCounterValue(n int, style string) string {
+	switch strings.ToLower(strings.TrimSpace(style)) {
+	case "", "decimal":
+		return strconv.Itoa(n)
+	case "decimal-leading-zero":
+		if n >= 0 && n < 10 {
+			return "0" + strconv.Itoa(n)
+		}
+		return strconv.Itoa(n)
+	case "lower-roman":
+		return layout.ToRoman(n, false)
+	case "upper-roman":
+		return layout.ToRoman(n, true)
+	case "lower-alpha", "lower-latin":
+		return layout.ToAlpha(n, 'a')
+	case "upper-alpha", "upper-latin":
+		return layout.ToAlpha(n, 'A')
+	case "none":
+		return ""
+	default:
+		return strconv.Itoa(n)
+	}
 }
 
 // parseCounterEntries parses a counter-reset or counter-increment value.

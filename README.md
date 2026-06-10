@@ -65,18 +65,16 @@ func main() {
 
 ## HTML to PDF
 
-Pass an HTML string to the converter and receive a `[]layout.Element`
-ready to add to a document. Runs in-process — no subprocess, no
-headless browser, no external service.
+Pass an HTML string to a document with `AddHTML` and folio wires the
+converted content into it — normal-flow elements, `@page` size and margins,
+running headers/footers, and absolutely/`position:fixed` elements alike.
+Runs in-process — no subprocess, no headless browser, no external service.
 
 ```go
-import (
-    "github.com/carlos7ags/folio/document"
-    "github.com/carlos7ags/folio/html"
-)
+import "github.com/carlos7ags/folio/document"
 
 doc := document.NewDocument(document.PageSizeLetter)
-elems, _ := html.Convert(`
+doc.AddHTML(`
     <h1>Invoice #1042</h1>
     <p>Bill to: <strong>Acme Corp</strong></p>
     <table border="1">
@@ -84,14 +82,17 @@ elems, _ := html.Convert(`
         <tr><td>Consulting</td><td>$1,200</td></tr>
     </table>
 `, nil)
-for _, e := range elems {
-    doc.Add(e)
-}
 doc.Save("invoice.pdf")
 ```
 
+`AddHTML` is the canonical entry point. When you need the raw conversion
+result to inspect or transform it first, use `html.ConvertFull` and add it
+back with `doc.AddConvertResult(result)` — adding `result.Elements` by hand
+drops absolutes, margin boxes, and `@page` config.
+
 Supports 40+ HTML elements, inline and `<style>` block CSS, flexbox, CSS grid,
-SVG, named/hex/rgb colors, `@page` rules, and tables with colspan.
+SVG, named/hex/rgb colors, `@page` rules, multi-level list numbering via CSS
+counters, and tables with colspan/rowspan.
 
 For the full list of recognized CSS properties, accepted value forms, and
 known unsupported features, see [docs/CSS_SUPPORT.md](docs/CSS_SUPPORT.md).

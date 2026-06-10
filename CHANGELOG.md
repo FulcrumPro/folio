@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.9.1] - 2026-06-10
+
+A rendering-correctness release across `border-radius` (#329), CSS paged media
+(`@page`, `position: fixed`, margin boxes — #327/#328), and lists
+(#330/#339/#342/#347/#358), plus a from-scratch fix of the QR barcode encoder
+(#341). Adds native multi-level list numbering via CSS counters (#356), table
+rowspan geometry (#357), `Document.AddConvertResult`, and
+`SetPageSize`/`PageSize` (#338). No breaking changes.
+
+### Added
+
+- **`document.Document.AddConvertResult(*html.ConvertResult) error`** — the wiring half of `AddHTML`, exported so callers who need the raw `ConvertResult` (to inspect or transform elements before rendering) can add it back with a single correct call. It forwards everything the converter produces — normal-flow elements, absolutely/`position:fixed` elements, `@page` size and margins, all four margin-box sets, and `<title>`/`<meta>` metadata — and sets the page size from any `@page` rule. `AddHTML` is now exactly `ConvertFull` + `AddConvertResult`, so the two paths cannot diverge. This closes the discoverability trap where a hand-written `for _, e := range result.Elements { doc.Add(e) }` loop silently dropped absolutes, margin boxes, and `@page` config with no error (#338)
+- **`document.Document.SetPageSize(PageSize)` and `PageSize() PageSize`** — read and override the page dimensions after `NewDocument`. The size was previously fixed at construction even though `AddHTML` mutates it internally from `@page` rules; these expose the missing setter/getter. `AddConvertResult` derives the size from `@page` automatically, so the pre-`NewDocument` geometry-resolve dance is no longer required (#338)
+- **Code 128 code sets A and C** — `barcode.NewCode128` now selects sets A, B, and C automatically instead of Code B only. Set C encodes digit runs as pairs (roughly halving the width of numeric payloads) and set A encodes the ASCII control characters (0–31); bytes above 127 still return an error. Round-trip and golden-pattern tests cover every code-set transition (#346)
+- **Native multi-level list numbering via CSS counters and `::marker`** — `li::marker { content: ... }` now defines the marker string, so `counter-reset` / `counter-increment` with `counter()` / `counters()` produce true nested numbering (e.g. `1`, `1.1`, `1.1.1`) instead of a per-level restart. Adds `list-style-position` (`inside` / `outside`): `inside` renders the marker inline with the first content line and wraps subsequent lines under it; `outside` (default) places it in a gutter that auto-grows to fit a wide marker so multi-level ordinals no longer overlap the item text (short-marker lists stay byte-identical). The `list-style` shorthand now scans all tokens (position / type / image). `layout.List` gains `SetMarkerInside`. New `examples/legal-numbering` renders a nested Master Services Agreement with hanging indents. Phase 1 of #356
+- **Table `rowspan` vertical geometry** — a `rowspan` cell previously reserved grid occupancy (following rows skipped its columns) but was always drawn one row tall. The spanning cell now spans the full height of its rows: `buildGrid` excludes rowspanning cells from their starting row's natural height, then resolves span heights from the summed spanned-row heights plus inter-row gaps (growing the last spanned row when content needs more room), and vertical alignment centers across the full span. A rowspan straddling a page break is not yet handled (#357)
+
+### Fixed
+
+#### `border-radius` (#329)
+
+- **Percentage `border-radius` renders as a true rounded corner** — `border-radius: 50%` was resolving against a zero reference and collapsing to 0 (square corners). It now resolves per-axis: a circle on a square box, an ellipse on a rectangle, per CSS Backgrounds §5.5 corner clamping (#329)
+- **`border-radius` survives on a text-bearing box** — a box with a direct text run drew its rounded background, then the text's paragraph re-painted the same color as a square rectangle on top, squaring the corners. The redundant fill (and any matching `TextRun.BackgroundColor` highlight) is now cleared, so the common "number inside a colored circle" badge works as a single rounded box (#329)
+- **`border-radius` applied across the remaining container paths** — `flex: 0 0 auto` chips, grid items, `display: block` spans, `blockquote`, `figure`, and table wrappers each now round like `display: inline-block`. Previously only the inline-block path took the rounded-rect draw, so visually identical content-hugging boxes rounded or not depending on how they were sized (#329)
+
+#### CSS paged media — `@page`, `position: fixed`, margin boxes (#327, #328)
+
+- **`position: fixed` elements render on every page** — a fixed element (page watermark, pinned footer) was emitted once on the last flowed page instead of repeated on each page. It now draws on every page (#327)
+- **`@page :first` / `:left` / `:right` margins inherit the base `@page` cascade** — a partial pseudo-page override (e.g. `@page :first { margin: 20px }`) now inherits the base `@page {}` margins for the sides it does not set, and left/right duplex margin boxes resolve correctly (#327)
+- **`@page` parsing correctness bundle** — a batch of fixes to `@page` rule parsing across the converter, layout, and document layers (size/orientation resolution, margin percentage/`calc` resolution, and margin-box cascade), so every document-building entry point applies identical paged-media geometry (#327)
+- **`@page` margin boxes embed the default font for PDF/A** — running headers/footers declared via `@bottom-center` etc. now carry the embedded body font, so a PDF/A document with page numbering no longer fails conformance on an unembedded font in the margin box (#328)
+
+#### Lists and inline-block (#330, #339, #342, #347, #358)
+
+- **`display: inline-block` shrinks to fit and flows inline** — an inline-block box now sizes to its content (fit-content width) and participates in inline flow instead of forcing a block break (#330)
+- **Styled `<li>` lays out block children and honors its own box** — a list item containing block-level children (cards, nested divs) now lays them out correctly, and the `<li>`'s own background / border / `border-radius` is drawn via a per-item box that the list layout previously lacked (#339, #342)
+- **`inline-block` / explicit-width `<li>` hugs its content and stops double-painting** — follow-up to the per-item box: a badge-style `<li>` now shrinks to content and clears the square background overpaint that squared its rounded corners (#342)
+- **Ordered lists continue numbering and keep every item across a page break** — a long `<ol>` spanning pages restarted at `1.` on the second page and silently dropped the item straddling the boundary. Numbering now continues the sequence (honoring `<ol start="N">`), and a boundary item is split or deferred so no content is lost. Adds `layout.List.SetStart`/`Start` (#347)
+- **Nested list markers indent per level** — a sub-list's marker was drawn at the container's left margin regardless of depth, so every nested ordinal sat in the same left column while only the body text indented. Each level's marker now steps right by the accumulated parent indent, landing under its parent's content edge (LTR and RTL; `list-style-position: inside` already drew relative to the content edge). Single-level lists are unaffected (#358)
+- **Margin-box fidelity for `@page :left` / `:right`** — fixing the wiring around `AddConvertResult` surfaced that the left/right margin-box reconstruction dropped the `HasColor` flag and the embedded font that base and `:first` already carried; all four sets are now consistent (#338)
+- **`examples/html-to-pdf` no longer drops absolutes** — the example wired the raw `ConvertFull` result by hand and forwarded only `result.Elements`, silently dropping `position: fixed`/`absolute` content. It now uses `doc.AddConvertResult(result)`, which forwards elements, absolutes, `@page` config, and margin boxes in one call (#338)
+
+#### Barcodes (#341, #346)
+
+- **QR codes are now scannable** — `barcode.NewQR` produced structurally valid but unscannable symbols due to four independent encoder defects: the Reed-Solomon generator polynomial was built constant-term-first (so every block's error-correction codewords were wrong), one of the two format-information copies was written bit-reversed, the version-information bits were written in reverse (breaking version 7+), and the level-H ECC-per-block table had wrong codeword counts for versions 21–40. All four are fixed and verified by an independent decoder (#341)
+- **EAN-13 quiet zones** — corrected the leading/trailing quiet-zone widths so EAN-13 symbols meet the spec and scan reliably (#346)
+
+### Tests
+
+- **Independent barcode decode tests** — `qr_decode_test.go` reads generated QR symbols back with an independently-built GF(256) field, cross-checks the codeword-capacity tables, and reads format/version info from the matrix; each check was confirmed to fail when its corresponding fix is reverted. Adds Code 128 (A/B/C) and EAN-13 decode round-trips, and an `examples/barcodes` demo rendering QR (all four ECC levels), Code 128, and EAN-13 into one PDF for visual/scanner verification (#341, #346)
+- **List pagination regression tests** — multi-page ordered-list numbering continuity, `<ol start>` continuation across a break, unordered no-content-loss, a single item taller than a page, and `SetStart` clamping (#347)
+- **`AddConvertResult` equivalence + fidelity tests** — assert `AddHTML` and `ConvertFull` + `AddConvertResult` leave identical document state (page size, all margins, all four margin-box sets, elements, absolutes, metadata), that absolutes and `@page` config survive, and the `:left`/`:right` field-fidelity regression (#338)
+
+### Documentation
+
+- **`using-folio` Claude Code skill** — a thin, version-controlled skill (`.claude/skills/using-folio`) capturing the stable usage patterns: prefer `Document.AddHTML` (or `ConvertFull` + `AddConvertResult`) over hand-wiring, the asset-loading options (`BaseFS`, `FallbackFontPath`, `StrictAssets`), PDF/A setup, and a verification cookbook. The `html` package docs gain matching guidance steering callers to `AddHTML`/`AddConvertResult` (#338)
+
 ## [0.9.0] - 2026-05-31
 
 ### Added

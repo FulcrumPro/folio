@@ -732,8 +732,23 @@ func clampFlexItemsToMinMax(items []*FlexItem, resolved []float64) {
 	for i, item := range items {
 		original := resolved[i]
 		clamped := original
-		if item.minMainSize > 0 && clamped < item.minMainSize {
-			clamped = item.minMainSize
+		// Effective minimum main size. An explicit CSS min-width (minMainSize)
+		// always wins. Otherwise, for a *growing* item (flex-grow > 0) whose
+		// min-width is auto, apply the CSS automatic minimum size (CSS Flexbox
+		// §4.5): the item must not shrink below its min-content. Without this a
+		// flex:1 column holding a definite-width box (the .NET DocGen v3 VENDOR
+		// box, `width: 300px`) was allocated only its 1/3 grow share, so the
+		// 300px box overflowed into — and its border overlapped — the NOTE
+		// column. The grow>0 gate scopes this to under-allocated growers and
+		// leaves explicit-basis items (e.g. float-run columns, grow=0) alone.
+		effMin := item.minMainSize
+		if effMin == 0 && item.grow > 0 {
+			if m, ok := item.element.(Measurable); ok {
+				effMin = m.MinWidth()
+			}
+		}
+		if effMin > 0 && clamped < effMin {
+			clamped = effMin
 		}
 		if item.maxMainSize > 0 && clamped > item.maxMainSize {
 			clamped = item.maxMainSize

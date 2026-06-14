@@ -456,17 +456,14 @@ func applyDivStyles(div *layout.Div, style computedStyle, containerWidth float64
 	if style.MinWidth != nil {
 		div.SetMinWidthUnit(cssLengthToUnitValue(style.MinWidth, containerWidth, style.FontSize))
 	}
-	if style.Height != nil && style.Height.Unit != "%" && !style.Height.dependsOnPercent() {
-		// A percentage height (CSS) resolves to `auto` when the containing
-		// block's height is indefinite (CSS 2.1 §10.5). folio lays documents
-		// out in flow against the remaining page height — never a definite
-		// block height — so a percentage height has no basis and must be auto.
-		// Resolving it against the available page height instead (the old
-		// behavior) blew a `height: 100%` grid-cell child up to ~page height,
-		// which collapsed/dropped its grid row: the .NET DocGen ExtremeShipping
-		// packing slip lost its entire PRODUCT list (each line-item row holds a
-		// `height: 100%` barcode-centering div). Definite heights (px/pt/em)
-		// still apply.
+	if isDefiniteHeight(style.Height) {
+		// A percentage height resolves to `auto` when the containing block's
+		// height is indefinite (CSS 2.1 §10.5) — always the case in folio's
+		// flow layout (see isDefiniteHeight). Resolving it against the available
+		// page height instead blew a `height: 100%` grid-cell child up to
+		// ~page height, collapsing/dropping its grid row: the .NET DocGen
+		// ExtremeShipping packing slip lost its whole PRODUCT list (each
+		// line-item row holds a `height: 100%` barcode-centering div).
 		div.SetHeightUnit(cssLengthToUnitValue(style.Height, containerWidth, style.FontSize))
 	}
 	if style.MinHeight != nil {

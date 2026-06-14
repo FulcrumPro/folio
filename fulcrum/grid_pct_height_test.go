@@ -34,10 +34,15 @@ func TestGridRowWithPercentHeightChildRenders(t *testing.T) {
 	// Baseline: rows stack top-to-bottom (PDF y is top-origin-inverted, so each
 	// row has a strictly smaller y than the one above).
 	b1, b2, b3 := ys("")
-	// With a height:100% child, the rows must still stack the same way.
-	h1, h2, h3 := ys("height:100%")
-	t.Logf("baseline y: %.0f %.0f %.0f ; pct-height y: %.0f %.0f %.0f", b1, b2, b3, h1, h2, h3)
-	if !(h1 > h2 && h2 > h3) {
-		t.Errorf("rows did not stack with a height:100%% grid-cell child (y=%.0f,%.0f,%.0f) — percentage height not treated as auto", h1, h2, h3)
+	// With a height:100% child, the rows must still stack the same way — both
+	// for a plain block child (block path) and a display:flex child (flex path;
+	// the ExtremeShipping barcode div is display:flex, the case fulcrum.28
+	// missed and fulcrum.29 fixed).
+	for _, style := range []string{"height:100%", "display:flex;align-items:center;height:100%"} {
+		h1, h2, h3 := ys(style)
+		t.Logf("baseline y: %.0f %.0f %.0f ; [%s] y: %.0f %.0f %.0f", b1, b2, b3, style, h1, h2, h3)
+		if !(h1 > h2 && h2 > h3) {
+			t.Errorf("rows did not stack with child style %q (y=%.0f,%.0f,%.0f) — percentage height not treated as auto", style, h1, h2, h3)
+		}
 	}
 }

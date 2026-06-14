@@ -401,7 +401,7 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 		style.Overflow == "hidden" ||
 		len(style.BoxShadows) > 0 ||
 		style.Width != nil || style.MaxWidth != nil || style.MinWidth != nil ||
-		style.Height != nil || style.MinHeight != nil || style.MaxHeight != nil
+		isDefiniteHeight(style.Height) || style.MinHeight != nil || style.MaxHeight != nil
 	if hasExtraVisuals {
 		div := layout.NewDiv()
 		// Clear layout properties from the Flex — they'll be applied to the
@@ -417,7 +417,7 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 		flex.SetSpaceAfter(0)
 		// If the wrapper Div has explicit height, tell the Flex its cross-axis
 		// is definite so cross-axis stretching works correctly.
-		if style.Height != nil {
+		if isDefiniteHeight(style.Height) {
 			flex.SetDefiniteCrossSize(true)
 		}
 		div.Add(flex)

@@ -292,6 +292,17 @@ type calcExpr struct {
 	right *calcExpr
 }
 
+// isDefiniteHeight reports whether a CSS height length is definite — i.e. it
+// resolves to a fixed size without reference to the containing block's height.
+// A percentage height (or a percent-dependent calc) is NOT definite: per CSS
+// 2.1 §10.5 it resolves to `auto` when the containing block height is
+// indefinite, which it always is in folio's flow layout. Callers use this to
+// avoid forcing a percentage height against the available page height (which
+// would, e.g., blow a `height: 100%` grid-cell child up to ~page height).
+func isDefiniteHeight(l *cssLength) bool {
+	return l != nil && l.Unit != "%" && !l.dependsOnPercent()
+}
+
 // dependsOnPercent reports whether the resolved value would change with
 // available width — i.e. a percentage appears somewhere in a calc, min,
 // max, or clamp tree. Plain Unit == "%" lengths take the Pct(...) path

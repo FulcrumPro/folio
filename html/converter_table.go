@@ -15,6 +15,31 @@ import (
 
 // convertTable converts a <table> element into a layout.Table.
 func (c *converter) convertTable(n *html.Node, style computedStyle) []layout.Element {
+	// Layout-wrapper unwrap (GO-599): a borderless table whose body is a
+	// single row with a single cell isn't tabular data — it's a layout
+	// wrapper (the Job/WorkOrder travelers use one to reserve per-page header
+	// space via a <thead> spacer). Such a table traps its entire body in one
+	// cell, which folio's row-level paginator cannot split across pages, so
+	// multi-page travelers drop everything past page 1. Emit the cell's
+	// content as normal block flow instead — folio paginates block flow
+	// correctly, and any real (multi-row) tables nested inside still render as
+	// tables and split between their own rows. Gated on the table having no
+	// visual chrome of its own (border, border-collapse, border-radius,
+	// background) so a genuine 1x1 table that renders as a visible box keeps
+	// its Table/Div treatment.
+	if !style.hasBorder() && style.BorderCollapse != "collapse" && !style.hasBorderRadius() && style.BackgroundColor == nil {
+		if b := getAttr(n, "border"); b == "" || b == "0" {
+			if cellNode := layoutWrapperBodyCell(n); cellNode != nil {
+				cellStyle := c.computeElementStyle(cellNode, style)
+				// Don't unwrap if the cell itself renders a visible box — its
+				// background/border/radius would be lost as plain block flow.
+				if !cellStyle.hasBorder() && !cellStyle.hasBorderRadius() && cellStyle.BackgroundColor == nil {
+					return c.walkChildren(cellNode, cellStyle)
+				}
+			}
+		}
+	}
+
 	// Save parent containerWidth for resolving the table's own width properties.
 	parentContainerWidth := c.containerWidth
 	restore := c.narrowContainerWidth(style)
@@ -129,6 +154,46 @@ func (c *converter) convertTable(n *html.Node, style computedStyle) []layout.Ele
 
 	elems = append(elems, tbl)
 	return elems
+}
+
+// layoutWrapperBodyCell returns the single body <td>/<th> of a pure
+// layout-wrapper table — a table whose body is exactly one <tr> with exactly
+// one cell — or nil if the table is real tabular data (multiple body rows,
+// multiple cells in the body row, or a <tfoot>). A leading <thead> spacer is
+// ignored: wrapper tables use it only to reserve per-page header space, which
+// is irrelevant once the body is emitted as block flow. See convertTable.
+func layoutWrapperBodyCell(n *html.Node) *html.Node {
+	var bodyRows []*html.Node
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type != html.ElementNode {
+			continue
+		}
+		switch child.DataAtom {
+		case atom.Tbody:
+			for tr := child.FirstChild; tr != nil; tr = tr.NextSibling {
+				if tr.Type == html.ElementNode && tr.DataAtom == atom.Tr {
+					bodyRows = append(bodyRows, tr)
+				}
+			}
+		case atom.Tr:
+			bodyRows = append(bodyRows, child)
+		case atom.Tfoot:
+			return nil // a footer means real tabular structure
+		}
+	}
+	if len(bodyRows) != 1 {
+		return nil
+	}
+	var cells []*html.Node
+	for cn := bodyRows[0].FirstChild; cn != nil; cn = cn.NextSibling {
+		if cn.Type == html.ElementNode && (cn.DataAtom == atom.Td || cn.DataAtom == atom.Th) {
+			cells = append(cells, cn)
+		}
+	}
+	if len(cells) != 1 {
+		return nil
+	}
+	return cells[0]
 }
 
 // convertCSSTable handles elements with display:table — builds a layout.Table

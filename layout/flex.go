@@ -258,11 +258,17 @@ func (f *Flex) Layout(maxWidth float64) []Line {
 func (f *Flex) MinWidth() float64 {
 	hPad := f.padding.Left + f.padding.Right
 	if f.direction == FlexColumn {
-		// Column: width is the widest child.
+		// Column: width is the widest child, including that child's own
+		// horizontal margins (they occupy cross-axis space). Without the
+		// margins, a column flex floored at its min-content (the automatic
+		// minimum size, fulcrum.27) is one margin too narrow — the .NET DocGen
+		// PurchaseOrderv3 VENDOR box (`width:300px; margin-right:8px`) was
+		// floored at 300pt, dropping the 8px gap to the adjacent NOTE column so
+		// the two box borders touched.
 		maxW := 0.0
 		for _, item := range f.items {
 			if m, ok := item.element.(Measurable); ok {
-				if w := m.MinWidth(); w > maxW {
+				if w := m.MinWidth() + item.marginLeft + item.marginRight; w > maxW {
 					maxW = w
 				}
 			}

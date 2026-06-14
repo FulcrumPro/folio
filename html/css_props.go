@@ -279,9 +279,20 @@ var cssProperties = []cssProperty{
 	},
 	{
 		Name: "width", Category: "BoxModel",
-		Values: []string{"<length>", "<percentage>", "auto"},
+		Values: []string{"<length>", "<percentage>", "auto", "fit-content", "min-content", "max-content"},
 		Apply: func(s *computedStyle, value string) {
-			s.Width = parseLength(value)
+			switch strings.TrimSpace(strings.ToLower(value)) {
+			case "fit-content", "min-content", "max-content":
+				// Content-based sizing: shrink the box to its content rather
+				// than filling the containing block. Leave Width nil; the
+				// block converter applies shrink-to-fit. (folio approximates
+				// all three as fit-content / shrink-to-fit.)
+				s.WidthFitContent = true
+				s.Width = nil
+			default:
+				s.WidthFitContent = false
+				s.Width = parseLength(value)
+			}
 		},
 	},
 	{

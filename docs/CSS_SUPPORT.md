@@ -144,7 +144,7 @@ also takes effect on flex containers as the gap between items.
 | `padding-left` | — | `<length>`, `<percentage>` | — |
 | `padding-right` | — | `<length>`, `<percentage>` | — |
 | `padding-top` | — | `<length>`, `<percentage>` | — |
-| `width` | — | `<length>`, `<percentage>`, `auto` | — |
+| `width` | — | `<length>`, `<percentage>`, `auto`, `fit-content`, `min-content`, `max-content` | — |
 
 ## Borders
 

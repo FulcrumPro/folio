@@ -442,6 +442,13 @@ func applyDivStyles(div *layout.Div, style computedStyle, containerWidth float64
 	}
 	if style.Width != nil {
 		div.SetWidthUnit(cssLengthToUnitValue(style.Width, containerWidth, style.FontSize))
+	} else if style.WidthFitContent {
+		// width: fit-content / min-content / max-content — size the box to its
+		// content rather than filling the containing block. The .NET DocGen v3
+		// header uses `.title-background { width: fit-content }` so the colored
+		// title plate hugs "Purchase Order" / "Invoice" / etc. instead of
+		// stretching across the header column.
+		div.SetShrinkToFit(true)
 	}
 	if style.MaxWidth != nil {
 		div.SetMaxWidthUnit(cssLengthToUnitValue(style.MaxWidth, containerWidth, style.FontSize))

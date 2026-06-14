@@ -80,6 +80,11 @@ type computedStyle struct {
 	Float           string // "left", "right", "none"
 	Clear           string // "left", "right", "both", "none"
 	Width           *cssLength
+	// WidthFitContent is set when `width` is one of the content-sizing
+	// keywords (fit-content / min-content / max-content). The box shrinks to
+	// fit its content instead of filling the containing block. Width stays nil
+	// (no explicit length); the block's shrink-to-fit path handles sizing.
+	WidthFitContent bool
 	Height          *cssLength
 	MaxWidth        *cssLength
 	MinWidth        *cssLength

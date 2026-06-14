@@ -19,6 +19,11 @@ type SVG struct {
 	viewBox     ViewBox
 	aspectRatio PreserveAspectRatio
 	defs        map[string]*Node // reusable elements indexed by id
+	// classRules holds declarations from internal <style> elements, keyed by
+	// class name (without the leading dot). .NET DocGen icons reference their
+	// fill via a class (`<path class="st4">` + `<style>.st4{fill:#135EAB}</style>`)
+	// rather than a presentation attribute. nil when the SVG has no <style>.
+	classRules map[string]map[string]string
 }
 
 // ViewBox defines the SVG coordinate system.
@@ -62,7 +67,35 @@ func ParseReader(r io.Reader) (*SVG, error) {
 	s := &SVG{root: svgRoot}
 	s.extractDimensions()
 	s.indexDefs()
+	s.extractClassRules()
 	return s, nil
+}
+
+// extractClassRules collects declarations from every internal <style> element
+// into classRules, keyed by class name. Only simple class selectors (`.foo`,
+// optionally comma-separated and/or prefixed with an element name like
+// `path.foo`) are honored — enough for the .NET DocGen icon stylesheets; more
+// complex selectors (descendant, attribute, pseudo) are skipped.
+func (s *SVG) extractClassRules() {
+	var styleText strings.Builder
+	var walk func(n *Node)
+	walk = func(n *Node) {
+		if n == nil {
+			return
+		}
+		if n.Tag == "style" && n.Text != "" {
+			styleText.WriteString(n.Text)
+			styleText.WriteByte('\n')
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(s.root)
+	if styleText.Len() == 0 {
+		return
+	}
+	s.classRules = parseCSSClassRules(styleText.String())
 }
 
 // Defs returns the map of reusable elements indexed by id.

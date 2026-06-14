@@ -568,7 +568,7 @@ func TestResolveStyle_FillAttribute(t *testing.T) {
 		Attrs: map[string]string{"fill": "red"},
 	}
 	parent := defaultStyle()
-	s := resolveStyle(node, parent)
+	s := resolveStyle(node, parent, nil)
 	if s.Fill == nil {
 		t.Fatal("Fill should not be nil after fill=\"red\"")
 	}
@@ -586,7 +586,7 @@ func TestResolveStyle_StrokeInheritance(t *testing.T) {
 		Tag:   "rect",
 		Attrs: map[string]string{},
 	}
-	s := resolveStyle(child, parent)
+	s := resolveStyle(child, parent, nil)
 	if s.Stroke == nil {
 		t.Fatal("Child should inherit parent stroke")
 	}
@@ -599,7 +599,7 @@ func TestResolveStyle_InlineStyleOverrides(t *testing.T) {
 		Attrs: map[string]string{"fill": "blue", "style": "fill:green"},
 	}
 	parent := defaultStyle()
-	s := resolveStyle(node, parent)
+	s := resolveStyle(node, parent, nil)
 	if s.Fill == nil {
 		t.Fatal("Fill should not be nil")
 	}
@@ -619,7 +619,7 @@ func TestResolveStyle_OpacityNotInherited(t *testing.T) {
 		Tag:   "rect",
 		Attrs: map[string]string{},
 	}
-	s := resolveStyle(child, parent)
+	s := resolveStyle(child, parent, nil)
 	// Opacity is non-inherited; child should get default 1.0.
 	if !approxEqual(s.Opacity, 1.0) {
 		t.Errorf("Opacity should not be inherited, got %.4f, want 1.0", s.Opacity)
@@ -635,7 +635,7 @@ func TestResolveStyle_FillNone(t *testing.T) {
 	parent := defaultStyle()
 	parent.Fill = &parentFill
 
-	s := resolveStyle(node, parent)
+	s := resolveStyle(node, parent, nil)
 	if s.Fill != nil {
 		t.Error("fill=\"none\" should result in nil Fill")
 	}
@@ -923,7 +923,7 @@ func TestResolveStyle_UnrecognizedProperties(t *testing.T) {
 		Attrs: map[string]string{"style": "fill:red; unknown-prop:value; another-thing:123"},
 	}
 	parent := defaultStyle()
-	s := resolveStyle(node, parent)
+	s := resolveStyle(node, parent, nil)
 	// Fill should still be parsed correctly.
 	if s.Fill == nil {
 		t.Fatal("Fill should not be nil after style with unrecognized properties")
@@ -995,7 +995,7 @@ func TestTextAnchorStyleParsing(t *testing.T) {
 		Tag:   "text",
 		Attrs: map[string]string{"text-anchor": "middle"},
 	}
-	style := resolveStyle(node, defaultStyle())
+	style := resolveStyle(node, defaultStyle(), nil)
 	if style.TextAnchor != "middle" {
 		t.Errorf("expected TextAnchor=middle, got %q", style.TextAnchor)
 	}
@@ -1005,7 +1005,7 @@ func TestTextAnchorInheritance(t *testing.T) {
 	parent := defaultStyle()
 	parent.TextAnchor = "end"
 	child := &Node{Tag: "tspan", Attrs: map[string]string{}}
-	style := resolveStyle(child, parent)
+	style := resolveStyle(child, parent, nil)
 	if style.TextAnchor != "end" {
 		t.Errorf("expected TextAnchor inherited as end, got %q", style.TextAnchor)
 	}
@@ -1016,7 +1016,7 @@ func TestDominantBaselineParsing(t *testing.T) {
 		Tag:   "text",
 		Attrs: map[string]string{"dominant-baseline": "middle"},
 	}
-	style := resolveStyle(node, defaultStyle())
+	style := resolveStyle(node, defaultStyle(), nil)
 	if style.DominantBaseline != "middle" {
 		t.Errorf("expected DominantBaseline=middle, got %q", style.DominantBaseline)
 	}

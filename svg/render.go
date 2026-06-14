@@ -48,6 +48,11 @@ type RenderOptions struct {
 	// Defs holds reusable elements indexed by id (from <defs> blocks).
 	// This is set internally during rendering and should not be set by callers.
 	defs map[string]*Node
+
+	// classStyles holds internal-stylesheet declarations keyed by class name.
+	// Set internally during rendering (from the parsed <style> elements) and
+	// should not be set by callers.
+	classStyles map[string]map[string]string
 }
 
 // Draw renders the SVG into a PDF content stream at position (x, y) bottom-left
@@ -116,8 +121,10 @@ func (s *SVG) DrawWithOptions(stream *content.Stream, x, y, w, h float64, opts R
 		stream.ConcatMatrix(1, 0, 0, 1, -vb.MinX, -vb.MinY)
 	}
 
-	// Pass defs into opts for <use> resolution.
+	// Pass defs into opts for <use> resolution and the internal-stylesheet
+	// class rules for fill/stroke resolution.
 	opts.defs = s.defs
+	opts.classStyles = s.classRules
 
 	// Walk the tree with the default parent style.
 	parentStyle := defaultStyle()
@@ -139,7 +146,7 @@ func renderNode(stream *content.Stream, node *Node, parentStyle Style, opts Rend
 		return
 	}
 
-	style := resolveStyle(node, parentStyle)
+	style := resolveStyle(node, parentStyle, opts.classStyles)
 
 	// Skip hidden elements.
 	if style.Display == "none" {
@@ -619,7 +626,7 @@ func renderTextWithTspan(stream *content.Stream, node *Node, parentStyle Style, 
 			continue
 		}
 
-		childStyle := resolveStyle(child, parentStyle)
+		childStyle := resolveStyle(child, parentStyle, opts.classStyles)
 
 		// Absolute repositioning.
 		if _, ok := child.Attrs["x"]; ok {

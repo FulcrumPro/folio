@@ -63,7 +63,7 @@ func defaultStyle() Style {
 // font-family, font-size, font-weight, font-style, visibility.
 // Non-inherited (reset to defaults): opacity, display, stroke-dasharray,
 // stroke-dashoffset, transform.
-func resolveStyle(node *Node, parent Style) Style {
+func resolveStyle(node *Node, parent Style, classRules map[string]map[string]string) Style {
 	// Start with inherited properties from parent.
 	s := Style{
 		Fill:             parent.Fill,
@@ -96,10 +96,13 @@ func resolveStyle(node *Node, parent Style) Style {
 		return s
 	}
 
-	// Apply presentation attributes (lower priority).
+	// Apply presentation attributes (lowest priority).
 	applyProperties(&s, node.Attrs)
 
-	// Apply inline style attribute (higher priority).
+	// Apply internal-stylesheet class rules (middle priority).
+	applyClassRules(&s, node, classRules)
+
+	// Apply inline style attribute (highest priority).
 	if styleAttr, ok := node.Attrs["style"]; ok {
 		props := parseInlineStyle(styleAttr)
 		applyProperties(&s, props)
@@ -227,6 +230,111 @@ func parseInlineStyle(s string) map[string]string {
 		}
 	}
 	return result
+}
+
+// parseCSSClassRules parses an internal <style> stylesheet into a map of class
+// name (without the leading dot) → declaration map. It handles comma-separated
+// selector lists and element-qualified class selectors (`.st4`, `path.st4`,
+// `.a, .b`). Selectors without a class component (bare element, id, descendant,
+// pseudo) are skipped — folio only needs the class case for the .NET DocGen
+// icon fills. When two rules target the same class the later one wins on a
+// per-property basis (last-declaration cascade), which is sufficient here.
+func parseCSSClassRules(css string) map[string]map[string]string {
+	css = stripCSSComments(css)
+	rules := make(map[string]map[string]string)
+	for len(css) > 0 {
+		open := strings.IndexByte(css, '{')
+		if open < 0 {
+			break
+		}
+		close := strings.IndexByte(css[open:], '}')
+		if close < 0 {
+			break
+		}
+		close += open
+		selectors := css[:open]
+		props := parseInlineStyle(css[open+1 : close])
+		css = css[close+1:]
+		if len(props) == 0 {
+			continue
+		}
+		for _, sel := range strings.Split(selectors, ",") {
+			class := classNameFromSelector(sel)
+			if class == "" {
+				continue
+			}
+			dst, ok := rules[class]
+			if !ok {
+				dst = make(map[string]string)
+				rules[class] = dst
+			}
+			for k, v := range props {
+				dst[k] = v
+			}
+		}
+	}
+	if len(rules) == 0 {
+		return nil
+	}
+	return rules
+}
+
+// classNameFromSelector extracts the trailing class name from a simple selector
+// like ".st4" or "path.st4". Returns "" if the selector has no class component
+// or carries unsupported combinators (descendant/child/pseudo/attribute).
+func classNameFromSelector(sel string) string {
+	sel = strings.TrimSpace(sel)
+	if sel == "" {
+		return ""
+	}
+	// Reject anything with a combinator or qualifier we don't model.
+	if strings.ContainsAny(sel, " >+~:[#*") {
+		return ""
+	}
+	dot := strings.LastIndexByte(sel, '.')
+	if dot < 0 {
+		return ""
+	}
+	name := sel[dot+1:]
+	if name == "" {
+		return ""
+	}
+	return name
+}
+
+// stripCSSComments removes /* … */ comment spans from a stylesheet.
+func stripCSSComments(css string) string {
+	for {
+		start := strings.Index(css, "/*")
+		if start < 0 {
+			return css
+		}
+		end := strings.Index(css[start+2:], "*/")
+		if end < 0 {
+			return css[:start]
+		}
+		css = css[:start] + css[start+2+end+2:]
+	}
+}
+
+// applyClassRules applies any internal-stylesheet declarations matching the
+// node's space-separated class attribute. Cascade position: after presentation
+// attributes, before the inline style attribute (CSS 2.1 §6.4.4 — an internal
+// stylesheet outranks presentation attributes but is outranked by the style
+// attribute).
+func applyClassRules(s *Style, node *Node, classRules map[string]map[string]string) {
+	if len(classRules) == 0 || node == nil {
+		return
+	}
+	classAttr := node.Attrs["class"]
+	if classAttr == "" {
+		return
+	}
+	for _, cls := range strings.Fields(classAttr) {
+		if props, ok := classRules[cls]; ok {
+			applyProperties(s, props)
+		}
+	}
 }
 
 // parseURLRef extracts the id from a url(#id) reference.

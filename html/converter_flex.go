@@ -10,7 +10,22 @@ import (
 	"github.com/carlos7ags/folio/layout"
 
 	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
+
+// isNonVisualFlexChild reports whether a direct flex child with the given tag
+// generates no box at all (matching convertElementInner's skip list), so it
+// must NOT be synthesized into a zero-size placeholder flex item. Visible
+// elements that merely render empty (an empty <div>/<span>) are still flex
+// items and are kept.
+func isNonVisualFlexChild(a atom.Atom) bool {
+	switch a {
+	case atom.Script, atom.Style, atom.Link, atom.Title, atom.Meta, atom.Head, atom.Base:
+		return true
+	default:
+		return false
+	}
+}
 
 // convertFlex converts a display:flex container into a layout.Flex.
 func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Element {
@@ -162,7 +177,22 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 			childElems = c.convertNode(child, style)
 		}
 		if len(childElems) == 0 {
-			continue
+			// A visible element child that rendered no content is still a
+			// flex item per CSS Flexbox §4: it generates a zero-size item
+			// box that participates in justify-content distribution. Chrome
+			// keeps an empty <div class="last-modified"></div> next to its
+			// sibling under `justify-content: space-between`, holding the
+			// sibling at the far edge; dropping the empty item collapses the
+			// row to flex-start (the v3 commerce footer rendered its
+			// "Powered By" block left instead of right). Synthesize a
+			// zero-size placeholder so the item count — and thus the
+			// distribution — matches the browser. Skip only nodes that
+			// generate no box at all: non-element nodes, display:none, and
+			// non-visual head elements (script/style/link/title/meta).
+			if child.Type != html.ElementNode || childStyle.Display == "none" || isNonVisualFlexChild(child.DataAtom) {
+				continue
+			}
+			childElems = []layout.Element{layout.NewDiv()}
 		}
 
 		// Per CSS Flexbox §3, the `float` property has no effect on

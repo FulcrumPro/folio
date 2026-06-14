@@ -728,14 +728,18 @@ func (g *Grid) buildOverflowResult(cells []cssGridCell, cellPlans []LayoutPlan,
 		}
 	}
 
-	// If not even the first row fits and there's nothing before it, force it.
+	// Not even the first row fits in the remaining area. Signal that the
+	// whole grid must move to the next page, mirroring Flex's LayoutNothing
+	// behavior (flex.go). The renderer (render_plans.go) re-queues the grid
+	// onto a fresh page — where its rows split normally via the lastFitRow>=0
+	// path — and only force-renders (area height 1e9) when the grid is alone
+	// at the top of a fresh page, which bounds the recursion. Returning
+	// LayoutFull here (the old behavior) drew the row past the page edge and
+	// told the parent it fit, so the parent kept placing subsequent grids off
+	// the page bottom — silently dropping every line item after the first
+	// page (the v3 invoice/PO/quote/SO line-item rows are display:grid).
 	if lastFitRow < 0 {
-		// Force first row: return everything as full (same as flex behavior).
-		allChildren := g.positionCells(cells, cellPlans, colX, colWidths, rowY, rowHeights)
-		totalH := rowY[0] + rowHeights[0] + g.padding.Bottom
-		consumed := g.spaceBefore + totalH + g.spaceAfter
-		containerBlock := g.makeContainerBlock(allChildren, totalH, area.Width)
-		return LayoutPlan{Status: LayoutFull, Consumed: consumed, Blocks: []PlacedBlock{containerBlock}}
+		return LayoutPlan{Status: LayoutNothing}
 	}
 
 	// Collect blocks for fitted rows only.

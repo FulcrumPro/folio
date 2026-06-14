@@ -776,6 +776,17 @@ func parseBgPosition(val string) [2]layout.ResolvableLength {
 		return def
 	}
 
+	// Two-value keyword syntax is order-independent: top/bottom are vertical,
+	// left/right are horizontal, so "top right" == "right top" (x=right,
+	// y=top). Without this swap "top right" was read positionally as x=top
+	// (0%), y=right — pinning a `background-position: top right` logo to the
+	// left edge instead of the right.
+	isVertical := func(s string) bool { return s == "top" || s == "bottom" }
+	isHorizontal := func(s string) bool { return s == "left" || s == "right" }
+	if isVertical(parts[0]) || isHorizontal(parts[1]) {
+		parts[0], parts[1] = parts[1], parts[0]
+	}
+
 	x, y := layout.ResolvableLength(bgPosZero), layout.ResolvableLength(bgPosZero)
 	if l, ok := parseAxis(parts[0]); ok {
 		x = l

@@ -481,6 +481,32 @@ func (g *Grid) PlanLayout(area LayoutArea) LayoutPlan {
 		return g.buildOverflowResult(cells, cellPlans, colX, colWidths, rowY, rowHeights, numRows, numCols, area, maxContentH)
 	}
 
+	// Step 4.5: align-items: stretch (the CSS grid default) — grow each cell's
+	// element to fill its cell height so backgrounds and borders cover the
+	// whole cell, not just the content. Without this a short cell in a tall row
+	// (the v3 line-item index badge, whose dark background must fill the row and
+	// whose number must center vertically) drew its background only behind its
+	// own content. Mirrors the flex cross-axis stretch pass. Only stretch a
+	// height-settable element with no explicit height that is shorter than its
+	// cell; clear the forced height afterwards so the element reverts to
+	// content sizing for any later (re)layout.
+	if g.alignItems == CrossAlignStretch {
+		for i, cell := range cells {
+			cellH := g.cellHeight(cell, rowHeights)
+			if cellPlans[i].Consumed >= cellH-0.01 {
+				continue
+			}
+			hs, ok := g.children[cell.childIdx].(HeightSettable)
+			if !ok || hs.HasExplicitHeight() {
+				continue
+			}
+			layoutWidth := g.cellLayoutWidth(cell, g.cellWidth(cell, colWidths))
+			hs.ForceHeight(Pt(cellH))
+			cellPlans[i] = g.children[cell.childIdx].PlanLayout(LayoutArea{Width: layoutWidth, Height: cellH})
+			hs.ClearHeightUnit()
+		}
+	}
+
 	// Step 5: Position all cell blocks with alignment.
 	allChildren := g.positionCells(cells, cellPlans, colX, colWidths, rowY, rowHeights)
 

@@ -455,8 +455,15 @@ func (f *Flex) planRow(area LayoutArea) LayoutPlan {
 			break
 		}
 
-		// Position items with justify-content and align-items.
-		xOffsets := f.computeJustifyOffsets(resolvedWidths, innerWidth)
+		// Position items with justify-content and align-items. Distribution
+		// works on each item's OUTER width (content + horizontal margins) so
+		// margins occupy space between items; each item is then shifted right
+		// by its own margin-left within its slot.
+		outerWidths := make([]float64, len(line.items))
+		for j, item := range line.items {
+			outerWidths[j] = resolvedWidths[j] + item.marginLeft + item.marginRight
+		}
+		xOffsets := f.computeJustifyOffsets(outerWidths, innerWidth)
 
 		// margin-left: auto — absorb remaining space before this item,
 		// pushing it (and all subsequent items) to the right.
@@ -466,7 +473,7 @@ func (f *Flex) planRow(area LayoutArea) LayoutPlan {
 				usedBefore := xOffsets[j]
 				usedAfter := 0.0
 				for k := j; k < len(line.items); k++ {
-					usedAfter += resolvedWidths[k]
+					usedAfter += outerWidths[k]
 					if k > j {
 						usedAfter += f.columnGap
 					}
@@ -489,7 +496,7 @@ func (f *Flex) planRow(area LayoutArea) LayoutPlan {
 			yOffset := f.computeAlignOffset(item, lineCrossSize, itemPlans[j].Consumed)
 			for _, block := range itemPlans[j].Blocks {
 				b := block
-				b.X += f.padding.Left + xOffsets[j]
+				b.X += f.padding.Left + xOffsets[j] + item.marginLeft
 				b.Y += curY + yOffset
 				allChildren = append(allChildren, b)
 			}
@@ -650,8 +657,18 @@ func (f *Flex) resolveGrowShrink(line flexLine, innerWidth float64) []float64 {
 	for _, b := range basis {
 		totalBasis += b
 	}
+	// Horizontal item margins occupy main-axis space but are not flexible (CSS
+	// Flexbox §9.7: only the flex base size grows/shrinks, never margins).
+	// Reserve them so grow/shrink leaves room for them — otherwise an
+	// overflowing row shrinks the items AND swallows the margins, collapsing
+	// inter-column gaps (the v3 commerce header's company-info margin-left and
+	// the mirror-line separator vanished, abutting the two contact columns).
+	totalMargins := 0.0
+	for _, item := range line.items {
+		totalMargins += item.marginLeft + item.marginRight
+	}
 
-	freeSpace := innerWidth - totalGap - totalBasis
+	freeSpace := innerWidth - totalGap - totalBasis - totalMargins
 	resolved := make([]float64, n)
 	copy(resolved, basis)
 

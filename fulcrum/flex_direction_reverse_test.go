@@ -53,15 +53,32 @@ func TestFlexRowReverse(t *testing.T) {
 	})
 
 	t.Run("justify-content:right maps to flex-end", func(t *testing.T) {
-		src := `<html><head><style>body{margin:0;padding:0}
-			.c{display:flex;justify-content:right;width:400pt}
-		</style></head><body><div class="c"><div>ONLY</div></div></body></html>`
-		pdf, err := renderHTMLToPDF(src)
-		if err != nil {
-			t.Fatalf("render: %v", err)
+		render := func(j string) float64 {
+			src := `<html><head><style>body{margin:0;padding:0}
+				.c{display:flex;justify-content:` + j + `;width:400pt}
+			</style></head><body><div class="c"><div>ONLY</div></div></body></html>`
+			pdf, err := renderHTMLToPDF(src)
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			// Rightmost text Td across the doc = the (single) item's x.
+			// Robust to Tj vs TJ-array shows, which findTextX is not.
+			maxX := -1.0
+			for _, row := range tdXsByRow(pdf) {
+				for _, x := range row {
+					if x > maxX {
+						maxX = x
+					}
+				}
+			}
+			return maxX
 		}
-		if x := findTextX(pdf, "ONLY"); x < 250 {
-			t.Errorf("ONLY at x=%.1f — justify-content:right not mapped to flex-end", x)
+		// right should land the item far past where flex-start (left) does.
+		left := render("left")
+		right := render("right")
+		t.Logf("ONLY x: justify left=%.1f right=%.1f", left, right)
+		if right-left < 150 {
+			t.Errorf("justify-content:right (x=%.1f) not right-aligned vs left (x=%.1f) — `right` not mapped to flex-end", right, left)
 		}
 	})
 }

@@ -878,6 +878,19 @@ func (d *Div) PlanLayout(area LayoutArea) LayoutPlan {
 		return LayoutPlan{Status: LayoutFull, Consumed: consumed, Blocks: blocks}
 	}
 
+	// Nothing fit: the first in-flow child overflowed before any content was
+	// placed (fittedBlocks is empty). Report LayoutNothing rather than
+	// LayoutPartial with an empty container box, so the renderer relocates the
+	// whole Div to a fresh page (where its content fits) or force-renders it
+	// when alone at page top. A LayoutPartial that placed nothing makes no
+	// progress — the renderer would draw an empty box, start a new page,
+	// re-queue the same overflow, and loop when the content is taller than a
+	// page. This also lets an atomic flex child's LayoutNothing propagate so the
+	// v3 no-break totals wrapper relocates whole instead of dropping rows.
+	if len(fittedBlocks) == 0 {
+		return LayoutPlan{Status: LayoutNothing}
+	}
+
 	// Create overflow Div with remaining children.
 	overflowDiv := &Div{
 		elements:    overflowElements,

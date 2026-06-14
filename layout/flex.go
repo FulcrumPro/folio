@@ -386,10 +386,10 @@ func (f *Flex) planRow(area LayoutArea) LayoutPlan {
 	var lineHeights []float64
 	var lineChildStart []int // index into allChildren where each line's blocks start
 
-	// Remainders from fitted lines whose items paginated (block children that
-	// returned LayoutPartial/LayoutNothing). Combined with wholly-unfitted
-	// lines below to build the flex's overflow.
-	var rowOverflowItems []*FlexItem
+	// Set when any item's own content paginated (a block child returned
+	// LayoutPartial/LayoutNothing). folio's flex is atomic, so this forces the
+	// whole flex to relocate rather than split an item across pages.
+	itemOverflowed := false
 
 	for i, line := range lines {
 		if i > 0 {
@@ -493,22 +493,21 @@ func (f *Flex) planRow(area LayoutArea) LayoutPlan {
 				b.Y += curY + yOffset
 				allChildren = append(allChildren, b)
 			}
-			// A flex item whose own content paginated (a fragmentable block
-			// child returning LayoutPartial, or one that did not fit at all
-			// returning LayoutNothing) carries a remainder that must flow to a
-			// later page. Without capturing it the remainder was silently
-			// dropped — the v3 commerce totals block lost every row after
-			// "Subtotal" when it overflowed the last line-item page. Items that
-			// fully fit, and non-fragmentable items that report LayoutFull while
-			// overflowing the page (tall images/text — force-rendered as
-			// before), contribute no remainder.
-			switch itemPlans[j].Status {
-			case LayoutPartial:
-				if itemPlans[j].Overflow != nil {
-					rowOverflowItems = append(rowOverflowItems, cloneItemWithElement(item, itemPlans[j].Overflow))
-				}
-			case LayoutNothing:
-				rowOverflowItems = append(rowOverflowItems, item)
+			// An item whose own content PARTIALLY fit (a fragmentable block
+			// child — e.g. the v3 totals summary, where some rows fit and the
+			// rest overflow) means this flex did not fully fit and must relocate
+			// so the remainder is not dropped (handled at the return below).
+			//
+			// Only LayoutPartial counts. An item that did not fit at all
+			// (LayoutNothing) keeps the prior behavior: its (empty) blocks are
+			// placed and the line is force-rendered in place. Those are atomic
+			// elements that cannot fragment — a small SVG icon, or a fixed-size
+			// box taller than the remaining space (common in fixed-size labels).
+			// Relocating on their account blanked the whole label: the icon
+			// never fits the tiny page, so the flex relocated forever / force-
+			// rendered empty.
+			if itemPlans[j].Status == LayoutPartial {
+				itemOverflowed = true
 			}
 		}
 
@@ -535,36 +534,29 @@ func (f *Flex) planRow(area LayoutArea) LayoutPlan {
 
 	containerBlock := f.makeContainerBlock(allChildren, totalH, area.Width)
 
-	if allFit && len(rowOverflowItems) == 0 {
+	if allFit && !itemOverflowed {
 		return LayoutPlan{Status: LayoutFull, Consumed: consumed, Blocks: []PlacedBlock{containerBlock}}
 	}
 
-	// Build overflow: remainders from fitted lines whose items paginated,
-	// followed by the items of any wholly-unfitted subsequent lines.
-	overflowItems := rowOverflowItems
-	for i := fittedLineCount; i < len(lines); i++ {
-		overflowItems = append(overflowItems, lines[i].items...)
-	}
-
-	// Nothing placed on this page. Returning LayoutPartial with an empty
-	// container would loop forever on content taller than a page (the parent
-	// Div turns a no-content child into LayoutPartial, never LayoutNothing).
-	// Return LayoutNothing so the renderer relocates us to a fresh page and,
-	// if still nothing fits there (alone at page top), force-renders.
-	if len(allChildren) == 0 {
+	// A fragmentable item only partially fit. folio's flex is atomic — it does
+	// not split an item across pages — so return LayoutNothing and let the
+	// renderer relocate the whole flex to a fresh page (where the item fits:
+	// the v3 no-break totals wrapper moves whole to the next page, no rows
+	// dropped) or, when it is already alone at the top of a page and still does
+	// not fit, force-render it (Height 1e9). Force-render terminates the case
+	// where the content is taller than a full page (it renders, overflowing,
+	// rather than relocating forever). Only LayoutPartial reaches here; an
+	// item that did not fit at all (LayoutNothing — an atomic icon/box) was
+	// force-rendered in place above and never sets itemOverflowed.
+	if itemOverflowed {
 		return LayoutPlan{Status: LayoutNothing}
 	}
 
-	return LayoutPlan{Status: LayoutPartial, Consumed: consumed, Blocks: []PlacedBlock{containerBlock}, Overflow: f.overflowWithItems(overflowItems)}
-}
-
-// cloneItemWithElement copies a flex item's flex properties (grow/shrink/basis/
-// align/margins/min-max) but swaps in a different wrapped element — used to
-// carry an item's pagination remainder into the overflow flex.
-func cloneItemWithElement(orig *FlexItem, elem Element) *FlexItem {
-	clone := *orig
-	clone.element = elem
-	return &clone
+	// Whole flex lines (flex-wrap: wrap) overflowed; fragment between lines.
+	if len(allChildren) == 0 {
+		return LayoutPlan{Status: LayoutNothing}
+	}
+	return LayoutPlan{Status: LayoutPartial, Consumed: consumed, Blocks: []PlacedBlock{containerBlock}, Overflow: f.overflowFrom(fittedLineCount, lines)}
 }
 
 // effectiveBasis returns the resolved flex-basis for an item.

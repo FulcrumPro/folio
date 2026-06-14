@@ -44,7 +44,7 @@ func TestFlexItemOverflowNotDropped(t *testing.T) {
 			.main{display:flex}
 			.note{flex:2}
 			.summary{flex:1}
-			.row{display:flex;margin-top:5pt}
+			.row{margin-top:5pt}
 			.c2{border:1px solid #ccc;padding:5px;margin-left:4px;flex:1}
 			.c3{border:1px solid #ccc;padding:5px;margin-left:4px;text-align:right;width:90px}
 		</style></head><body>`)

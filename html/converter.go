@@ -1273,10 +1273,43 @@ func (c *converter) walkChildren(n *html.Node, parentStyle computedStyle) []layo
 		}
 	}
 
+	// A run of consecutive sibling floats (e.g. the .NET DocGen
+	// `.three-columns { float: left; width: 33.3% }` header columns, or the
+	// v3 commerce "Created By" / company-address two-column header block) is
+	// laid out as a flex row. folio's float positioning never offsets one
+	// float past another, so a run of same-side floats all render at the
+	// container's left edge, stacked on top of each other (illegible). A
+	// single float is left as a real float (text wraps around it as before).
+	var floatRun []*html.Node
+	flushFloatRun := func() {
+		if len(floatRun) == 0 {
+			return
+		}
+		if len(floatRun) == 1 {
+			for _, e := range c.convertNode(floatRun[0], parentStyle) {
+				appendBlock(e)
+			}
+		} else {
+			appendBlock(c.floatRunToRow(floatRun, parentStyle))
+		}
+		floatRun = floatRun[:0]
+	}
+
 	for child := n.FirstChild; child != nil; child = child.NextSibling {
 		if c.limitErr != nil || c.ctxErr != nil {
 			break
 		}
+		if c.isFloatRunChild(child, parentStyle) {
+			flushInline()
+			floatRun = append(floatRun, child)
+			continue
+		}
+		// Whitespace-only text between floats must not break the run (the
+		// templates put newlines/indentation between the float columns).
+		if len(floatRun) > 0 && child.Type == html.TextNode && strings.TrimSpace(child.Data) == "" {
+			continue
+		}
+		flushFloatRun()
 		if c.isInlineFlowChild(child, parentStyle) {
 			inlineBuf = append(inlineBuf, child)
 			continue
@@ -1286,8 +1319,71 @@ func (c *converter) walkChildren(n *html.Node, parentStyle computedStyle) []layo
 			appendBlock(e)
 		}
 	}
+	flushFloatRun()
 	flushInline()
 	return elems
+}
+
+// isFloatRunChild reports whether a child is a left/right-floated block element
+// eligible to join a horizontal float run. position:absolute/fixed removes the
+// element from flow (so it isn't a float), and display:none generates no box.
+func (c *converter) isFloatRunChild(child *html.Node, parentStyle computedStyle) bool {
+	if child.Type != html.ElementNode {
+		return false
+	}
+	cs := c.computeElementStyle(child, parentStyle)
+	if cs.Float != "left" && cs.Float != "right" {
+		return false
+	}
+	return cs.Display != "none" && cs.Position != "absolute" && cs.Position != "fixed"
+}
+
+// floatRunToRow lays a run of sibling floats out as a flex row — the visual
+// result Chrome produces for float-based column layouts. Each float's CSS width
+// becomes the flex item's basis (so `.three-columns { width: 33.3% }` yields
+// three side-by-side thirds); items shrink to share one line (NoWrap) and align
+// to the top, matching float column behavior. The Float wrapper that
+// convertElement adds is unwrapped so the flex sees the underlying box.
+func (c *converter) floatRunToRow(children []*html.Node, parentStyle computedStyle) layout.Element {
+	flex := layout.NewFlex()
+	flex.SetDirection(layout.FlexRow)
+	flex.SetAlignItems(layout.CrossAlignStart)
+	for _, child := range children {
+		childStyle := c.computeElementStyle(child, parentStyle)
+		childElems := c.convertNode(child, parentStyle)
+		for i, e := range childElems {
+			if f, ok := e.(*layout.Float); ok {
+				childElems[i] = f.Content()
+			}
+		}
+		if len(childElems) == 0 {
+			continue
+		}
+		var elem layout.Element
+		if len(childElems) == 1 {
+			elem = childElems[0]
+		} else {
+			wrap := layout.NewDiv()
+			for _, ce := range childElems {
+				wrap.Add(ce)
+			}
+			elem = wrap
+		}
+		if childStyle.Width != nil {
+			// Consume the float's width as flex-basis and clear it on the inner
+			// box so the percentage isn't resolved twice (once as basis against
+			// the row, once by the Div against its allocated width).
+			item := layout.NewFlexItem(elem)
+			item.SetBasisUnit(cssLengthToUnitValue(childStyle.Width, c.containerWidth, childStyle.FontSize))
+			if d, ok := elem.(*layout.Div); ok {
+				d.ClearWidthUnit()
+			}
+			flex.AddItem(item)
+		} else {
+			flex.Add(elem)
+		}
+	}
+	return flex
 }
 
 // isInlineFlowChild reports whether a child node, when encountered inside

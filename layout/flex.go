@@ -386,6 +386,11 @@ func (f *Flex) planRow(area LayoutArea) LayoutPlan {
 	var lineHeights []float64
 	var lineChildStart []int // index into allChildren where each line's blocks start
 
+	// Remainders from fitted lines whose items paginated (block children that
+	// returned LayoutPartial/LayoutNothing). Combined with wholly-unfitted
+	// lines below to build the flex's overflow.
+	var rowOverflowItems []*FlexItem
+
 	for i, line := range lines {
 		if i > 0 {
 			curY += f.rowGap
@@ -488,6 +493,23 @@ func (f *Flex) planRow(area LayoutArea) LayoutPlan {
 				b.Y += curY + yOffset
 				allChildren = append(allChildren, b)
 			}
+			// A flex item whose own content paginated (a fragmentable block
+			// child returning LayoutPartial, or one that did not fit at all
+			// returning LayoutNothing) carries a remainder that must flow to a
+			// later page. Without capturing it the remainder was silently
+			// dropped — the v3 commerce totals block lost every row after
+			// "Subtotal" when it overflowed the last line-item page. Items that
+			// fully fit, and non-fragmentable items that report LayoutFull while
+			// overflowing the page (tall images/text — force-rendered as
+			// before), contribute no remainder.
+			switch itemPlans[j].Status {
+			case LayoutPartial:
+				if itemPlans[j].Overflow != nil {
+					rowOverflowItems = append(rowOverflowItems, cloneItemWithElement(item, itemPlans[j].Overflow))
+				}
+			case LayoutNothing:
+				rowOverflowItems = append(rowOverflowItems, item)
+			}
 		}
 
 		curY += lineCrossSize
@@ -513,13 +535,36 @@ func (f *Flex) planRow(area LayoutArea) LayoutPlan {
 
 	containerBlock := f.makeContainerBlock(allChildren, totalH, area.Width)
 
-	if allFit {
+	if allFit && len(rowOverflowItems) == 0 {
 		return LayoutPlan{Status: LayoutFull, Consumed: consumed, Blocks: []PlacedBlock{containerBlock}}
 	}
 
-	// Build overflow with remaining lines' items.
-	overflow := f.overflowFrom(fittedLineCount, lines)
-	return LayoutPlan{Status: LayoutPartial, Consumed: consumed, Blocks: []PlacedBlock{containerBlock}, Overflow: overflow}
+	// Build overflow: remainders from fitted lines whose items paginated,
+	// followed by the items of any wholly-unfitted subsequent lines.
+	overflowItems := rowOverflowItems
+	for i := fittedLineCount; i < len(lines); i++ {
+		overflowItems = append(overflowItems, lines[i].items...)
+	}
+
+	// Nothing placed on this page. Returning LayoutPartial with an empty
+	// container would loop forever on content taller than a page (the parent
+	// Div turns a no-content child into LayoutPartial, never LayoutNothing).
+	// Return LayoutNothing so the renderer relocates us to a fresh page and,
+	// if still nothing fits there (alone at page top), force-renders.
+	if len(allChildren) == 0 {
+		return LayoutPlan{Status: LayoutNothing}
+	}
+
+	return LayoutPlan{Status: LayoutPartial, Consumed: consumed, Blocks: []PlacedBlock{containerBlock}, Overflow: f.overflowWithItems(overflowItems)}
+}
+
+// cloneItemWithElement copies a flex item's flex properties (grow/shrink/basis/
+// align/margins/min-max) but swaps in a different wrapped element — used to
+// carry an item's pagination remainder into the overflow flex.
+func cloneItemWithElement(orig *FlexItem, elem Element) *FlexItem {
+	clone := *orig
+	clone.element = elem
+	return &clone
 }
 
 // effectiveBasis returns the resolved flex-basis for an item.
@@ -892,8 +937,14 @@ func (f *Flex) overflowFrom(fittedLineCount int, lines []flexLine) *Flex {
 	for i := fittedLineCount; i < len(lines); i++ {
 		remaining = append(remaining, lines[i].items...)
 	}
+	return f.overflowWithItems(remaining)
+}
+
+// overflowWithItems builds a continuation Flex carrying the given items onto a
+// later page, preserving the container's layout properties.
+func (f *Flex) overflowWithItems(items []*FlexItem) *Flex {
 	return &Flex{
-		items:      remaining,
+		items:      items,
 		direction:  f.direction,
 		justify:    f.justify,
 		alignItems: f.alignItems,

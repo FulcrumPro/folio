@@ -421,6 +421,11 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 			flex.SetDefiniteCrossSize(true)
 		}
 		div.Add(flex)
+		// The flex IS the box; when the wrapper Div is height-stretched (an
+		// explicit height, or a grid/flex cell stretched to its track), the flex
+		// must fill it too so its align-items can position content over the full
+		// height (e.g. the v3 index badge centering its number vertically).
+		div.SetFillChildHeight(true)
 		// applyDivStyles needs the parent's containing-block width
 		// for margin/padding percent resolution, not the post-narrow
 		// flex content box.

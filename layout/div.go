@@ -75,10 +75,18 @@ type Div struct {
 	minHeightUnit *UnitValue // lazy-resolved min-height
 	maxHeightUnit *UnitValue // lazy-resolved max-height
 	heightUnit    *UnitValue // lazy-resolved explicit height (forces exact height)
-	aspectRatio   float64    // width/height ratio (0 = not set; CSS aspect-ratio)
-	hCenter       bool       // true = horizontally center within parent (margin: auto)
-	hRight        bool       // true = right-align within parent (margin-left: auto)
-	borderRadius  [4]float64 // corner radii [TL, TR, BR, BL] (points, 0 = sharp)
+	// fillChildHeight stretches a lone height-settable child to this Div's inner
+	// height when the Div has a (possibly forced) height. Set on the synthetic
+	// wrapper Div that convertFlex creates around a flex with border-radius/etc.:
+	// the flex IS the box, so when the wrapper is height-stretched (e.g. a grid
+	// cell under align-items:stretch) the flex must fill it too — otherwise the
+	// flex stays content-sized at the top and its align-items:center can't
+	// vertically center the content (the v3 line-item index badge number).
+	fillChildHeight bool
+	aspectRatio     float64    // width/height ratio (0 = not set; CSS aspect-ratio)
+	hCenter         bool       // true = horizontally center within parent (margin: auto)
+	hRight          bool       // true = right-align within parent (margin-left: auto)
+	borderRadius    [4]float64 // corner radii [TL, TR, BR, BL] (points, 0 = sharp)
 	// Per-corner percentage radii (fraction 0..1; 0 = not a percentage).
 	// A percentage resolves its horizontal radius against the box width and
 	// its vertical radius against the box height at draw time, producing
@@ -328,6 +336,12 @@ func (d *Div) SetMaxHeightUnit(u UnitValue) *Div {
 
 // ForceHeight implements HeightSettable. Sets explicit height for cross-axis stretch.
 func (d *Div) ForceHeight(u UnitValue) { d.heightUnit = &u }
+
+// SetFillChildHeight makes a lone height-settable child stretch to this Div's
+// inner height when the Div has a definite (explicit or forced) height. Used by
+// the synthetic wrapper Div around a flex with visual styles, so the flex fills
+// the wrapper when it is height-stretched.
+func (d *Div) SetFillChildHeight(v bool) *Div { d.fillChildHeight = v; return d }
 
 // ClearHeightUnit removes the explicit height, reverting to content-based sizing.
 func (d *Div) ClearHeightUnit() {
@@ -657,6 +671,17 @@ func (d *Div) PlanLayout(area LayoutArea) LayoutPlan {
 		innerHeight = resolvedH - d.padding.Top - d.padding.Bottom
 		if innerHeight < 0 {
 			innerHeight = 0
+		}
+	}
+
+	// Synthetic flex wrapper: stretch the lone flex child to fill this Div's
+	// (forced/explicit) inner height so it occupies the whole box and its
+	// cross-axis alignment (align-items) applies over the full height. Only
+	// when this Div has a definite height; otherwise the child sizes to content.
+	if d.fillChildHeight && d.heightUnit != nil && len(d.elements) == 1 && innerHeight > 0 {
+		if hs, ok := d.elements[0].(HeightSettable); ok && !hs.HasExplicitHeight() {
+			hs.ForceHeight(Pt(innerHeight))
+			defer hs.ClearHeightUnit()
 		}
 	}
 

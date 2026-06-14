@@ -45,6 +45,44 @@ func TestGridCellStretchFillsCell(t *testing.T) {
 	}
 }
 
+// TestGridCellStretchCentersContent pins the v0.9.1-fulcrum.23 patch: when a
+// grid cell is a flex with border-radius (so folio wraps it in a Div), the flex
+// must fill the stretched wrapper so its align-items:center centers content
+// vertically. Without the wrapper passing its forced height to the flex, the
+// number stayed at the top of the (filled) cell.
+func TestGridCellStretchCentersContent(t *testing.T) {
+	// border-radius forces the convertFlex wrapper-Div path (the bug's domain).
+	src := `<html><head><style>
+		body{margin:0;padding:0}
+		.row{display:grid;grid-template-columns:40pt 200pt}
+		.num{background:#273e6c;border-radius:2px;display:flex;justify-content:center;align-items:center;color:#fff}
+		.body{padding:5pt}
+	</style></head><body>
+		<div class="row"><div class="num">7</div>
+			<div class="body">L1<br>L2<br>L3<br>L4<br>L5<br>L6</div></div>
+	</body></html>`
+	pdf, err := renderHTMLToPDF(src)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	// The badge '7' baseline should sit near the middle of the row, not at the
+	// top. Row content runs from L1 (top) to L6 (bottom); '7' y should be within
+	// the middle band, not within a couple line-heights of the top.
+	seven := findTextY(pdf, "7")
+	l1 := findTextY(pdf, "L1")
+	l6 := findTextY(pdf, "L6")
+	if seven < 0 || l1 < 0 || l6 < 0 {
+		t.Fatalf("markers missing: 7=%.1f L1=%.1f L6=%.1f", seven, l1, l6)
+	}
+	mid := (l1 + l6) / 2
+	t.Logf("'7' y=%.1f  rowMid=%.1f  L1(top)=%.1f L6(bottom)=%.1f", seven, mid, l1, l6)
+	// PDF y is bottom-origin: top line L1 has the LARGEST y. '7' top-aligned
+	// would be near l1; centered is near mid. Require it past the upper third.
+	if seven > l1-(l1-l6)/3 {
+		t.Errorf("'7' y=%.1f is near the top (L1=%.1f) — flex content not vertically centered in the stretched cell", seven, l1)
+	}
+}
+
 // narrowRectHeight returns the height of the widest `re` rectangle whose width
 // is below maxW (the narrow index-badge column), across decompressed streams.
 func narrowRectHeight(pdf []byte, maxW float64) float64 {

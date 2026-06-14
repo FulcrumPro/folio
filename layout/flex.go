@@ -576,17 +576,36 @@ func (fi *FlexItem) effectiveBasis(available float64) float64 {
 	return fi.basis
 }
 
+// hasExplicitBasis reports whether the item carries an author-specified
+// flex-basis — including an explicit `flex-basis: 0`. It distinguishes
+// `flex-basis: 0` (a real base size of zero, so the item's size comes purely
+// from flex-grow) from `flex-basis: auto` (no unit set, basis 0), which falls
+// back to the content's max-content size. Without this distinction a
+// `flex-basis: 0; flex-grow: N` item — the canonical "split the row in N:M
+// proportions" idiom (.NET DocGen's `.data-container .left/.right`) — was
+// treated as auto: its long content produced a huge max-content basis, the row
+// overflowed, and the items shrank by content weight instead of growing 1:2.
+func (fi *FlexItem) hasExplicitBasis() bool {
+	return fi.basisUnit != nil || fi.basis > 0
+}
+
+// resolveItemBasis returns the flex base size for an item: its explicit
+// flex-basis when set (including 0), otherwise the content's max-content size.
+func (f *Flex) resolveItemBasis(item *FlexItem, innerWidth float64) float64 {
+	if item.hasExplicitBasis() {
+		return item.effectiveBasis(innerWidth)
+	}
+	if m, ok := item.element.(Measurable); ok {
+		return m.MaxWidth()
+	}
+	return measureNaturalWidth(item.element, innerWidth)
+}
+
 // resolveRowBasis computes the flex-basis width for each item in a row layout.
 func (f *Flex) resolveRowBasis(innerWidth float64) []float64 {
 	widths := make([]float64, len(f.items))
 	for i, item := range f.items {
-		if b := item.effectiveBasis(innerWidth); b > 0 {
-			widths[i] = b
-		} else if m, ok := item.element.(Measurable); ok {
-			widths[i] = m.MaxWidth()
-		} else {
-			widths[i] = measureNaturalWidth(item.element, innerWidth)
-		}
+		widths[i] = f.resolveItemBasis(item, innerWidth)
 	}
 	return widths
 }
@@ -628,13 +647,7 @@ func (f *Flex) resolveGrowShrink(line flexLine, innerWidth float64) []float64 {
 	// Compute basis for this line's items.
 	basis := make([]float64, n)
 	for i, item := range line.items {
-		if b := item.effectiveBasis(innerWidth); b > 0 {
-			basis[i] = b
-		} else if m, ok := item.element.(Measurable); ok {
-			basis[i] = m.MaxWidth()
-		} else {
-			basis[i] = measureNaturalWidth(item.element, innerWidth)
-		}
+		basis[i] = f.resolveItemBasis(item, innerWidth)
 	}
 
 	totalGap := 0.0

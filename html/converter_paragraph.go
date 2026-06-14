@@ -172,14 +172,29 @@ func (c *converter) convertText(n *html.Node, style computedStyle) []layout.Elem
 	return []layout.Element{p}
 }
 
-// convertBr produces a small empty paragraph to create a line break.
+// convertBr produces a one-line-tall paragraph so a standalone <br> between
+// block siblings reserves a blank line — matching the browser, where the <br>
+// becomes an anonymous block box containing a single (empty) line. The content
+// is a non-breaking space rather than a regular space: splitWords collapses a
+// lone ASCII space to zero words (a 0-height paragraph that adds no gap at
+// all), whereas U+00A0 is not treated as collapsible whitespace and survives
+// as one word, giving the line its leading height. The .NET DocGen PO Notes
+// block (`<br />{{>dataitem Label='Notes' …}}`) relied on this blank line.
 func (c *converter) convertBr(style computedStyle) []layout.Element {
 	stdFont, embFont := c.resolveFontPair(style)
+	// The content must NOT be whitespace: splitWords runs the text through
+	// strings.Fields (unicode.IsSpace), which strips a lone space or U+00A0,
+	// leaving a 0-word paragraph that consumes no height — so a standalone
+	// <br> added nothing. Two consecutive newlines yield one blank-line word
+	// (paragraph.go's consecutive-line-break path), giving the paragraph exactly
+	// one line of leading height, matching the browser's anonymous line box for
+	// a <br> between block siblings.
+	const blankLine = "\n\n"
 	var p *layout.Paragraph
 	if embFont != nil {
-		p = layout.NewParagraphEmbedded(" ", embFont, style.FontSize)
+		p = layout.NewParagraphEmbedded(blankLine, embFont, style.FontSize)
 	} else {
-		p = layout.NewParagraph(" ", stdFont, style.FontSize)
+		p = layout.NewParagraph(blankLine, stdFont, style.FontSize)
 	}
 	p.SetLeading(style.LineHeight)
 	return []layout.Element{p}

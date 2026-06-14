@@ -39,7 +39,15 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 
 	flex := layout.NewFlex()
 
-	// Map direction.
+	// Map direction. `row-reverse` / `column-reverse` reverse the main-axis
+	// order. folio's Flex doesn't model a reversed axis, but the reversal is
+	// equivalent to laying the items out in reverse DOM order with
+	// justify-content's start/end flipped (the main-start moves to the far
+	// end). We apply that equivalence below: flip the justify mapping here and
+	// reverse the child order before adding. `.NET DocGen v3 headers use
+	// `.logo.container { display:flex; flex-direction:row-reverse }` so the
+	// logo right-aligns; without this it stayed at the left.
+	reverse := style.FlexDirection == "row-reverse" || style.FlexDirection == "column-reverse"
 	switch style.FlexDirection {
 	case "column", "column-reverse":
 		flex.SetDirection(layout.FlexColumn)
@@ -52,22 +60,32 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 	// align-items and align-content below already accept the shorthand,
 	// and consistency matters: a page authored with `justify-content:
 	// end` shouldn't silently fall through to `flex-start`.
+	justify := layout.JustifyFlexStart
 	switch style.JustifyContent {
-	case "flex-start", "start":
-		flex.SetJustifyContent(layout.JustifyFlexStart)
-	case "flex-end", "end":
-		flex.SetJustifyContent(layout.JustifyFlexEnd)
+	case "flex-start", "start", "left":
+		justify = layout.JustifyFlexStart
+	case "flex-end", "end", "right":
+		justify = layout.JustifyFlexEnd
 	case "center":
-		flex.SetJustifyContent(layout.JustifyCenter)
+		justify = layout.JustifyCenter
 	case "space-between":
-		flex.SetJustifyContent(layout.JustifySpaceBetween)
+		justify = layout.JustifySpaceBetween
 	case "space-around":
-		flex.SetJustifyContent(layout.JustifySpaceAround)
+		justify = layout.JustifySpaceAround
 	case "space-evenly":
-		flex.SetJustifyContent(layout.JustifySpaceEvenly)
-	default:
-		flex.SetJustifyContent(layout.JustifyFlexStart)
+		justify = layout.JustifySpaceEvenly
 	}
+	if reverse {
+		// Flip start/end so reversed DOM order packs to the correct edge
+		// (space-* distributions are symmetric and unaffected).
+		switch justify {
+		case layout.JustifyFlexStart:
+			justify = layout.JustifyFlexEnd
+		case layout.JustifyFlexEnd:
+			justify = layout.JustifyFlexStart
+		}
+	}
+	flex.SetJustifyContent(justify)
 
 	// Map align-items.
 	switch style.AlignItems {
@@ -360,6 +378,14 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 	sort.SliceStable(pending, func(i, j int) bool {
 		return pending[i].order < pending[j].order
 	})
+	// row-reverse / column-reverse: reverse the main-axis order (after the
+	// `order` sort). Combined with the flipped justify-content above, this
+	// reproduces the reversed-axis layout.
+	if reverse {
+		for i, j := 0, len(pending)-1; i < j; i, j = i+1, j-1 {
+			pending[i], pending[j] = pending[j], pending[i]
+		}
+	}
 	for _, p := range pending {
 		if p.item != nil {
 			flex.AddItem(p.item)

@@ -117,14 +117,26 @@ func (c *converter) convertSVG(n *html.Node, style computedStyle) []layout.Eleme
 
 	el := layout.NewSVGElement(s)
 
-	// Apply explicit size from CSS or SVG attributes.
-	w := s.Width()
-	h := s.Height()
+	// Apply explicit size from CSS. When only ONE of width/height is given, the
+	// other is left at 0 so SVGElement.resolveSize derives it from the SVG's
+	// aspect ratio — matching CSS, where `width:10px` on a 108×108-viewBox icon
+	// yields a 10px-TALL box, not the intrinsic 108px height. Pre-filling the
+	// unspecified dimension with the intrinsic value (the previous behavior)
+	// produced a 7.5pt-wide × 108pt-tall sliver: the .NET DocGen job-label
+	// `.icon` (sized `width:10px` only) rendered as an invisible thin column
+	// that also forced its flex `.label-header` row to 108pt tall.
+	var w, h float64
 	if style.Width != nil {
 		w = style.Width.toPoints(0, style.FontSize)
 	}
 	if style.Height != nil {
 		h = style.Height.toPoints(0, style.FontSize)
+	}
+	// No CSS sizing at all: fall back to the SVG's intrinsic width/height
+	// (attribute- or viewBox-derived).
+	if w == 0 && h == 0 {
+		w = s.Width()
+		h = s.Height()
 	}
 	if w > 0 || h > 0 {
 		el.SetSize(w, h)

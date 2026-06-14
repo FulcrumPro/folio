@@ -1243,6 +1243,13 @@ func (c *converter) makeTextRun(text string, std *font.Standard, emb *font.Embed
 // as three paragraphs on three lines with the period orphaned at the start
 // of line 3, instead of one wrapped paragraph with "Acme" bold inline.
 func (c *converter) walkChildren(n *html.Node, parentStyle computedStyle) []layout.Element {
+	// The title-bar pattern — leading inline content + trailing float:right —
+	// must be laid out as a flex row so the floated text rises onto the first
+	// line instead of dropping below it (see inlineFloatRow).
+	if row, ok := c.inlineFloatRow(n, parentStyle); ok {
+		return []layout.Element{row}
+	}
+
 	var elems []layout.Element
 	var prevMarginBottom float64
 	var inlineBuf []*html.Node
@@ -1345,9 +1352,29 @@ func (c *converter) isFloatRunChild(child *html.Node, parentStyle computedStyle)
 // to the top, matching float column behavior. The Float wrapper that
 // convertElement adds is unwrapped so the flex sees the underlying box.
 func (c *converter) floatRunToRow(children []*html.Node, parentStyle computedStyle) layout.Element {
+	// float:right floats stack from the right edge — the first DOM element ends
+	// up rightmost — so a run of right floats lays out in REVERSE DOM order,
+	// right-aligned. float:left keeps DOM order, left-aligned. (The .NET DocGen
+	// Job traveler header floats its Quantity / Production-Due columns right;
+	// laid out in DOM order they appeared swapped vs Chrome.)
+	allRight := len(children) > 0
+	for _, child := range children {
+		if c.computeElementStyle(child, parentStyle).Float != "right" {
+			allRight = false
+			break
+		}
+	}
 	flex := layout.NewFlex()
 	flex.SetDirection(layout.FlexRow)
 	flex.SetAlignItems(layout.CrossAlignStart)
+	if allRight {
+		flex.SetJustifyContent(layout.JustifyFlexEnd)
+		reversed := make([]*html.Node, len(children))
+		for i, ch := range children {
+			reversed[len(children)-1-i] = ch
+		}
+		children = reversed
+	}
 	for _, child := range children {
 		childStyle := c.computeElementStyle(child, parentStyle)
 		childElems := c.convertNode(child, parentStyle)
@@ -1384,6 +1411,96 @@ func (c *converter) floatRunToRow(children []*html.Node, parentStyle computedSty
 		}
 	}
 	return flex
+}
+
+// inlineFloatRow handles the .NET DocGen `.title-bar` pattern: a leading inline
+// run followed by one or more trailing `float:right` elements (companyinfo
+// spans on the left, a `float:right` "Created By …" span on the right; used by
+// PurchaseOrder, NCR, CAPA, Certification). folio's float model only hoists a
+// float that PRECEDES the text it wraps, so a float written AFTER the inline
+// content is stacked BELOW it — dropping the right-hand text to the next line
+// inside the gray header band. Chrome floats it up onto the first line.
+//
+// Laying the block out as a flex row — the inline content as a grow item, the
+// floats as natural-width items pushed to the right edge — reproduces Chrome.
+//
+// Returns (row, true) only for the exact shape: ≥1 inline child, then only
+// trailing `float:right` children (whitespace ignored), no other block content
+// before or after, and the inline content forms a single line (no <br>). Any
+// deviation returns (nil, false) so walkChildren falls back to normal flow —
+// in particular a float that PRECEDES following text (the wrap-around column
+// case handled by floatRunToRow / real floats) is left untouched.
+func (c *converter) inlineFloatRow(n *html.Node, parentStyle computedStyle) (layout.Element, bool) {
+	var inlineNodes, floatNodes []*html.Node
+	seenFloat := false
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type == html.TextNode && strings.TrimSpace(child.Data) == "" {
+			continue // whitespace never breaks the pattern
+		}
+		if c.isFloatRunChild(child, parentStyle) {
+			if c.computeElementStyle(child, parentStyle).Float != "right" {
+				return nil, false // only trailing float:right is supported
+			}
+			seenFloat = true
+			floatNodes = append(floatNodes, child)
+			continue
+		}
+		if seenFloat {
+			return nil, false // non-float content after a float — not the trailing shape
+		}
+		if !c.isInlineFlowChild(child, parentStyle) {
+			return nil, false // a block-level element in the leading run
+		}
+		inlineNodes = append(inlineNodes, child)
+	}
+	if len(inlineNodes) == 0 || len(floatNodes) == 0 {
+		return nil, false
+	}
+
+	// Build the leading inline content; bail if it spans multiple lines (<br>),
+	// where a single flex row would misrepresent the wrapped flow.
+	var runs []layout.TextRun
+	for _, node := range inlineNodes {
+		runs = append(runs, c.collectRunsFromNode(node, parentStyle)...)
+	}
+	groups := splitRunsAtBr(runs)
+	if len(groups) != 1 || len(groups[0]) == 0 {
+		return nil, false
+	}
+
+	flex := layout.NewFlex()
+	flex.SetDirection(layout.FlexRow)
+	flex.SetAlignItems(layout.CrossAlignStart)
+
+	// Leading inline paragraph as a growing item so the trailing floats are
+	// pushed to the right edge of the row.
+	lead := layout.NewFlexItem(c.buildParagraphFromRuns(groups[0], parentStyle))
+	lead.SetGrow(1)
+	flex.AddItem(lead)
+
+	// Trailing float:right items at natural width, in DOM order. The Float
+	// wrapper convertNode adds is unwrapped so the flex sees the inner box.
+	for _, fn := range floatNodes {
+		childElems := c.convertNode(fn, parentStyle)
+		for i, e := range childElems {
+			if f, ok := e.(*layout.Float); ok {
+				childElems[i] = f.Content()
+			}
+		}
+		if len(childElems) == 0 {
+			continue
+		}
+		if len(childElems) == 1 {
+			flex.Add(childElems[0])
+		} else {
+			wrap := layout.NewDiv()
+			for _, ce := range childElems {
+				wrap.Add(ce)
+			}
+			flex.Add(wrap)
+		}
+	}
+	return flex, true
 }
 
 // isInlineFlowChild reports whether a child node, when encountered inside

@@ -301,8 +301,28 @@ func (r *Renderer) renderWithPlans() []PageResult {
 			PageIdx:    rec.idx,
 			TotalPages: totalPages,
 		}
+		// Clip flow content to the page content box (the area inside the @page
+		// margins), matching the browser: a negative-margin element that bleeds
+		// into the margin (the .NET DocGen v3 `.title-background` plate, pulled
+		// left by `margin-left: -34px`) is painted only up to the content edge,
+		// not all the way to the physical page edge. The clip wraps ONLY the
+		// flow blocks — margin boxes (page numbers, drawn next) and absolutely
+		// positioned elements (the `position: fixed` page footer, drawn later by
+		// renderAbsolutes) sit in the margins by design and must not be clipped.
+		contentW := r.pageWidth - rec.margins.Left - rec.margins.Right
+		contentH := r.pageHeight - rec.margins.Top - rec.margins.Bottom
+		clipContent := contentW > 0 && contentH > 0
+		if clipContent {
+			stream.SaveState()
+			stream.Rectangle(rec.margins.Left, rec.margins.Bottom, contentW, contentH)
+			stream.ClipNonZero()
+			stream.EndPath()
+		}
 		for _, block := range rec.blocks {
 			drawBlock(block, rec.margins.Left, r.pageHeight-rec.margins.Top, &ctx, r.tagged, &r.structTags, rec.idx)
+		}
+		if clipContent {
+			stream.RestoreState()
 		}
 		r.drawMarginBoxes(&ctx, rec.idx, rec.margins)
 		pages = append(pages, PageResult{

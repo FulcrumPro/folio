@@ -107,6 +107,14 @@ type Div struct {
 	relOffsetX float64
 	relOffsetY float64
 
+	// marginLeft is a non-auto CSS horizontal left margin in points (may be
+	// negative). It shifts the box right by marginLeft and, for an auto-width
+	// box, narrows it by the same amount so the right edge stays put — a
+	// negative value bleeds the box left of its container (the .NET DocGen v3
+	// `.title-background { margin-left: -34px }` plate, and the old `.title-bar
+	// { margin-left: -25px }`). Auto margins (centering) use hCenter/hRight.
+	marginLeft float64
+
 	// CSS transform support.
 	transforms       []TransformOp
 	transformOriginX float64 // in points, relative to element top-left
@@ -363,6 +371,9 @@ func (d *Div) SetHCenter(enabled bool) *Div {
 	return d
 }
 
+// SetMarginLeft sets a non-auto CSS left margin in points (may be negative).
+func (d *Div) SetMarginLeft(m float64) *Div { d.marginLeft = m; return d }
+
 // SetHRight enables right-alignment (margin-left: auto behavior).
 func (d *Div) SetHRight(enabled bool) *Div {
 	d.hRight = enabled
@@ -612,6 +623,15 @@ func (d *Div) MaxWidth() float64 {
 func (d *Div) PlanLayout(area LayoutArea) LayoutPlan {
 	effectiveWidth := area.Width
 
+	// An auto-width box (no explicit/percent/fit-content width) fills the
+	// available area minus its left margin, so a non-zero margin-left shifts the
+	// left edge while the right edge stays put (negative margin widens / bleeds
+	// left). Boxes with a resolved width keep that width and only shift.
+	autoWidth := d.widthUnit == nil && d.widthPct == 0 && d.width == 0 && !d.shrinkToFit
+	if autoWidth && d.marginLeft != 0 {
+		effectiveWidth = area.Width - d.marginLeft
+	}
+
 	// Resolve width: prefer UnitValue (lazy), fall back to legacy fields.
 	if d.widthUnit != nil {
 		effectiveWidth = d.widthUnit.Resolve(area.Width)
@@ -765,8 +785,9 @@ func (d *Div) PlanLayout(area LayoutArea) LayoutPlan {
 	capturedTotalH := totalH
 	capturedOuterW := effectiveWidth
 
-	// Horizontal alignment via auto margins.
-	xPos := d.relOffsetX
+	// Horizontal alignment via auto margins, plus a non-auto left margin that
+	// shifts the box (negative bleeds it left of the container).
+	xPos := d.relOffsetX + d.marginLeft
 	if d.hCenter && effectiveWidth < area.Width {
 		xPos += (area.Width - effectiveWidth) / 2
 	} else if d.hRight && effectiveWidth < area.Width {

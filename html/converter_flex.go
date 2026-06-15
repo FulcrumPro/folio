@@ -363,6 +363,10 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 				} else if d, ok := elem.(*layout.Div); ok {
 					d.SetSpaceBefore(0)
 					d.SetSpaceAfter(0)
+					// The FlexItem carries the horizontal margins too; clear the
+					// Div's own left margin so a flex child's margin-left isn't
+					// applied twice (once by the item, once by the Div).
+					d.SetMarginLeft(0)
 				} else if p, ok := elem.(*layout.Paragraph); ok {
 					p.SetSpaceBefore(0)
 					p.SetSpaceAfter(0)

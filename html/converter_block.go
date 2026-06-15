@@ -436,6 +436,13 @@ func applyDivStyles(div *layout.Div, style computedStyle, containerWidth float64
 		div.SetHCenter(true)
 	} else if style.MarginLeftAuto && !style.MarginRightAuto {
 		div.SetHRight(true)
+	} else if ml := style.MarginLeftAt(containerWidth); ml != 0 {
+		// A non-auto left margin shifts the box (negative bleeds it left of the
+		// container — the .NET DocGen v3 `.title-background { margin-left: -34px }`
+		// plate and the old `.title-bar { margin-left: -25px }`). Previously
+		// dropped, which left the plate's compensating 30px left padding fully
+		// visible so the title text sat far from the left edge vs Chrome.
+		div.SetMarginLeft(ml)
 	}
 	if style.BackgroundColor != nil {
 		div.SetBackground(*style.BackgroundColor)

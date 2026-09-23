@@ -4,6 +4,7 @@
 package reader
 
 import (
+	"fmt"
 	"math"
 	"regexp"
 	"strings"
@@ -98,14 +99,17 @@ func pageGlyphs(r *PdfReader, pageIdx int) ([]GlyphSpan, error) {
 	if err != nil {
 		return nil, err
 	}
-	ops := ParseContentStream(data)
 
 	resources, _ := page.Resources()
 	fonts := buildFontCache(resources, r.resolver)
 
 	proc := NewContentProcessor(fonts)
 	proc.SetExtractGlyphs(true)
-	proc.Process(ops)
+	// Glyphs cut short at a limit would let text go unredacted, so a
+	// limit is an error here, not a partial result.
+	if err := page.walkContent(data, proc, false); err != nil {
+		return nil, fmt.Errorf("reader: redact: page %d glyphs: %w", pageIdx, err)
+	}
 	return proc.Glyphs(), nil
 }
 

@@ -125,11 +125,11 @@ func ParseWithOptions(data []byte, opts ReadOptions) (*PdfReader, error) {
 	}
 
 	// Parse xref table and trailer.
-	xref, err := parseXrefTable(data)
+	xref, err := parseXrefTable(data, opts.MemoryLimits)
 	if err != nil {
 		// Tolerant mode: try to repair xref by scanning for objects.
 		if opts.Strictness == StrictnessTolerant {
-			xref, err = repairXref(data)
+			xref, err = repairXref(data, opts.MemoryLimits)
 		}
 		if err != nil {
 			return nil, err
@@ -228,8 +228,8 @@ func findPDFHeader(data []byte) int {
 
 // repairXref builds an xref table by scanning the file for object definitions.
 // This is used as a fallback when the normal xref parsing fails.
-func repairXref(data []byte) (*xrefTable, error) {
-	table := &xrefTable{entries: make(map[int]xrefEntry)}
+func repairXref(data []byte, limits MemoryLimits) (*xrefTable, error) {
+	table := newXrefTable(limits)
 
 	// Scan for "N G obj" patterns.
 	tok := NewTokenizer(data)
@@ -250,10 +250,12 @@ func repairXref(data []byte) (*xrefTable, error) {
 		// Found "N G obj" at position pos.
 		objNum := int(t1.Int)
 		genNum := int(t2.Int)
-		table.entries[objNum] = xrefEntry{
+		if err := table.set(objNum, xrefEntry{
 			offset:     int64(pos),
 			generation: genNum,
 			inUse:      true,
+		}); err != nil {
+			return nil, fmt.Errorf("reader: xref repair: %w", err)
 		}
 	}
 
@@ -567,6 +569,12 @@ func (p *PageInfo) Resources() (*core.PdfDictionary, error) {
 
 // ContentStream returns the decompressed content stream bytes for this page.
 // If the page has multiple content streams, they are concatenated.
+//
+// The concatenation is held to the reader's MemoryLimits like one decoded
+// stream: its length may not pass MaxStreamSize. A stream that /Contents
+// lists more than once is decoded and charged once, but each extra copy
+// makes new bytes, so the extra copies are charged to MaxTotalAlloc. Past
+// a limit, ContentStream returns an error that wraps ErrMemoryLimitExceeded.
 func (p *PageInfo) ContentStream() ([]byte, error) {
 	contents := p.pageDict.Get("Contents")
 	if contents == nil {
@@ -582,17 +590,40 @@ func (p *PageInfo) ContentStream() ([]byte, error) {
 	case *core.PdfStream:
 		return v.Data, nil
 	case *core.PdfArray:
-		// Multiple content streams — concatenate.
-		var result []byte
+		// Multiple content streams — concatenate. Measure first, so that
+		// nothing is allocated for a result that is over a limit.
+		var parts [][]byte
+		var total, repeated int64
+		seen := make(map[*core.PdfStream]bool)
 		for _, elem := range v.All() {
 			streamObj, err := p.reader.resolver.ResolveDeep(elem)
 			if err != nil {
 				continue
 			}
 			if stream, ok := streamObj.(*core.PdfStream); ok {
-				result = append(result, stream.Data...)
-				result = append(result, '\n')
+				parts = append(parts, stream.Data)
+				n := int64(len(stream.Data)) + 1 // the data and a '\n'
+				total += n
+				if seen[stream] {
+					repeated += n
+				}
+				seen[stream] = true
 			}
+		}
+		mem := p.reader.resolver.mem
+		if maxStream := mem.limits.effectiveMaxStreamSize(); maxStream >= 0 && total > maxStream {
+			return nil, fmt.Errorf("%w: page content streams total %d bytes, limit %d",
+				ErrMemoryLimitExceeded, total, maxStream)
+		}
+		if repeated > 0 {
+			if err := mem.checkStreamSize(repeated); err != nil {
+				return nil, fmt.Errorf("reader: page content streams listed more than once: %w", err)
+			}
+		}
+		result := make([]byte, 0, total)
+		for _, data := range parts {
+			result = append(result, data...)
+			result = append(result, '\n')
 		}
 		return result, nil
 	default:
@@ -600,9 +631,21 @@ func (p *PageInfo) ContentStream() ([]byte, error) {
 	}
 }
 
+// memoryLimits returns the reader's memory limits, or the defaults for
+// a page that has no reader.
+func (p *PageInfo) memoryLimits() MemoryLimits {
+	if p.reader != nil && p.reader.resolver != nil && p.reader.resolver.mem != nil {
+		return p.reader.resolver.mem.limits
+	}
+	return MemoryLimits{}
+}
+
 // ExtractText returns text extracted from the page content stream.
 // It uses the page's font resources to decode character codes to Unicode
 // via ToUnicode CMaps and standard encodings (WinAnsi, MacRoman).
+//
+// If the content goes past a MemoryLimits bound, ExtractText returns the
+// text before that point with an error that wraps ErrMemoryLimitExceeded.
 func (p *PageInfo) ExtractText() (string, error) {
 	data, err := p.ContentStream()
 	if err != nil {
@@ -621,10 +664,12 @@ func (p *PageInfo) ExtractText() (string, error) {
 		}
 	}
 
-	return ExtractTextWithFonts(data, fonts), nil
+	return extractTextWithFonts(data, fonts, p.memoryLimits())
 }
 
 // ContentOps parses the page's content stream into a sequence of operators.
+// If the content goes past a MemoryLimits bound, ContentOps returns the
+// operators before that point with an error that wraps ErrMemoryLimitExceeded.
 func (p *PageInfo) ContentOps() ([]ContentOp, error) {
 	data, err := p.ContentStream()
 	if err != nil {
@@ -633,66 +678,47 @@ func (p *PageInfo) ContentOps() ([]ContentOp, error) {
 	if data == nil {
 		return nil, nil
 	}
-	return ParseContentStream(data), nil
+	return ParseContentStreamWithLimits(data, p.memoryLimits())
 }
 
 // TextSpans extracts all text spans from the page with full positioning,
 // font, and color information. This is the richest extraction method.
+//
+// If the content goes past a MemoryLimits bound, TextSpans returns the
+// spans found before that point with an error that wraps ErrMemoryLimitExceeded.
 func (p *PageInfo) TextSpans() ([]TextSpan, error) {
-	data, err := p.ContentStream()
-	if err != nil {
+	proc, err := p.processContent()
+	if proc == nil {
 		return nil, err
 	}
-	if data == nil {
-		return nil, nil
-	}
-
-	var fonts FontCache
-	if p.reader != nil {
-		res, resErr := p.Resources()
-		if resErr == nil && res != nil {
-			fonts = buildFontCacheWithShared(res, p.reader.resolver, p.reader.getFontCache())
-		}
-	}
-
-	ops := ParseContentStream(data)
-	proc := NewContentProcessor(fonts)
-
-	// Set up form resolver so text inside Form XObjects is included.
-	if p.reader != nil {
-		proc.SetFormResolver(func(name string) []ContentOp {
-			return p.resolveFormXObject(name)
-		})
-	}
-
-	return proc.Process(ops), nil
+	return proc.Spans(), err
 }
 
 // ImageRefs extracts image references with positions from the page content stream.
+// Past a MemoryLimits bound, it returns the references found before that
+// point with an error that wraps ErrMemoryLimitExceeded.
 func (p *PageInfo) ImageRefs() ([]ImageRef, error) {
 	proc, err := p.processContent()
-	if err != nil {
+	if proc == nil {
 		return nil, err
 	}
-	if proc == nil {
-		return nil, nil
-	}
-	return proc.Images(), nil
+	return proc.Images(), err
 }
 
 // PathOps extracts graphics path operations from the page content stream.
+// Past a MemoryLimits bound, it returns the paths found before that point
+// with an error that wraps ErrMemoryLimitExceeded.
 func (p *PageInfo) PathOps() ([]PathOp, error) {
 	proc, err := p.processContent()
-	if err != nil {
+	if proc == nil {
 		return nil, err
 	}
-	if proc == nil {
-		return nil, nil
-	}
-	return proc.Paths(), nil
+	return proc.Paths(), err
 }
 
-// processContent creates a ContentProcessor, runs it, and returns it.
+// processContent creates a ContentProcessor with the page fonts and runs
+// it over the page content, form XObjects included. It returns a nil
+// processor if the page has no content or its content cannot be read.
 func (p *PageInfo) processContent() (*ContentProcessor, error) {
 	data, err := p.ContentStream()
 	if err != nil {
@@ -710,21 +736,48 @@ func (p *PageInfo) processContent() (*ContentProcessor, error) {
 		}
 	}
 
-	ops := ParseContentStream(data)
 	proc := NewContentProcessor(fonts)
+	return proc, p.walkContent(data, proc, true)
+}
 
-	if p.reader != nil {
+// walkContent parses data and runs proc over it under the page's memory
+// limits. If withForms is true, proc also walks the form XObjects that the
+// content draws. The page and all of its forms are parsed against one
+// token budget, and each form is parsed once per walk, however often it
+// is drawn. walkContent returns the first limit error from the parses or
+// from proc.
+func (p *PageInfo) walkContent(data []byte, proc *ContentProcessor, withForms bool) error {
+	limits := p.memoryLimits()
+	budget := newContentBudget(limits)
+	ops, err := parseContent(data, budget)
+
+	proc.SetMemoryLimits(limits)
+	if withForms && p.reader != nil {
+		forms := make(map[string][]ContentOp)
 		proc.SetFormResolver(func(name string) []ContentOp {
-			return p.resolveFormXObject(name)
+			if formOps, ok := forms[name]; ok {
+				return formOps
+			}
+			formOps, formErr := p.parseFormXObject(name, budget)
+			if err == nil {
+				err = formErr
+			}
+			forms[name] = formOps
+			return formOps
 		})
 	}
 
 	proc.Process(ops)
-	return proc, nil
+	if err != nil {
+		return err
+	}
+	return proc.Err()
 }
 
 // ExtractTaggedText extracts text using the structure tree for logical
 // reading order. If the document is not tagged, falls back to LocationStrategy.
+// Past a MemoryLimits bound, it returns the text found before that point
+// with an error that wraps ErrMemoryLimitExceeded.
 func (p *PageInfo) ExtractTaggedText() (string, error) {
 	if p.reader == nil {
 		return p.ExtractText()
@@ -754,69 +807,71 @@ func (p *PageInfo) ExtractTaggedText() (string, error) {
 	}
 
 	// Process content stream to get spans with MCID.
-	ops := ParseContentStream(data)
 	proc := NewContentProcessor(fonts)
-	spans := proc.Process(ops)
+	walkErr := p.walkContent(data, proc, false)
+	spans := proc.Spans()
 
 	// Use TaggedStrategy to assemble text in structure tree order.
 	strategy := NewTaggedStrategy(tree, p.Number-1)
 	for _, span := range spans {
 		strategy.ProcessSpan(span)
 	}
-	return strategy.Result(), nil
+	return strategy.Result(), walkErr
 }
 
 // ExtractTextWithStrategy extracts text using a pluggable strategy.
+// Past a MemoryLimits bound, it returns the text found before that point
+// with an error that wraps ErrMemoryLimitExceeded.
 func (p *PageInfo) ExtractTextWithStrategy(strategy ExtractionStrategy) (string, error) {
 	spans, err := p.TextSpans()
-	if err != nil {
+	if spans == nil && err != nil {
 		return "", err
 	}
 	for _, span := range spans {
 		strategy.ProcessSpan(span)
 	}
-	return strategy.Result(), nil
+	return strategy.Result(), err
 }
 
-// resolveFormXObject looks up a Form XObject by resource name from the page's
-// resources, decompresses its content stream, and returns the parsed ops.
-// Returns nil if the name does not refer to a Form XObject.
-func (p *PageInfo) resolveFormXObject(name string) []ContentOp {
+// parseFormXObject looks up a Form XObject by resource name from the page's
+// resources, decompresses its content stream, and parses it against budget.
+// Returns nil ops if the name does not refer to a Form XObject.
+func (p *PageInfo) parseFormXObject(name string, budget *contentBudget) ([]ContentOp, error) {
 	res, err := p.Resources()
 	if err != nil || res == nil {
-		return nil
+		return nil, nil
 	}
 
 	xobjObj := res.Get("XObject")
 	if xobjObj == nil {
-		return nil
+		return nil, nil
 	}
 	xobjDict, ok := resolveWith(p.reader.resolver, xobjObj).(*core.PdfDictionary)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 
 	formObj := xobjDict.Get(name)
 	if formObj == nil {
-		return nil
+		return nil, nil
 	}
 	formObj = resolveWith(p.reader.resolver, formObj)
 
 	stream, ok := formObj.(*core.PdfStream)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 
 	// Check /Subtype is /Form.
 	subtype, _ := stream.Dict.Get("Subtype").(*core.PdfName)
 	if subtype == nil || subtype.Value != "Form" {
-		return nil
+		return nil, nil
 	}
 
 	if len(stream.Data) == 0 {
-		return nil
+		return nil, nil
 	}
-	return ParseContentStream(stream.Data)
+	return parseContent(stream.Data, budget)
 }
 
 // getFontCache returns the shared font cache, initializing it lazily.

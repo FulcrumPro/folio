@@ -12,7 +12,7 @@ import (
 )
 
 // TokenType identifies the kind of PDF token.
-type TokenType int
+type TokenType uint8
 
 const (
 	TokenNumber     TokenType = iota // integer or real number
@@ -30,13 +30,16 @@ const (
 )
 
 // Token is a single PDF lexical token.
+//
+// The field order keeps Type and IsInt in one word, so a Token is 48
+// bytes instead of 56. A parsed content stream holds one Token per operand.
 type Token struct {
-	Type  TokenType
-	Value string  // raw text value
-	Int   int64   // parsed integer (for TokenNumber)
-	Real  float64 // parsed float (for TokenNumber)
-	IsInt bool    // true if the number is an integer
-	Pos   int64   // byte offset in the input
+	Value string    // raw text value
+	Int   int64     // parsed integer (for TokenNumber)
+	Real  float64   // parsed float (for TokenNumber)
+	Pos   int64     // byte offset in the input
+	Type  TokenType // kind of token
+	IsInt bool      // true if the number is an integer
 }
 
 // Tokenizer reads PDF tokens from a byte stream.

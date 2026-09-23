@@ -3,6 +3,8 @@
 
 package reader
 
+import "fmt"
+
 // ContentOp is a single PDF content stream operator with its operands.
 type ContentOp struct {
 	Operator string  // e.g. "BT", "Tf", "Tj", "cm", "re", "f"
@@ -18,10 +20,107 @@ type ContentOp struct {
 //	e.g.: /F1 12 Tf     (set font F1 at 12pt)
 //	      100 700 Td     (move to x=100, y=700)
 //	      (Hello) Tj     (show text "Hello")
+//
+// ParseContentStream applies the default MemoryLimits. If the stream
+// goes past a limit, it returns the operators before that point. Use
+// ParseContentStreamWithLimits to get the error.
 func ParseContentStream(data []byte) []ContentOp {
+	ops, _ := ParseContentStreamWithLimits(data, MemoryLimits{})
+	return ops
+}
+
+// ParseContentStreamWithLimits is ParseContentStream with explicit limits.
+// If the stream goes past a limit, it stops there and returns the
+// operators before that point with an error that wraps
+// ErrMemoryLimitExceeded. The limits are:
+//
+//   - limits.MaxContentTokens: operators plus operands kept in total.
+//   - 1024 operands for one operator, where an array or a dictionary
+//     counts as one operand. Real operators need at most 33.
+//   - 65536 tokens for the operands of one operator, array and
+//     dictionary contents included (a long TJ array).
+func ParseContentStreamWithLimits(data []byte, limits MemoryLimits) ([]ContentOp, error) {
+	return parseContent(data, newContentBudget(limits))
+}
+
+const (
+	// maxContentOperands limits the operands of one operator. An array or
+	// a dictionary counts as one operand. The largest real need is about
+	// 33 (scn with 32 DeviceN components and a pattern name), and pdf.js
+	// stops at 33. Past this limit the parser stops: a run this long
+	// means the stream is not content, and the operator it would reach
+	// would get the wrong operands anyway.
+	maxContentOperands = 1024
+
+	// maxContentOperandTokens limits the tokens in the operands of one
+	// operator, array and dictionary contents included. The longest TJ
+	// array in 4,738 real pages had 1,685 elements. The limit keeps the
+	// pending operand buffer small (3 MB).
+	maxContentOperandTokens = 65536
+
+	// operandChunkMin and operandChunkMax bound the size of one block of
+	// the operand arena. Blocks start small and double, so a short stream
+	// (a form XObject) does not get a large block.
+	operandChunkMin = 32
+	operandChunkMax = 8192
+)
+
+// contentBudget counts, in tokens, what content work may still use: the
+// tokens that parses keep (a page walk shares one budget between the page
+// and its form XObjects), the tokens that a ContentProcessor walks, or the
+// token-sized units of its results. left < 0 means no limit.
+type contentBudget struct {
+	left  int
+	limit int
+	what  string // what ran out, for the error
+}
+
+// newContentBudget returns a budget of limits.MaxContentTokens tokens for
+// what the parses keep.
+func newContentBudget(limits MemoryLimits) *contentBudget {
+	n := limits.effectiveMaxContentTokens()
+	return &contentBudget{left: n, limit: n, what: "content streams hold"}
+}
+
+// fits reports whether n more tokens fit in the budget.
+func (b *contentBudget) fits(n int) bool {
+	return b.left < 0 || n <= b.left
+}
+
+// take removes n tokens from the budget. It returns false, and takes
+// nothing, if they do not fit.
+func (b *contentBudget) take(n int) bool {
+	if !b.fits(n) {
+		return false
+	}
+	if b.left >= 0 {
+		b.left -= n
+	}
+	return true
+}
+
+// exceeded returns the error for a budget that ran out.
+func (b *contentBudget) exceeded() error {
+	return fmt.Errorf("%w: %s more than %d tokens", ErrMemoryLimitExceeded, b.what, b.limit)
+}
+
+// parseContent parses data and charges each kept token to budget.
+//
+// Operands are collected in a reused buffer, then copied into a shared
+// arena when their operator arrives. Each op gets a slice of the arena
+// with its capacity cut to its length, so an append by a caller copies
+// and cannot change the next op. The arena removes the growth slack and
+// the allocation per op of a separate operand slice.
+func parseContent(data []byte, budget *contentBudget) ([]ContentOp, error) {
 	tok := NewTokenizer(data)
-	var ops []ContentOp
-	var operands []Token
+	var (
+		ops     []ContentOp
+		pending []Token // operands since the last operator
+		arena   []Token // backing store for the operands of ops
+		chunk   = operandChunkMin
+		top     int // top-level operands in pending
+		depth   int // array and dictionary nesting in pending
+	)
 
 	for {
 		token := tok.Next()
@@ -29,29 +128,67 @@ func ParseContentStream(data []byte) []ContentOp {
 			break
 		}
 
-		switch token.Type {
-		case TokenKeyword:
+		if token.Type == TokenKeyword {
 			// Keywords are operators (BT, ET, Tf, Tj, cm, re, f, etc.)
 			// Special case: "BI" starts an inline image — skip until "EI".
 			if token.Value == "BI" {
 				skipInlineImage(tok)
-				operands = nil
+				pending, top, depth = pending[:0], 0, 0
 				continue
 			}
-
-			ops = append(ops, ContentOp{
-				Operator: token.Value,
-				Operands: operands,
-			})
-			operands = nil
-
-		default:
-			// Everything else is an operand (numbers, strings, names, arrays, bools).
-			operands = append(operands, token)
+			if !budget.take(1 + len(pending)) {
+				return ops, budget.exceeded()
+			}
+			op := ContentOp{Operator: token.Value}
+			if n := len(pending); n > 0 {
+				if cap(arena)-len(arena) < n {
+					arena = make([]Token, 0, max(chunk, n))
+					chunk = min(2*chunk, operandChunkMax)
+				}
+				start := len(arena)
+				arena = append(arena, pending...)
+				op.Operands = arena[start : start+n : start+n]
+			}
+			ops = append(ops, op)
+			pending, top, depth = pending[:0], 0, 0
+			continue
 		}
+
+		// Everything else is an operand (numbers, strings, names, arrays,
+		// dicts, bools). An array or a dictionary is one operand.
+		switch token.Type {
+		case TokenArrayOpen, TokenDictOpen:
+			if depth == 0 {
+				top++
+			}
+			depth++
+		case TokenArrayClose, TokenDictClose:
+			if depth > 0 {
+				depth--
+			} else {
+				top++
+			}
+		default:
+			if depth == 0 {
+				top++
+			}
+		}
+		if top > maxContentOperands {
+			return ops, fmt.Errorf("%w: more than %d operands for one operator at offset %d",
+				ErrMemoryLimitExceeded, maxContentOperands, token.Pos)
+		}
+		if len(pending) >= maxContentOperandTokens {
+			return ops, fmt.Errorf("%w: more than %d operand tokens for one operator at offset %d",
+				ErrMemoryLimitExceeded, maxContentOperandTokens, token.Pos)
+		}
+		// The pending operands and their operator must fit in what is left.
+		if !budget.fits(len(pending) + 2) {
+			return ops, budget.exceeded()
+		}
+		pending = append(pending, token)
 	}
 
-	return ops
+	return ops, nil
 }
 
 // skipInlineImage skips an inline image (BI ... ID <data> EI).
@@ -104,6 +241,51 @@ func skipInlineImage(tok *Tokenizer) {
 	}
 }
 
+// tokenSize is the size of a Token, which is also the unit in which the
+// results of a walk are charged to a contentBudget.
+const tokenSize = 48
+
+// textBudget bounds decoded text. A ToUnicode entry can map one code to
+// as many as 256 characters, so the text can be much larger than the
+// content stream. Text is charged to units, one unit per tokenSize bytes.
+type textBudget struct {
+	units *contentBudget
+	hit   bool // a decode was cut to fit
+}
+
+// decode decodes raw with fe (nil fe keeps the bytes as they are). If the
+// text of all of raw might not fit, it decodes only the codes at the start
+// that surely fit and marks the budget as hit. The check is made before
+// the decode, so a decode never makes more text than the budget allows.
+func (b *textBudget) decode(raw []byte, fe *FontEntry) string {
+	if b.units.left >= 0 {
+		room := int64(b.units.left) * tokenSize
+		per := int64(fe.maxDecodedPerByte())
+		if int64(len(raw))*per > room {
+			n := int(room / per)
+			n -= n % fe.codeBytes()
+			raw = raw[:n]
+			b.hit = true
+		}
+	}
+	var text string
+	if fe != nil {
+		text = fe.Decode(raw)
+	} else {
+		text = string(raw)
+	}
+	b.units.take((len(text) + tokenSize - 1) / tokenSize)
+	return text
+}
+
+// err returns the error for a budget that was hit, or nil.
+func (b *textBudget) err() error {
+	if !b.hit {
+		return nil
+	}
+	return b.units.exceeded()
+}
+
 // ExtractText extracts plain text from a content stream.
 // Returns concatenated text from Tj and TJ operators.
 // This is a simple extraction — it doesn't handle font encoding,
@@ -144,12 +326,28 @@ const tjKernThreshold = -200
 
 // ExtractTextWithFonts extracts text from a content stream using font encoding
 // information and text positioning to produce properly spaced Unicode text.
+// It applies the default MemoryLimits. If the stream goes past a limit, it
+// returns the text before that point.
 func ExtractTextWithFonts(data []byte, fonts FontCache) string {
-	ops := ParseContentStream(data)
+	text, _ := extractTextWithFonts(data, fonts, MemoryLimits{})
+	return text
+}
+
+// extractTextWithFonts is ExtractTextWithFonts with explicit limits. If
+// the content goes past a limit, it returns the text before that point
+// with an error that wraps ErrMemoryLimitExceeded.
+func extractTextWithFonts(data []byte, fonts FontCache, limits MemoryLimits) (string, error) {
+	ops, parseErr := parseContent(data, newContentBudget(limits))
 	var result []byte
 	ts := textState{fonts: fonts, fontSize: 12}
+	units := newContentBudget(limits)
+	units.what = "extracted text takes"
+	tb := textBudget{units: units}
 
 	for _, op := range ops {
+		if tb.hit {
+			break
+		}
 		switch op.Operator {
 		case "BT":
 			// Begin text object — reset text matrix.
@@ -225,7 +423,7 @@ func ExtractTextWithFonts(data []byte, fonts FontCache) string {
 			result = ts.emitPositionChange(result)
 			if len(op.Operands) > 0 {
 				raw := []byte(op.Operands[0].Value)
-				text := decodeTextOperand(op.Operands[0], ts.currentFont)
+				text := tb.decode(raw, ts.currentFont)
 				result = append(result, text...)
 				ts.advanceX(raw)
 			}
@@ -237,7 +435,7 @@ func ExtractTextWithFonts(data []byte, fonts FontCache) string {
 			result = ts.emitPositionChange(result)
 			if len(op.Operands) > 0 {
 				raw := []byte(op.Operands[0].Value)
-				text := decodeTextOperand(op.Operands[0], ts.currentFont)
+				text := tb.decode(raw, ts.currentFont)
 				result = append(result, text...)
 				ts.advanceX(raw)
 			}
@@ -249,7 +447,7 @@ func ExtractTextWithFonts(data []byte, fonts FontCache) string {
 			result = ts.emitPositionChange(result)
 			if len(op.Operands) > 2 {
 				raw := []byte(op.Operands[2].Value)
-				text := decodeTextOperand(op.Operands[2], ts.currentFont)
+				text := tb.decode(raw, ts.currentFont)
 				result = append(result, text...)
 				ts.advanceX(raw)
 			}
@@ -262,7 +460,7 @@ func ExtractTextWithFonts(data []byte, fonts FontCache) string {
 				switch operand.Type {
 				case TokenString, TokenHexString:
 					raw := []byte(operand.Value)
-					text := decodeTextOperand(operand, ts.currentFont)
+					text := tb.decode(raw, ts.currentFont)
 					result = append(result, text...)
 					ts.advanceX(raw)
 				case TokenNumber:
@@ -278,7 +476,10 @@ func ExtractTextWithFonts(data []byte, fonts FontCache) string {
 		}
 	}
 
-	return string(result)
+	if parseErr != nil {
+		return string(result), parseErr
+	}
+	return string(result), tb.err()
 }
 
 // emitPositionChange decides whether to insert a space or newline based on
@@ -366,16 +567,6 @@ func (ts *textState) computeTextWidth(raw []byte) float64 {
 		}
 	}
 	return float64(total) / 1000.0 * ts.fontSize
-}
-
-// decodeTextOperand converts a string/hex-string token to Unicode text
-// using the current font's encoding.
-func decodeTextOperand(tok Token, fe *FontEntry) []byte {
-	raw := []byte(tok.Value)
-	if fe != nil {
-		return []byte(fe.Decode(raw))
-	}
-	return raw
 }
 
 // tokenFloat extracts a float64 from a number token.

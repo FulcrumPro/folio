@@ -23,6 +23,39 @@ type xrefEntry struct {
 type xrefTable struct {
 	entries map[int]xrefEntry
 	trailer *core.PdfDictionary
+
+	maxObjects  int   // entry limit (MemoryLimits.MaxObjectCount); < 0 means none
+	maxXrefSize int64 // decoded xref stream limit (MemoryLimits.MaxXrefSize)
+}
+
+// newXrefTable returns an empty table that enforces limits while it fills.
+func newXrefTable(limits MemoryLimits) *xrefTable {
+	return &xrefTable{
+		entries:     make(map[int]xrefEntry),
+		maxObjects:  limits.effectiveMaxObjectCount(),
+		maxXrefSize: limits.effectiveMaxXrefSize(),
+	}
+}
+
+// add records e for objNum unless the table has an entry for it already.
+// A new entry past the object limit is an error, so that a small xref
+// stream with 1-byte entries cannot fill the map with millions of entries
+// before the count is checked.
+func (t *xrefTable) add(objNum int, e xrefEntry) error {
+	if _, exists := t.entries[objNum]; exists {
+		return nil
+	}
+	return t.set(objNum, e)
+}
+
+// set records e for objNum, replacing an entry that is there. A new entry
+// past the object limit is an error.
+func (t *xrefTable) set(objNum int, e xrefEntry) error {
+	if _, exists := t.entries[objNum]; !exists && t.maxObjects >= 0 && len(t.entries) >= t.maxObjects {
+		return fmt.Errorf("%w: xref has more than %d objects", ErrMemoryLimitExceeded, t.maxObjects)
+	}
+	t.entries[objNum] = e
+	return nil
 }
 
 // findStartXref scans backwards from the end of the file to find the
@@ -64,15 +97,13 @@ func findStartXref(data []byte) (int64, error) {
 
 // parseXrefTable reads the classic xref table and trailer dictionary.
 // Handles multiple xref sections (from incremental updates) by following /Prev.
-func parseXrefTable(data []byte) (*xrefTable, error) {
+func parseXrefTable(data []byte, limits MemoryLimits) (*xrefTable, error) {
 	startOffset, err := findStartXref(data)
 	if err != nil {
 		return nil, err
 	}
 
-	table := &xrefTable{
-		entries: make(map[int]xrefEntry),
-	}
+	table := newXrefTable(limits)
 
 	// Follow the chain of xref sections (linked by /Prev in trailer).
 	// Track visited offsets to detect circular /Prev references.
@@ -203,7 +234,7 @@ func parseXrefStream(data []byte, offset int, table *xrefTable) (*core.PdfDictio
 	// Decompress stream data.
 	// The stream was parsed by ParseIndirectObject which reads raw data.
 	// We need to decompress it ourselves since the resolver isn't available yet.
-	streamData, err := decompressXrefStream(data, offset, w, dict)
+	streamData, err := decompressXrefStream(data, offset, w, dict, table.maxXrefSize)
 	if err != nil {
 		return nil, -1, err
 	}
@@ -230,36 +261,36 @@ func parseXrefStream(data []byte, offset int, table *xrefTable) (*core.PdfDictio
 				entryType = 1
 			}
 
+			var entry xrefEntry
 			switch entryType {
 			case 0:
 				// Free object.
-				if _, exists := table.entries[objNum]; !exists {
-					table.entries[objNum] = xrefEntry{
-						offset:     int64(field2),
-						generation: int(field3),
-						inUse:      false,
-					}
+				entry = xrefEntry{
+					offset:     int64(field2),
+					generation: int(field3),
+					inUse:      false,
 				}
 			case 1:
 				// In-use, uncompressed object.
-				if _, exists := table.entries[objNum]; !exists {
-					table.entries[objNum] = xrefEntry{
-						offset:     int64(field2),
-						generation: int(field3),
-						inUse:      true,
-					}
+				entry = xrefEntry{
+					offset:     int64(field2),
+					generation: int(field3),
+					inUse:      true,
 				}
 			case 2:
 				// Compressed object in object stream.
 				// field2 = object stream number, field3 = index within stream.
-				if _, exists := table.entries[objNum]; !exists {
-					table.entries[objNum] = xrefEntry{
-						offset:     int64(field2),
-						generation: int(field3),
-						inUse:      true,
-						compressed: true,
-					}
+				entry = xrefEntry{
+					offset:     int64(field2),
+					generation: int(field3),
+					inUse:      true,
+					compressed: true,
 				}
+			default:
+				continue
+			}
+			if err := table.add(objNum, entry); err != nil {
+				return nil, -1, err
 			}
 		}
 	}
@@ -276,7 +307,7 @@ func parseXrefStream(data []byte, offset int, table *xrefTable) (*core.PdfDictio
 // decompressXrefStream reads and decompresses the stream data from an xref stream
 // object at the given file offset. This is needed before the resolver is
 // available (since the resolver needs the xref to function).
-func decompressXrefStream(data []byte, objOffset int, w [3]int, dict *core.PdfDictionary) ([]byte, error) {
+func decompressXrefStream(data []byte, objOffset int, w [3]int, dict *core.PdfDictionary, maxSize int64) ([]byte, error) {
 	// Find "stream" keyword after the dictionary.
 	tok := NewTokenizer(data)
 	tok.SetPos(objOffset)
@@ -307,8 +338,8 @@ func decompressXrefStream(data []byte, objOffset int, w [3]int, dict *core.PdfDi
 
 	rawData := data[tok.pos : tok.pos+streamLen]
 
-	// Decompress with xref-specific limit (default 32 MB).
-	return decompressStreamWithLimit(rawData, dict, defaultMaxXrefSize)
+	// Decompress with the xref-specific limit (MemoryLimits.MaxXrefSize).
+	return decompressStreamWithLimit(rawData, dict, maxSize)
 }
 
 // readXrefField reads a big-endian integer of the given byte width.
@@ -394,9 +425,8 @@ func parseOneXrefSection(tok *Tokenizer, table *xrefTable, data []byte) (*core.P
 			if err != nil {
 				return nil, -1, fmt.Errorf("reader: xref entry %d: %w", startObj+i, err)
 			}
-			objNum := startObj + i
-			if _, exists := table.entries[objNum]; !exists {
-				table.entries[objNum] = entry
+			if err := table.add(startObj+i, entry); err != nil {
+				return nil, -1, err
 			}
 		}
 	}

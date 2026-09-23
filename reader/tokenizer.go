@@ -284,6 +284,14 @@ func (t *Tokenizer) readKeywordOrBool(pos int64) Token {
 		}
 		t.pos++
 	}
+	if t.pos == start {
+		// A delimiter that starts no token of its own (')', '{' or '}')
+		// stops the scan above before it reads a byte. Consume it as a
+		// one-byte keyword, so that every caller that loops until EOF
+		// moves forward.
+		t.pos++
+		return Token{Type: TokenKeyword, Value: string(t.data[start:t.pos]), Pos: pos}
+	}
 	word := string(t.data[start:t.pos])
 
 	switch word {

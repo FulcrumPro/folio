@@ -56,8 +56,11 @@ const (
 	defaultMaxObjectCount = 1_000_000
 
 	// The densest page in a sample of 4,738 real pages (CAD drawings,
-	// nesting reports, office documents) had 1.56 million tokens, so the
-	// default has 2.5 times headroom.
+	// nesting reports, office documents) had 1.56 million tokens: 2.5 times
+	// headroom for the parse. A walk also charges its results to a budget of
+	// the same size, and that budget is the tighter limit. The densest CAD
+	// page used 1.67 million result units (2.4 times headroom), and a page
+	// with one Tj for each glyph reaches the limit at 1.6 million tokens.
 	defaultMaxContentTokens = 4_000_000
 )
 

@@ -434,105 +434,194 @@ func decompressStreamWithLimit(data []byte, dict *core.PdfDictionary, maxBytes i
 	return result, nil
 }
 
-// applyPredictor reverses PNG/TIFF prediction on decompressed data.
-// This is commonly used with FlateDecode in xref streams and image data.
+// applyPredictor reverses PNG/TIFF prediction on decompressed data
+// (ISO 32000-1 §7.4.4.4, Table 8). This is commonly used with
+// FlateDecode in xref streams and image data.
+//
+// The row geometry comes from /Colors, /BitsPerComponent and /Columns:
+// a row holds Columns samples of Colors components, packed into
+// ceil(Colors*BitsPerComponent*Columns/8) bytes. PNG filters look back
+// one whole pixel, ceil(Colors*BitsPerComponent/8) bytes, for the left
+// neighbor.
+//
+// The behavior matches PdfPig 0.1.8 (Filters/FlateFilter.cs and
+// Filters/PngPredictor.cs), which FulcrumProduct's .NET code uses:
+//   - /Colors is capped at 32.
+//   - A filter type byte other than 0-4 leaves its row as read.
+//   - A truncated final row comes out as a full row. The bytes that the
+//     stream does not supply keep the value that the previous decoded
+//     row has at that position. Then the row filter runs over the full
+//     row.
+//
+// Parameters that cannot describe a row return data unchanged: Colors
+// or Columns less than 1, a BitsPerComponent other than 1, 2, 4, 8 or
+// 16, or one row longer than the input. As a result, the output is less
+// than 2*len(data). PdfPig gives other results for these values: an
+// empty output, the raw stream after an exception, or one zero-padded
+// row as long as /Columns asks for.
 func applyPredictor(data []byte, parms *core.PdfDictionary) ([]byte, error) {
-	predictor := 1
-	columns := 1
-
-	if p := parms.Get("Predictor"); p != nil {
-		if num, ok := p.(*core.PdfNumber); ok {
-			predictor = num.IntValue()
-		}
-	}
-	if c := parms.Get("Columns"); c != nil {
-		if num, ok := c.(*core.PdfNumber); ok {
-			columns = num.IntValue()
-		}
+	predictor := predictorParam(parms, "Predictor", 1)
+	isPNG := predictor >= 10 && predictor <= 15
+	if !isPNG && predictor != 2 {
+		return data, nil // 1 is no prediction; other values are undefined.
 	}
 
-	if predictor == 1 {
-		return data, nil // no prediction
+	colors := min(predictorParam(parms, "Colors", 1), 32)
+	bpc := predictorParam(parms, "BitsPerComponent", 8)
+	columns := predictorParam(parms, "Columns", 1)
+	if colors < 1 || columns < 1 || len(data) == 0 {
+		return data, nil
+	}
+	switch bpc {
+	case 1, 2, 4, 8, 16:
+	default:
+		return data, nil
 	}
 
-	if predictor >= 10 && predictor <= 15 {
-		// PNG prediction: each row has a filter byte followed by `columns` data bytes.
-		return decodePNGPredictor(data, columns)
+	// A row has at least one bit per column, so reject a huge /Columns
+	// before the multiplication below can overflow.
+	if int64(columns) > int64(len(data))*8 {
+		return data, nil
 	}
+	bitsPerPixel := colors * bpc
+	rowLen64 := (int64(columns)*int64(bitsPerPixel) + 7) / 8
+	header := int64(0)
+	if isPNG {
+		header = 1 // the per-row filter type byte
+	}
+	if rowLen64+header > int64(len(data)) {
+		return data, nil
+	}
+	rowLen := int(rowLen64)
 
-	// TIFF predictor (2) or unknown — return as-is.
-	return data, nil
+	if isPNG {
+		bpp := (bitsPerPixel + 7) / 8
+		return decodePNGPredictor(data, rowLen, bpp), nil
+	}
+	return decodeTIFFPredictor(data, rowLen, colors, bpc, columns), nil
 }
 
-// decodePNGPredictor reverses PNG row filtering.
-// Each row is (1 + columns) bytes: filter_byte + data_bytes.
-func decodePNGPredictor(data []byte, columns int) ([]byte, error) {
-	rowSize := columns + 1 // filter byte + data
-	if rowSize <= 1 || len(data) == 0 {
-		return data, nil
+// predictorParam reads an integer entry from /DecodeParms. A missing or
+// non-numeric entry gives def.
+func predictorParam(parms *core.PdfDictionary, key string, def int) int {
+	if num, ok := parms.Get(key).(*core.PdfNumber); ok {
+		return num.IntValue()
 	}
-	// Bound columns: if a single row exceeds the data, the predictor
-	// cannot apply. This prevents allocation DoS from malicious /Columns.
-	if rowSize > len(data) {
-		return data, nil
-	}
+	return def
+}
 
-	nRows := len(data) / rowSize
-	if nRows == 0 {
-		return data, nil
-	}
+// predictorRows splits data into rows of stride bytes and returns the
+// output buffer, which has one rowLen-byte row for each input row. The
+// last input row can be short. applyPredictor makes sure that the first
+// row is full.
+func predictorRows(data []byte, stride, rowLen int) (nRows int, out []byte) {
+	nRows = (len(data) + stride - 1) / stride
+	return nRows, make([]byte, nRows*rowLen)
+}
 
-	var result []byte
-	prevRow := make([]byte, columns)
+// decodePNGPredictor reverses PNG row filtering (PNG 1.2 §6). Each input
+// row is a filter type byte followed by rowLen data bytes. bpp is the
+// distance in bytes to the left neighbor.
+func decodePNGPredictor(data []byte, rowLen, bpp int) []byte {
+	stride := rowLen + 1
+	nRows, out := predictorRows(data, stride, rowLen)
+	zero := make([]byte, rowLen)
 
-	for row := range nRows {
-		offset := row * rowSize
-		if offset >= len(data) {
-			break
+	for r := range nRows {
+		in := data[r*stride : min((r+1)*stride, len(data))]
+		row := out[r*rowLen : (r+1)*rowLen]
+		prev := zero
+		if r > 0 {
+			prev = out[(r-1)*rowLen : r*rowLen]
 		}
-		filterType := data[offset]
-		rowData := make([]byte, columns)
-		copy(rowData, data[offset+1:min(offset+rowSize, len(data))])
+		raw := in[1:]
+		if len(raw) < rowLen {
+			// A short final row keeps the previous row's bytes past its
+			// end, as in PdfPig, which reads into an uncleared buffer.
+			copy(row, prev)
+		}
+		copy(row, raw)
 
-		switch filterType {
-		case 0: // None
-			// rowData is already correct.
+		switch in[0] {
 		case 1: // Sub
-			for i := 1; i < columns; i++ {
-				rowData[i] += rowData[i-1]
+			for i := bpp; i < rowLen; i++ {
+				row[i] += row[i-bpp]
 			}
 		case 2: // Up
-			for i := range columns {
-				rowData[i] += prevRow[i]
+			for i := range rowLen {
+				row[i] += prev[i]
 			}
 		case 3: // Average
-			for i := range columns {
-				left := byte(0)
-				if i > 0 {
-					left = rowData[i-1]
+			for i := range rowLen {
+				left := 0
+				if i >= bpp {
+					left = int(row[i-bpp])
 				}
-				rowData[i] += byte((int(left) + int(prevRow[i])) / 2)
+				row[i] += byte((left + int(prev[i])) / 2)
 			}
 		case 4: // Paeth
-			for i := range columns {
-				left := byte(0)
-				if i > 0 {
-					left = rowData[i-1]
+			for i := range rowLen {
+				var left, upLeft byte
+				if i >= bpp {
+					left = row[i-bpp]
+					upLeft = prev[i-bpp]
 				}
-				up := prevRow[i]
-				upLeft := byte(0)
-				if i > 0 {
-					upLeft = prevRow[i-1]
-				}
-				rowData[i] += paethPredictor(left, up, upLeft)
+				row[i] += paethPredictor(left, prev[i], upLeft)
 			}
 		}
+		// 0 (None) and unknown types leave the row as read.
+	}
+	return out
+}
 
-		result = append(result, rowData...)
-		copy(prevRow, rowData)
+// decodeTIFFPredictor reverses TIFF Predictor 2 (horizontal
+// differencing, TIFF 6.0 §14). Each sample component is stored as the
+// difference from the same component of the pixel to its left, modulo
+// 2^bpc.
+func decodeTIFFPredictor(data []byte, rowLen, colors, bpc, columns int) []byte {
+	nRows, out := predictorRows(data, rowLen, rowLen)
+	samples := columns * colors
+	if bpc == 1 && colors == 1 {
+		// PdfPig runs the 1-bit case over every bit of the row,
+		// including the padding bits after the last column.
+		samples = rowLen * 8
 	}
 
-	return result, nil
+	for r := range nRows {
+		row := out[r*rowLen : (r+1)*rowLen]
+		in := data[r*rowLen : min((r+1)*rowLen, len(data))]
+		if len(in) < rowLen && r > 0 {
+			copy(row, out[(r-1)*rowLen:r*rowLen]) // as in the PNG case
+		}
+		copy(row, in)
+
+		switch bpc {
+		case 8:
+			for i := colors; i < samples; i++ {
+				row[i] += row[i-colors]
+			}
+		case 16:
+			for i := colors; i < samples; i++ {
+				p, l := 2*i, 2*(i-colors)
+				v := uint16(row[p])<<8 | uint16(row[p+1])
+				v += uint16(row[l])<<8 | uint16(row[l+1])
+				row[p], row[p+1] = byte(v>>8), byte(v)
+			}
+		default: // 1, 2 or 4 bits: samples never cross a byte.
+			mask := byte(1)<<bpc - 1
+			shift := func(i int) (int, int) {
+				bit := i * bpc
+				return bit / 8, 8 - bit%8 - bpc
+			}
+			for i := colors; i < samples; i++ {
+				pb, ps := shift(i)
+				lb, ls := shift(i - colors)
+				v := (row[pb]>>ps + row[lb]>>ls) & mask
+				row[pb] = row[pb]&^(mask<<ps) | v<<ps
+			}
+		}
+	}
+	return out
 }
 
 // paethPredictor computes the Paeth predictor value.

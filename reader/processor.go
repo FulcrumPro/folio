@@ -132,7 +132,52 @@ type ContentProcessor struct {
 	// Set via SetFormResolver to enable recursive Form XObject processing.
 	formResolver func(name string) []ContentOp
 	depth        int // recursion depth (0 = top-level call)
+
+	// Limits for one top-level Process call (see SetMemoryLimits).
+	limits    MemoryLimits
+	walk      *contentBudget // tokens left to walk, form XObjects included
+	results   *contentBudget // token-sized units left for results
+	text      textBudget     // decoded text, charged to results
+	err       error          // the limit error that stopped Process
+	lostSaves int            // q operators past maxStateNesting, not saved
 }
+
+// The results of a walk are charged to their own budget in units of one
+// parsed token (48 bytes), by size. Without it, each 1-token "h" operator
+// made a path segment and a PathOp: 3 million of them, from a 6 KB file,
+// peaked at 1.4 GB.
+const (
+	segmentCost = 3 // pathSegment, its points, and the PathOp it becomes
+	spanCost    = 4 // TextSpan (184 bytes)
+	imageCost   = 2 // ImageRef (104 bytes)
+	glyphCost   = 2 // GlyphSpan (72 bytes)
+)
+
+// charge takes n units from the results budget. If they do not fit, it
+// records the error, which stops Process, and returns false.
+func (p *ContentProcessor) charge(n int) bool {
+	if p.results.take(n) {
+		return true
+	}
+	if p.err == nil {
+		p.err = p.results.exceeded()
+	}
+	return false
+}
+
+// addSegment adds seg to the current path if the results budget has room.
+func (p *ContentProcessor) addSegment(seg pathSegment) {
+	if p.charge(segmentCost) {
+		p.curPath = append(p.curPath, seg)
+	}
+}
+
+// maxStateNesting limits the graphics states that q saves. A saved state
+// is about 264 bytes, so without a limit a stream of "q" operators kept
+// about 5.5 times its token cost. The PDF 1.7 reference gives 28 as the
+// q nesting limit, and 4,738 real pages nested at most 9. A q past the
+// limit saves nothing, and its Q restores nothing.
+const maxStateNesting = 1024
 
 // pathSegment is a single segment of a path being constructed.
 type pathSegment struct {
@@ -153,6 +198,23 @@ type pathSegment struct {
 //	})
 func (p *ContentProcessor) SetFormResolver(fn func(name string) []ContentOp) {
 	p.formResolver = fn
+}
+
+// SetMemoryLimits sets the limits for Process. MaxContentTokens bounds
+// the tokens (operators plus operands) that one top-level Process call
+// walks, form XObject content included each time it is drawn. It also
+// bounds the results (spans and their text, path segments, images,
+// glyphs), which count as tokens by their size, one token per 48 bytes.
+// The default is MemoryLimits{}.
+func (p *ContentProcessor) SetMemoryLimits(limits MemoryLimits) {
+	p.limits = limits
+}
+
+// Err returns the error that stopped the last Process call at a limit,
+// or nil if Process walked all of its content. The error wraps
+// ErrMemoryLimitExceeded. The results hold what was found before the limit.
+func (p *ContentProcessor) Err() error {
+	return p.err
 }
 
 // SetExtractGlyphs enables per-glyph span extraction.
@@ -180,6 +242,8 @@ func NewContentProcessor(fonts FontCache) *ContentProcessor {
 }
 
 // Process walks the content ops and extracts TextSpans with full positioning.
+// If the walk goes past a limit (see SetMemoryLimits), Process stops there
+// and Err returns the error.
 func (p *ContentProcessor) Process(ops []ContentOp) []TextSpan {
 	// Only reset on top-level call, not recursive Form XObject calls.
 	if p.depth == 0 {
@@ -188,6 +252,12 @@ func (p *ContentProcessor) Process(ops []ContentOp) []TextSpan {
 		p.images = nil
 		p.glyphs = nil
 		p.curPath = nil
+		p.walk = newContentBudget(p.limits)
+		p.walk.what = "content walk passes"
+		p.results = newContentBudget(p.limits)
+		p.results.what = "content results take"
+		p.text = textBudget{units: p.results}
+		p.err = nil
 	}
 	// Guard against excessive recursion from circular Form XObject references.
 	const maxFormDepth = 50
@@ -198,13 +268,26 @@ func (p *ContentProcessor) Process(ops []ContentOp) []TextSpan {
 	defer func() { p.depth-- }()
 
 	for _, op := range ops {
+		if p.err != nil {
+			break
+		}
+		if !p.walk.take(1 + len(op.Operands)) {
+			p.err = p.walk.exceeded()
+			break
+		}
 		switch op.Operator {
 
 		// --- Graphics state ---
 		case "q":
-			p.stack = append(p.stack, p.state)
+			if len(p.stack) < maxStateNesting {
+				p.stack = append(p.stack, p.state)
+			} else {
+				p.lostSaves++
+			}
 		case "Q":
-			if len(p.stack) > 0 {
+			if p.lostSaves > 0 {
+				p.lostSaves--
+			} else if len(p.stack) > 0 {
 				p.state = p.stack[len(p.stack)-1]
 				p.stack = p.stack[:len(p.stack)-1]
 			}
@@ -414,13 +497,13 @@ func (p *ContentProcessor) Process(ops []ContentOp) []TextSpan {
 			if len(op.Operands) >= 2 {
 				x, y := tokenFloat(op.Operands[0]), tokenFloat(op.Operands[1])
 				ux, uy := transformPoint(p.state.ctm, x, y)
-				p.curPath = append(p.curPath, pathSegment{PathMove, [][2]float64{{ux, uy}}})
+				p.addSegment(pathSegment{PathMove, [][2]float64{{ux, uy}}})
 			}
 		case "l": // lineto
 			if len(op.Operands) >= 2 {
 				x, y := tokenFloat(op.Operands[0]), tokenFloat(op.Operands[1])
 				ux, uy := transformPoint(p.state.ctm, x, y)
-				p.curPath = append(p.curPath, pathSegment{PathLine, [][2]float64{{ux, uy}}})
+				p.addSegment(pathSegment{PathLine, [][2]float64{{ux, uy}}})
 			}
 		case "c": // cubic bezier
 			if len(op.Operands) >= 6 {
@@ -429,7 +512,7 @@ func (p *ContentProcessor) Process(ops []ContentOp) []TextSpan {
 					x, y := tokenFloat(op.Operands[i*2]), tokenFloat(op.Operands[i*2+1])
 					pts[i][0], pts[i][1] = transformPoint(p.state.ctm, x, y)
 				}
-				p.curPath = append(p.curPath, pathSegment{PathCurve, pts})
+				p.addSegment(pathSegment{PathCurve, pts})
 			}
 		case "re": // rectangle
 			if len(op.Operands) >= 4 {
@@ -437,10 +520,10 @@ func (p *ContentProcessor) Process(ops []ContentOp) []TextSpan {
 				w, h := tokenFloat(op.Operands[2]), tokenFloat(op.Operands[3])
 				ux, uy := transformPoint(p.state.ctm, x, y)
 				uw, uh := w*matrixScale(p.state.ctm), h*matrixScale(p.state.ctm)
-				p.curPath = append(p.curPath, pathSegment{PathRect, [][2]float64{{ux, uy}, {uw, uh}}})
+				p.addSegment(pathSegment{PathRect, [][2]float64{{ux, uy}, {uw, uh}}})
 			}
 		case "h": // close path
-			p.curPath = append(p.curPath, pathSegment{typ: PathClose})
+			p.addSegment(pathSegment{typ: PathClose})
 
 		// --- Path painting ---
 		case "S": // stroke
@@ -459,14 +542,16 @@ func (p *ContentProcessor) Process(ops []ContentOp) []TextSpan {
 			if len(op.Operands) >= 1 && op.Operands[0].Type == TokenName {
 				name := op.Operands[0].Value
 				// Record as image reference (caller can check if it's actually a Form).
-				p.images = append(p.images, ImageRef{
-					Name:   name,
-					X:      p.state.ctm[4],
-					Y:      p.state.ctm[5],
-					Width:  matrixScale(p.state.ctm),
-					Height: math.Sqrt(p.state.ctm[2]*p.state.ctm[2] + p.state.ctm[3]*p.state.ctm[3]),
-					Matrix: p.state.ctm,
-				})
+				if p.charge(imageCost) {
+					p.images = append(p.images, ImageRef{
+						Name:   name,
+						X:      p.state.ctm[4],
+						Y:      p.state.ctm[5],
+						Width:  matrixScale(p.state.ctm),
+						Height: math.Sqrt(p.state.ctm[2]*p.state.ctm[2] + p.state.ctm[3]*p.state.ctm[3]),
+						Matrix: p.state.ctm,
+					})
+				}
 
 				// If we have a FormXObject resolver, recurse into Form XObjects.
 				if p.formResolver != nil {
@@ -494,11 +579,9 @@ func (p *ContentProcessor) emitText(tok Token) {
 	raw := []byte(tok.Value)
 	fe := p.fontEntry()
 
-	var text string
-	if fe != nil {
-		text = fe.Decode(raw)
-	} else {
-		text = string(raw)
+	text := p.text.decode(raw, fe)
+	if p.text.hit && p.err == nil {
+		p.err = p.text.err()
 	}
 
 	if text == "" {
@@ -558,6 +641,9 @@ func (p *ContentProcessor) emitText(tok Token) {
 		MCID:       p.state.currentMCID,
 	}
 
+	if !p.charge(spanCost) {
+		return
+	}
 	p.spans = append(p.spans, span)
 
 	// Emit per-glyph spans if enabled.
@@ -576,6 +662,9 @@ func (p *ContentProcessor) emitGlyphs(text string, startX, y, fontSize float64) 
 	fe := p.fontEntry()
 	x := startX
 	for _, ch := range text {
+		if !p.charge(glyphCost) {
+			return
+		}
 		var glyphW float64
 		if fe != nil {
 			// Get width for this character code.

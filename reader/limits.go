@@ -33,6 +33,19 @@ type MemoryLimits struct {
 	// Prevents excessive memory from a malicious xref claiming millions of objects.
 	// Default: 1,000,000. Set to -1 to disable.
 	MaxObjectCount int
+
+	// MaxContentTokens bounds the work on page content. It is the
+	// maximum number of tokens (operators plus operands) that the reader
+	// keeps when it parses content streams: a page walk (text, image and
+	// path extraction) counts the page and all of its form XObjects
+	// against one budget. It is also the maximum number of tokens that one
+	// ContentProcessor run walks, form XObjects included each time they
+	// are drawn, and the maximum size of the results of one extraction
+	// (text, spans, path segments, images), counted as one token per
+	// 48 bytes. A parsed token is 48 bytes, so each of these three is
+	// about 190 MB at the default.
+	// Default: 4,000,000. Set to -1 to disable.
+	MaxContentTokens int
 }
 
 // Default memory limits used when the caller does not override them.
@@ -41,6 +54,11 @@ const (
 	defaultMaxTotalAlloc  = 1 << 30   // 1 GB
 	defaultMaxXrefSize    = 32 << 20  // 32 MB
 	defaultMaxObjectCount = 1_000_000
+
+	// The densest page in a sample of 4,738 real pages (CAD drawings,
+	// nesting reports, office documents) had 1.56 million tokens, so the
+	// default has 2.5 times headroom.
+	defaultMaxContentTokens = 4_000_000
 )
 
 // effectiveMaxStreamSize returns the configured or default max stream size.
@@ -85,6 +103,17 @@ func (ml MemoryLimits) effectiveMaxObjectCount() int {
 		return defaultMaxObjectCount
 	}
 	return ml.MaxObjectCount
+}
+
+// effectiveMaxContentTokens returns the configured or default content token limit.
+func (ml MemoryLimits) effectiveMaxContentTokens() int {
+	if ml.MaxContentTokens < 0 {
+		return -1
+	}
+	if ml.MaxContentTokens == 0 {
+		return defaultMaxContentTokens
+	}
+	return ml.MaxContentTokens
 }
 
 // memoryTracker tracks cumulative decompressed bytes for a document.

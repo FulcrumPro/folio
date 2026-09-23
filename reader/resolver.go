@@ -179,32 +179,27 @@ func (r *resolver) resolveCompressed(objNum, objStreamNum, indexInStream int) (c
 		return nil, fmt.Errorf("reader: object stream %d: /N (%d) exceeds reasonable limit for stream size (%d bytes)", objStreamNum, nObj, len(streamData))
 	}
 
-	tok := NewTokenizer(streamData)
-
-	// Read the N pairs of (objNum, offset).
-	type objEntry struct {
-		objNum int
-		offset int
+	if indexInStream < 0 || indexInStream >= nObj {
+		return nil, fmt.Errorf("reader: object stream %d: index %d out of range (N=%d)", objStreamNum, indexInStream, nObj)
 	}
-	entries := make([]objEntry, nObj)
-	for i := range nObj {
+
+	// Read the (objNum, offset) pairs up to the one at indexInStream. The
+	// pairs past it are not needed, and keeping all N of them cost 16
+	// bytes per pair: 2 GB for a 256 MB stream that claims the largest /N
+	// the check above allows.
+	tok := NewTokenizer(streamData)
+	var entryOffset int
+	for i := 0; i <= indexInStream; i++ {
 		numTok := tok.Next()
 		offTok := tok.Next()
 		if numTok.Type != TokenNumber || offTok.Type != TokenNumber {
 			return nil, fmt.Errorf("reader: object stream %d: invalid header at entry %d", objStreamNum, i)
 		}
-		entries[i] = objEntry{
-			objNum: int(numTok.Int),
-			offset: int(offTok.Int),
-		}
-	}
-
-	if indexInStream >= len(entries) {
-		return nil, fmt.Errorf("reader: object stream %d: index %d out of range (N=%d)", objStreamNum, indexInStream, nObj)
+		entryOffset = int(offTok.Int)
 	}
 
 	// Parse the object at the given index.
-	objOffset := firstOffset + entries[indexInStream].offset
+	objOffset := firstOffset + entryOffset
 	if objOffset < 0 || objOffset >= len(streamData) {
 		return nil, fmt.Errorf("reader: object stream %d: computed offset %d out of bounds (stream size %d)", objStreamNum, objOffset, len(streamData))
 	}

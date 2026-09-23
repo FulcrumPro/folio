@@ -199,13 +199,19 @@ func extractRewriteMatrix(operands []Token) [6]float64 {
 // at character-level precision. For Tj and TJ operators, each character's
 // bounding box is tested individually; characters outside all redaction
 // rects are preserved. Non-text operators pass through unchanged.
-func rewriteContentStream(data []byte, rects []Box, fonts FontCache) []byte {
+//
+// A parse cut short at a limit would drop the rest of the page from the
+// rewritten stream, so rewriteContentStream returns the error instead.
+func rewriteContentStream(data []byte, rects []Box, fonts FontCache, limits MemoryLimits) ([]byte, error) {
 	if len(rects) == 0 {
-		return data
+		return data, nil
 	}
-	ops := ParseContentStream(data)
+	ops, err := ParseContentStreamWithLimits(data, limits)
+	if err != nil {
+		return nil, err
+	}
 	if len(ops) == 0 {
-		return data
+		return data, nil
 	}
 
 	rs := newRewriteState()
@@ -224,7 +230,7 @@ func rewriteContentStream(data []byte, rects []Box, fonts FontCache) []byte {
 		out = append(out, split...)
 	}
 
-	return serializeContentOps(out)
+	return serializeContentOps(out), nil
 }
 
 // splitTextOp processes a text-showing operator (Tj, TJ, ', ") and returns

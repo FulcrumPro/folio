@@ -108,7 +108,10 @@ func RedactRegions(r *PdfReader, marks []RedactionMark, opts *RedactOptions) (*M
 		fonts := buildFontCache(resources, r.resolver)
 
 		// Rewrite the content stream (remove overlapping text ops).
-		rewritten := rewriteContentStream(data, rects, fonts)
+		rewritten, err := rewriteContentStream(data, rects, fonts, page.memoryLimits())
+		if err != nil {
+			return nil, fmt.Errorf("reader: redact: page %d content: %w", pageIdx, err)
+		}
 
 		// Build the overlay (opaque boxes + optional text).
 		overlay := buildRedactionOverlay(rects, opts)

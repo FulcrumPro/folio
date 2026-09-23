@@ -4,6 +4,8 @@
 package reader
 
 import (
+	"unicode/utf8"
+
 	"github.com/carlos7ags/folio/core"
 	"github.com/carlos7ags/folio/font"
 )
@@ -34,6 +36,29 @@ func (fe *FontEntry) Decode(raw []byte) string {
 		return fe.encoding.Decode(raw)
 	}
 	return string(raw)
+}
+
+// maxDecodedPerByte returns the most UTF-8 bytes that Decode can make
+// from one byte of character codes.
+func (fe *FontEntry) maxDecodedPerByte() int {
+	switch {
+	case fe == nil:
+		return 1
+	case fe.cmap != nil:
+		return fe.cmap.maxDecodedPerCode()
+	case fe.encoding != nil:
+		return utf8.UTFMax
+	default:
+		return 1
+	}
+}
+
+// codeBytes returns the length of one character code for Decode.
+func (fe *FontEntry) codeBytes() int {
+	if fe != nil && fe.cmap != nil && fe.cmap.CodeBytes() == 2 {
+		return 2
+	}
+	return 1
 }
 
 // CharWidth returns the width of a character code in 1/1000 of text space.

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"strings"
 	"unicode/utf16"
+	"unicode/utf8"
 )
 
 // CMap is a parsed ToUnicode CMap that maps character codes to Unicode strings.
@@ -14,7 +15,14 @@ type CMap struct {
 	codeSpaceRanges []codeSpaceRange
 	bfChars         map[uint32]string // code → unicode string
 	bfRanges        []bfRange
+	maxDst          int // longest destination string, in UTF-8 bytes
 }
+
+// maxToUnicodeDstUnits limits a ToUnicode destination string to 256
+// UTF-16 code units (512 bytes); a longer one is cut. Real entries map
+// one code to a few characters, such as a ligature. Without the limit,
+// one short code could decode to megabytes of text.
+const maxToUnicodeDstUnits = 256
 
 // codeSpaceRange defines a range of valid character codes and their byte width.
 type codeSpaceRange struct {
@@ -88,6 +96,14 @@ func (cm *CMap) Decode(raw []byte) string {
 	return sb.String()
 }
 
+// maxDecodedPerCode returns the most UTF-8 bytes that Decode can make
+// from one code. A bfrange adds an offset to the first rune of its
+// destination, which can make that rune longer, and an unmapped code
+// comes out as one rune.
+func (cm *CMap) maxDecodedPerCode() int {
+	return cm.maxDst + utf8.UTFMax
+}
+
 // lookupCode looks up a character code in bfChars then bfRanges.
 func (cm *CMap) lookupCode(code uint32) (string, bool) {
 	if s, ok := cm.bfChars[code]; ok {
@@ -152,6 +168,7 @@ func (cm *CMap) parseBfChars(s string) {
 			code, _ := decodeHexCode(tokens[i])
 			unicode := decodeUnicodeHex(tokens[i+1])
 			cm.bfChars[code] = unicode
+			cm.maxDst = max(cm.maxDst, len(unicode))
 		}
 	}
 }
@@ -176,6 +193,7 @@ func (cm *CMap) parseBfRanges(s string) {
 			low, _ := decodeHexCode(tokens[i])
 			high, _ := decodeHexCode(tokens[i+1])
 			dst := decodeUnicodeHex(tokens[i+2])
+			cm.maxDst = max(cm.maxDst, len(dst))
 			cm.bfRanges = append(cm.bfRanges, bfRange{
 				low: low, high: high, dst: dst,
 			})
@@ -253,6 +271,9 @@ func decodeUnicodeHex(h string) string {
 	h = strings.TrimSpace(h)
 	if h == "" {
 		return ""
+	}
+	if len(h) > 4*maxToUnicodeDstUnits {
+		h = h[:4*maxToUnicodeDstUnits]
 	}
 	if len(h)%2 != 0 {
 		h += "0"

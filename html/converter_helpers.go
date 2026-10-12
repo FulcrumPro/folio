@@ -434,11 +434,6 @@ func findHTMLLang(doc *html.Node) string {
 	return walk(doc)
 }
 
-// splitDeclarations splits a CSS style string into individual declarations.
-func splitDeclarations(style string) []string {
-	return strings.Split(style, ";")
-}
-
 // splitDeclarationWithImportant splits "property: value" into
 // (property, value, important). The "!important" suffix is recognized
 // case-insensitively and stripped from the returned value so downstream
@@ -810,7 +805,13 @@ func (c *converter) resolveBackgroundImage(style computedStyle) *layout.Backgrou
 	switch kind {
 	case "url":
 		imgPath := inner
-		loaded, err := c.loadImageAsset(imgPath)
+		var loaded *folioimage.Image
+		var err error
+		if strings.HasPrefix(imgPath, "data:") {
+			loaded, err = decodeDataURI(imgPath)
+		} else {
+			loaded, err = c.loadImageAsset(imgPath)
+		}
 		if err != nil {
 			c.reportAssetError("background-image", err, "src", imgPath)
 			return nil

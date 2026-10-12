@@ -76,7 +76,7 @@ func (c *converter) computeElementStyle(n *html.Node, parent computedStyle) comp
 		}
 	}
 	if attr := getAttr(n, "style"); attr != "" {
-		for _, decl := range splitDeclarations(attr) {
+		for _, decl := range splitDeclarationsCSS(attr) {
 			prop, val, imp := splitDeclarationWithImportant(decl)
 			if prop == "" || val == "" {
 				continue

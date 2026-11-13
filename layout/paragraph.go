@@ -1555,7 +1555,9 @@ func (p *Paragraph) measureWords(maxWidth float64) ([]Word, float64) {
 		// or baseline shift), as the punctuation should use the current run's
 		// styling, not the previous word's. This prevents "th" (superscript)
 		// from absorbing "!" (normal) in "7<sup>th</sup>! works".
-		if len(measured) > 0 && len(text) > 0 && !isSpace(rune(text[0])) {
+		// Only punctuation that abuts the previous word merges: "foo " +
+		// ",bar" keeps its space, as the same text in one run would.
+		if len(measured) > 0 && runsAdjacent(p.runs, i) {
 			prev := &measured[len(measured)-1]
 			sameStyle := prev.Font == run.Font && prev.Embedded == run.Embedded &&
 				prev.FontSize == run.FontSize && prev.BaselineShift == run.BaselineShift
@@ -1573,6 +1575,16 @@ func (p *Paragraph) measureWords(maxWidth float64) ([]Word, float64) {
 						prev.Width += prev.LetterSpacing * float64(len([]rune(prevMeasureText))-1)
 					}
 					text = rest
+					// glueAdjacentRuns zeroed prev's SpaceAfter because it
+					// abutted this run's punctuation. The merged word now
+					// ends where the punctuation does, so whatever follows
+					// the punctuation decides the gap: a space in ", Suite"
+					// is a word gap; "),x" stays glued; and when the run is
+					// all punctuation, the next run's glueAdjacentRuns
+					// decides.
+					if rest == "" || isSpace(rune(rest[0])) {
+						prev.SpaceAfter = spaceW
+					}
 				}
 			}
 		}

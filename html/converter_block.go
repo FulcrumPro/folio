@@ -291,8 +291,8 @@ func isDefaultInlineAtom(a atom.Atom) bool {
 }
 
 // blockifyInlineBoxChild handles the issue #329/#340 case where an inline
-// element (e.g. a bare <span>) that carries a rounded box (a border-radius with
-// a background and/or border) is a flex or grid item. CSS blockifies flex/grid
+// element (e.g. a bare <span>) that carries a box (a border, or a border-radius
+// with a background) is a flex or grid item. CSS blockifies flex/grid
 // items, so such a span must render its full box model — padding, border,
 // background, rounded fill — exactly like display:inline-block already does.
 //
@@ -301,8 +301,9 @@ func isDefaultInlineAtom(a atom.Atom) bool {
 // padding, border, and border-radius. To render identically to inline-block,
 // this routes the child through convertBlock (the same full box-model path that
 // display:inline-block uses) and marks the resulting Div shrink-to-fit so it
-// sizes to its content and flows like an atomic inline box — leaving the
-// flex/grid basis/grow/shrink sizing to operate on that content width.
+// sizes to its content and flows like an atomic inline box. convertFlex clears
+// that again for a row flex item, which takes the main size the flex algorithm
+// gives it.
 //
 // Returns (elements, true) when it blockified the child; (nil, false) when the
 // child is not a bare inline element carrying a box, so callers fall back to
@@ -319,15 +320,15 @@ func (c *converter) blockifyInlineBoxChild(child *html.Node, childStyle computed
 	case "block", "inline-block", "flex", "grid", "none":
 		return nil, false
 	}
-	// Only blockify when the element carries a border-radius together with a
-	// fill or border — the box the bare inline path genuinely cannot render
-	// (it drops the radius and paints a square highlight, and also drops the
-	// padding/border). This mirrors the display:block routing in convertNode.
+	// Blockify when the element carries a border, or a border-radius together
+	// with a fill — the box the bare inline path genuinely cannot render (it
+	// drops the border and padding, and paints a square highlight without the
+	// radius). This mirrors the display:block routing in convertNode.
 	// A bare background WITHOUT a radius stays inline (a Paragraph still paints
 	// its own square highlight, matching prior behavior — no regression), so we
 	// do not intercept it.
-	hasBox := childStyle.hasBorderRadius() &&
-		(childStyle.BackgroundColor != nil || childStyle.hasBorder())
+	hasBox := childStyle.hasBorder() ||
+		(childStyle.hasBorderRadius() && childStyle.BackgroundColor != nil)
 	if !hasBox {
 		return nil, false
 	}

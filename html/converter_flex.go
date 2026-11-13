@@ -194,6 +194,16 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 		if !blockified {
 			childElems = c.convertNode(child, style)
 		}
+		// A row flex item is as wide as the main size the flex algorithm
+		// gives it: its content width plus any flex-grow share. Shrinking
+		// the blockified box to its content would draw a growing item's
+		// border (a signature line) only as wide as the text above it.
+		isRowDirection := style.FlexDirection != "column" && style.FlexDirection != "column-reverse"
+		if blockified && isRowDirection {
+			if d, ok := childElems[0].(*layout.Div); ok {
+				d.SetShrinkToFit(false)
+			}
+		}
 		if len(childElems) == 0 {
 			// A visible element child that rendered no content is still a
 			// flex item per CSS Flexbox §4: it generates a zero-size item
@@ -254,7 +264,6 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 		// 250px width swallowed as a vertical basis, and the Div's own
 		// width unit was cleared — so the BILLING box stretched to the
 		// full cross-axis instead of being held to 250px.
-		isRowDirection := style.FlexDirection != "column" && style.FlexDirection != "column-reverse"
 		effectiveBasis := childStyle.FlexBasis
 		widthUsedAsBasis := false
 		if effectiveBasis == nil && childStyle.Width != nil && isRowDirection {

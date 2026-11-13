@@ -1252,7 +1252,14 @@ func (c *converter) walkChildren(n *html.Node, parentStyle computedStyle) []layo
 
 	var elems []layout.Element
 	var prevMarginBottom float64
-	var inlineBuf []*html.Node
+	// inlineBuf holds the nodes of the current anonymous block, each with the
+	// style it inherits: parentStyle, or the style of the inline element a
+	// block child split (see addFlow).
+	type inlineNode struct {
+		node  *html.Node
+		style computedStyle
+	}
+	var inlineBuf []inlineNode
 
 	appendBlock := func(e layout.Element) {
 		prevMarginBottom = collapseMargins(prevMarginBottom, e)
@@ -1264,8 +1271,8 @@ func (c *converter) walkChildren(n *html.Node, parentStyle computedStyle) []layo
 			return
 		}
 		var runs []layout.TextRun
-		for _, node := range inlineBuf {
-			runs = append(runs, c.collectRunsFromNode(node, parentStyle)...)
+		for _, in := range inlineBuf {
+			runs = append(runs, c.collectRunsFromNode(in.node, in.style)...)
 		}
 		inlineBuf = inlineBuf[:0]
 		if len(runs) == 0 {
@@ -1302,6 +1309,31 @@ func (c *converter) walkChildren(n *html.Node, parentStyle computedStyle) []layo
 		floatRun = floatRun[:0]
 	}
 
+	// addFlow places a child in the flow: inline content joins the current
+	// anonymous block, anything else is laid out as a block of its own. An
+	// inline element that holds a block-level box is split around it (CSS 2.1
+	// §9.2.1.1): its children are placed one by one, so the inline content
+	// before and after the block lands on lines of its own. Without the split,
+	// `<span><span style="display:block">a</span><span
+	// style="display:block">b</span></span>` printed "a b" on one line.
+	var addFlow func(child *html.Node, style computedStyle)
+	addFlow = func(child *html.Node, style computedStyle) {
+		if c.isInlineFlowChild(child, style) {
+			if childStyle, ok := c.inlineHoldingBlock(child, style); ok {
+				for gc := child.FirstChild; gc != nil; gc = gc.NextSibling {
+					addFlow(gc, childStyle)
+				}
+				return
+			}
+			inlineBuf = append(inlineBuf, inlineNode{child, style})
+			return
+		}
+		flushInline()
+		for _, e := range c.convertNode(child, style) {
+			appendBlock(e)
+		}
+	}
+
 	for child := n.FirstChild; child != nil; child = child.NextSibling {
 		if c.limitErr != nil || c.ctxErr != nil {
 			break
@@ -1317,18 +1349,73 @@ func (c *converter) walkChildren(n *html.Node, parentStyle computedStyle) []layo
 			continue
 		}
 		flushFloatRun()
-		if c.isInlineFlowChild(child, parentStyle) {
-			inlineBuf = append(inlineBuf, child)
-			continue
-		}
-		flushInline()
-		for _, e := range c.convertNode(child, parentStyle) {
-			appendBlock(e)
-		}
+		addFlow(child, parentStyle)
 	}
 	flushFloatRun()
 	flushInline()
 	return elems
+}
+
+// inlineHoldingBlock reports whether n is an inline element with a
+// block-level box among its in-flow descendants, reached through inline
+// elements only, and returns n's computed style. Only a display:inline box
+// splits: an inline-block keeps its blocks inside its own box. <a> is never
+// split: its href travels on the text runs it collects, so its content stays
+// inline.
+func (c *converter) inlineHoldingBlock(n *html.Node, parentStyle computedStyle) (computedStyle, bool) {
+	if n.Type != html.ElementNode || !isDefaultInlineAtom(n.DataAtom) {
+		return computedStyle{}, false
+	}
+	style := c.computeElementStyle(n, parentStyle)
+	if style.Display != "inline" {
+		return computedStyle{}, false
+	}
+	for ch := n.FirstChild; ch != nil; ch = ch.NextSibling {
+		if ch.Type != html.ElementNode {
+			continue
+		}
+		if c.isInlineFlowElement(ch, style) {
+			if _, ok := c.inlineHoldingBlock(ch, style); ok {
+				return style, true
+			}
+			continue
+		}
+		if c.isInFlowBlock(ch, style) {
+			return style, true
+		}
+	}
+	return computedStyle{}, false
+}
+
+// isInFlowBlock reports whether n generates an in-flow block-level box: a
+// text-level element whose CSS display makes it a block, or a block element
+// whose display does not make it inline. Floated and absolutely positioned
+// boxes are out of flow and do not split an inline.
+func (c *converter) isInFlowBlock(n *html.Node, parentStyle computedStyle) bool {
+	style := c.computeElementStyle(n, parentStyle)
+	if style.Float == "left" || style.Float == "right" ||
+		style.Position == "absolute" || style.Position == "fixed" {
+		return false
+	}
+	if isDefaultInlineAtom(n.DataAtom) {
+		switch style.Display {
+		case "block", "flex", "grid", "table", "list-item":
+			return true
+		}
+		return false
+	}
+	switch n.DataAtom {
+	case atom.Div, atom.P, atom.Ul, atom.Ol, atom.Dl, atom.Table, atom.Blockquote,
+		atom.Pre, atom.Hr, atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6,
+		atom.Section, atom.Article, atom.Header, atom.Footer, atom.Nav, atom.Aside,
+		atom.Main, atom.Figure, atom.Form, atom.Fieldset, atom.Address:
+		switch style.Display {
+		case "inline", "inline-block", "inline-flex", "inline-grid", "inline-table", "none":
+			return false
+		}
+		return true
+	}
+	return false
 }
 
 // isFloatRunChild reports whether a child is a left/right-floated block element

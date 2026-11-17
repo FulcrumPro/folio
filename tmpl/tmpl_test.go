@@ -20,6 +20,7 @@ import (
 	"github.com/carlos7ags/folio/document"
 	foliohtml "github.com/carlos7ags/folio/html"
 	"github.com/carlos7ags/folio/layout"
+	"github.com/carlos7ags/folio/reader"
 )
 
 // executeHTML is a test helper that runs the template engine and returns
@@ -153,6 +154,34 @@ func TestRenderDocument(t *testing.T) {
 	}
 	if doc == nil {
 		t.Fatal("expected non-nil document")
+	}
+}
+
+func TestConvertDocumentPrintsTemplateActionsAsText(t *testing.T) {
+	doc, err := ConvertDocument(`<p>Part {{ broken</p><p>Note {{/*</p><p>Kept terms</p><p>Tail */}}</p>`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if _, err := doc.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	r, err := reader.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := r.Page(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, err := page.ExtractText()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Part {{ broken", "Note {{/*", "Kept terms", "Tail */}}"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("page text %q lacks %q", text, want)
+		}
 	}
 }
 

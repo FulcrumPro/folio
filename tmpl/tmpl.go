@@ -160,6 +160,13 @@ func RenderDocument(templateStr string, data any, opts *Options) (*document.Docu
 	if err != nil {
 		return nil, err
 	}
+	return ConvertDocument(htmlStr, opts)
+}
+
+// ConvertDocument lays out finished HTML as RenderDocument does, without
+// running it as a template first, so text that looks like a template
+// action ("{{") is printed as written.
+func ConvertDocument(htmlStr string, opts *Options) (*document.Document, error) {
 	result, err := foliohtml.ConvertFull(htmlStr, opts.convertOpts())
 	if err != nil {
 		return nil, fmt.Errorf("tmpl: html conversion failed: %w", err)

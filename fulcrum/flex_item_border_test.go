@@ -68,3 +68,46 @@ func TestFlexItemSpanPaintsBorder(t *testing.T) {
 		}
 	}
 }
+
+// TestFlexItemSpanBorderWithoutGrowHugsText is the control for
+// TestFlexItemSpanPaintsBorder: a bordered flex item that does not grow (a
+// badge) stays as wide as its text, as Chrome draws it.
+func TestFlexItemSpanBorderWithoutGrowHugsText(t *testing.T) {
+	const page = `<html><body><div style="display: flex; width: 400pt">
+  <span style="border-bottom: 1px solid black;">Badge</span>
+  <span>rest of the row</span>
+</div></body></html>`
+	pdf, err := renderHTMLToPDF(page)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	r, err := reader.Parse(pdf)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	p, err := r.Page(0)
+	if err != nil {
+		t.Fatalf("page 0: %v", err)
+	}
+	ops, err := p.PathOps()
+	if err != nil {
+		t.Fatalf("path ops: %v", err)
+	}
+	var rules []float64
+	for i := 1; i < len(ops); i++ {
+		if ops[i].Type != reader.PathLine || ops[i-1].Type != reader.PathMove {
+			continue
+		}
+		a, b := ops[i-1].Points[0], ops[i].Points[0]
+		if math.Abs(a[1]-b[1]) < 0.01 {
+			rules = append(rules, math.Abs(b[0]-a[0]))
+		}
+	}
+	if len(rules) != 1 {
+		t.Fatalf("painted %d horizontal rules %v, want 1", len(rules), rules)
+	}
+	// "Badge" in the default 12pt font is under 50pt wide; the row is 400pt.
+	if w := rules[0]; w > 50 {
+		t.Errorf("rule is %.1fpt wide; a flex item that does not grow keeps its text width", w)
+	}
+}

@@ -1388,7 +1388,7 @@ func (c *converter) inlineHoldingBlock(n *html.Node, parentStyle computedStyle) 
 }
 
 // isInFlowBlock reports whether n generates an in-flow block-level box: a
-// text-level element whose CSS display makes it a block, or a block element
+// text-level element that isInlineFlowElement lays out as a block, or a block element
 // whose display does not make it inline. Floated and absolutely positioned
 // boxes are out of flow and do not split an inline.
 func (c *converter) isInFlowBlock(n *html.Node, parentStyle computedStyle) bool {
@@ -1399,7 +1399,7 @@ func (c *converter) isInFlowBlock(n *html.Node, parentStyle computedStyle) bool 
 	}
 	if isDefaultInlineAtom(n.DataAtom) {
 		switch style.Display {
-		case "block", "flex", "grid", "table", "list-item":
+		case "block", "flex", "grid":
 			return true
 		}
 		return false

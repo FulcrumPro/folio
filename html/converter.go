@@ -612,6 +612,7 @@ func ConvertFullWithContext(ctx context.Context, htmlStr string, opts *Options) 
 	if err != nil {
 		return nil, &ParseError{Err: err}
 	}
+	removeComments(doc)
 
 	style := defaultStyle()
 	style.FontSize = o.DefaultFontSize
@@ -706,6 +707,7 @@ func ConvertWithContext(ctx context.Context, htmlStr string, opts *Options) ([]l
 	if err != nil {
 		return nil, &ParseError{Err: err}
 	}
+	removeComments(doc)
 
 	style := defaultStyle()
 	style.FontSize = o.DefaultFontSize

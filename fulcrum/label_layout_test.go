@@ -32,10 +32,12 @@ const (
 // shrink-to-fit (CSS 2.1 §10.3.5). folio laid the float's content out at the
 // full container width, so a float holding a block wrapper took the whole line:
 // the label's right-floated QR code drew at the left edge, on top of the rows.
+// The wrapper has a margin, as the label's containers do: the converter drops
+// a wrapper with no box styles, and a float holding just the image already fit.
 func TestAutoWidthFloatShrinksToContent(t *testing.T) {
 	src := `<html><head><style>body{margin:0;padding:0}</style></head><body>
 		<div style="width:400pt">
-			<div style="float:right"><div><img src="` + pngDataURI(200, 100) + `" style="width:100pt"></div></div>
+			<div style="float:right"><div style="margin-bottom:2pt"><img src="` + pngDataURI(200, 100) + `" style="width:100pt"></div></div>
 		</div>
 	</body></html>`
 	pdf, err := renderHTMLToPDF(src)
@@ -59,7 +61,7 @@ func TestAutoWidthFloatShrinksToContent(t *testing.T) {
 func TestFloatedImageMaxWidthSizesFloat(t *testing.T) {
 	src := `<html><head><style>body{margin:0;padding:0}</style></head><body>
 		<div style="width:400pt">
-			<div style="float:right"><div><img src="` + pngDataURI(300, 150) + `" style="max-width:80pt"></div></div>
+			<div style="float:right"><div style="margin-bottom:2pt"><img src="` + pngDataURI(300, 150) + `" style="max-width:80pt"></div></div>
 		</div>
 	</body></html>`
 	pdf, err := renderHTMLToPDF(src)

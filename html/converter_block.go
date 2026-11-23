@@ -164,7 +164,8 @@ func (c *converter) convertBlock(n *html.Node, style computedStyle) []layout.Ele
 	hasOutline := style.OutlineWidth > 0
 	hasTransform := style.Transform != "" && strings.ToLower(strings.TrimSpace(style.Transform)) != "none"
 	hasBgImage := style.BackgroundImage != ""
-	if !style.hasPadding() && !style.hasBorder() && !style.hasMargin() && style.BackgroundColor == nil && !hasWidthConstraints && !hasHeightConstraints && !hasVisualEffects && !hasBoxShadow && !hasOutline && !hasTransform && !hasBgImage {
+	hasClear := style.Clear != "" && style.Clear != "none"
+	if !style.hasPadding() && !style.hasBorder() && !style.hasMargin() && style.BackgroundColor == nil && !hasWidthConstraints && !hasHeightConstraints && !hasVisualEffects && !hasBoxShadow && !hasOutline && !hasTransform && !hasBgImage && !hasClear {
 		return children
 	}
 

@@ -15,7 +15,7 @@ func TestRemoveComments(t *testing.T) {
 		name, in, want string
 	}{
 		{"between text", `<div>Net <!-- c --> 30</div>`, `<div>Net  30</div>`},
-		{"two in a row", `<td>a<!--x--><!--y-->b</td>`, `<td>ab</td>`},
+		{"two in a row", `<table><tr><td>a<!--x--><!--y-->b</td></tr></table>`, `<td>ab</td>`},
 		{"between spans", `<p><span>a</span><!--
 		--><span>b</span></p>`, `<p><span>a</span><span>b</span></p>`},
 		{"nested", `<div><p>x<!-- c -->y</p></div>`, `<div><p>xy</p></div>`},

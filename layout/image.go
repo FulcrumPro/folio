@@ -268,15 +268,26 @@ func (ie *ImageElement) MinWidth() float64 {
 	return 1 // minimum 1pt
 }
 
-// MaxWidth implements Measurable. Returns the explicit width or natural pixel width.
+// MaxWidth implements Measurable. Returns the explicit width or natural pixel
+// width, held to the CSS max-width / max-height bounds the image renders at.
 func (ie *ImageElement) MaxWidth() float64 {
-	if ie.width > 0 {
-		return ie.width
+	w := ie.width
+	if w <= 0 {
+		if ie.img == nil {
+			return 1
+		}
+		w = float64(ie.img.Width())
 	}
-	if ie.img == nil {
-		return 1
+	ar := 1.0
+	if ie.img != nil && ie.img.AspectRatio() > 0 {
+		ar = ie.img.AspectRatio()
 	}
-	return float64(ie.img.Width())
+	h := ie.height
+	if h <= 0 {
+		h = w / ar
+	}
+	w, _ = ie.applyMaxMinClamps(w, h, ar)
+	return w
 }
 
 // PlanLayout implements Element. An image never splits — FULL or NOTHING.

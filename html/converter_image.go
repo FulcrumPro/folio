@@ -98,6 +98,16 @@ func (c *converter) convertImage(n *html.Node, style computedStyle) []layout.Ele
 	if style.ObjectPosition != "" {
 		ie.SetObjectPosition(style.ObjectPosition)
 	}
+	// An inline <img> sits on a line box, which follows the containing
+	// block's text-align (CSS 2.1 §16.2). A floated or block image is not on
+	// a line, so text-align does not move it.
+	isInline := style.Float != "left" && style.Float != "right" && style.Display != "block"
+	if isInline && style.TextAlignSet {
+		switch a := resolveTextAlign(style); a {
+		case layout.AlignCenter, layout.AlignRight:
+			ie.SetAlign(a)
+		}
+	}
 
 	return []layout.Element{ie}
 }

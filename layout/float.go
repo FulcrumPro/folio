@@ -55,7 +55,7 @@ func (f *Float) Content() Element {
 
 // Layout returns a single line representing the float's dimensions.
 func (f *Float) Layout(maxWidth float64) []Line {
-	plan := f.content.PlanLayout(LayoutArea{Width: maxWidth, Height: 1e9})
+	plan := f.content.PlanLayout(f.contentArea(LayoutArea{Width: maxWidth, Height: 1e9}))
 	w := maxBlockWidth(plan.Blocks)
 	return []Line{{
 		Width:  w,
@@ -66,7 +66,7 @@ func (f *Float) Layout(maxWidth float64) []Line {
 
 // PlanLayout implements Element.
 func (f *Float) PlanLayout(area LayoutArea) LayoutPlan {
-	plan := f.content.PlanLayout(area)
+	plan := f.content.PlanLayout(f.contentArea(area))
 
 	if plan.Status == LayoutNothing {
 		return plan
@@ -107,6 +107,39 @@ func (f *Float) PlanLayout(area LayoutArea) LayoutPlan {
 		Blocks:   []PlacedBlock{block},
 		Overflow: plan.Overflow,
 	}
+}
+
+// contentArea narrows the area an auto-width block float lays out in to its
+// shrink-to-fit width (CSS 2.1 §10.3.5): min(max(min-content, available),
+// max-content). Without it the float fills the line, so an image-only float
+// takes the whole container width and leaves no room beside it.
+func (f *Float) contentArea(area LayoutArea) LayoutArea {
+	d, ok := f.content.(*Div)
+	if !ok || !d.hasAutoWidth() || !measurableTree(d) {
+		return area
+	}
+	avail := area.Width - f.margin
+	fit := min(max(d.MinWidth(), avail), d.MaxWidth())
+	if fit <= d.padding.Left+d.padding.Right || fit >= avail {
+		return area
+	}
+	area.Width = fit
+	return area
+}
+
+// measurableTree reports whether every element under d reports its intrinsic
+// widths. An element that does not (a table) would measure as zero wide, and
+// shrinking the float to fit would crush it.
+func measurableTree(d *Div) bool {
+	for _, e := range d.elements {
+		if _, ok := e.(Measurable); !ok {
+			return false
+		}
+		if child, ok := e.(*Div); ok && !measurableTree(child) {
+			return false
+		}
+	}
+	return true
 }
 
 // MinWidth implements Measurable.

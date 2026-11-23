@@ -433,6 +433,7 @@ func (c *converter) convertFlex(n *html.Node, style computedStyle) []layout.Elem
 		if isDefiniteHeight(style.Height) {
 			flex.SetDefiniteCrossSize(true)
 		}
+		flex.SetClipsOverflow(style.Overflow == "hidden")
 		div.Add(flex)
 		// The flex IS the box; when the wrapper Div is height-stretched (an
 		// explicit height, or a grid/flex cell stretched to its track), the flex

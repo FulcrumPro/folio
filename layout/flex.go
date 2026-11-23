@@ -138,6 +138,7 @@ type Flex struct {
 	background           *Color
 	spaceBefore          float64
 	heightUnit           *UnitValue // forced height for cross-axis stretch
+	clipsOverflow        bool       // overflow:hidden on the box this flex fills
 	spaceAfter           float64
 	hasDefiniteCrossSize bool // true when parent constrains cross-axis (e.g. wrapper Div has explicit height)
 }
@@ -220,6 +221,11 @@ func (f *Flex) SetSpaceAfter(pts float64) *Flex { f.spaceAfter = pts; return f }
 
 // ForceHeight implements HeightSettable. Forces height for cross-axis stretch.
 func (f *Flex) ForceHeight(u UnitValue) { f.heightUnit = &u }
+
+// SetClipsOverflow marks the flex as filling a box with overflow:hidden, so a
+// definite-height column draws items taller than the box (to be clipped)
+// rather than moving them to the next page.
+func (f *Flex) SetClipsOverflow(v bool) *Flex { f.clipsOverflow = v; return f }
 
 // ClearHeightUnit removes the forced height.
 func (f *Flex) ClearHeightUnit() {
@@ -1031,6 +1037,15 @@ func (f *Flex) planColumn(area LayoutArea) LayoutPlan {
 	var results []colItemResult
 	curY := f.padding.Top
 	remaining := innerHeight
+	// A definite-height column that clips its overflow and fits the area lays
+	// out all of its items: content taller than the box is drawn past its
+	// edge and clipped, as in a browser, instead of being pushed to the next
+	// page. spill lifts only the fit checks; remaining stays the box's real
+	// free space, so flex-grow still shares out only what is left.
+	spill := 0.0
+	if f.clipsOverflow && f.heightUnit != nil && f.heightUnit.Resolve(area.Height) <= area.Height {
+		spill = 1e9
+	}
 	allFit := true
 	fittedCount := 0
 
@@ -1040,7 +1055,7 @@ func (f *Flex) planColumn(area LayoutArea) LayoutPlan {
 
 	for i, item := range f.items {
 		if i > 0 {
-			if f.rowGap > remaining {
+			if f.rowGap > remaining+spill {
 				allFit = false
 				break
 			}
@@ -1094,11 +1109,14 @@ func (f *Flex) planColumn(area LayoutArea) LayoutPlan {
 		}
 
 		plan := item.element.PlanLayout(LayoutArea{Width: itemWidth, Height: remaining})
+		if spill > 0 && plan.Status != LayoutFull {
+			plan = item.element.PlanLayout(LayoutArea{Width: itemWidth, Height: max(remaining, 0) + spill})
+		}
 
 		switch plan.Status {
 		case LayoutFull:
 			// Use a small epsilon to avoid floating-point precision issues.
-			if plan.Consumed > remaining+0.01 && fittedCount > 0 {
+			if plan.Consumed > remaining+spill+0.01 && fittedCount > 0 {
 				return f.buildColumnResult(earlyBlocks, curY, area.Width, f.items[i:])
 			}
 			xOffset := f.columnAlignOffset(align, innerWidth, itemWidth) + item.marginLeft

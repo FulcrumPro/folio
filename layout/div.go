@@ -608,15 +608,27 @@ func (d *Div) MaxWidth() float64 {
 	if d.width > 0 {
 		return d.width
 	}
-	maxW := 0.0
+	// Floats sit side by side with the in-flow content, so the max-content
+	// width is the floats' widths added to the widest in-flow child.
+	maxW, floats := 0.0, 0.0
 	for _, elem := range d.elements {
-		if m, ok := elem.(Measurable); ok {
-			if w := m.MaxWidth(); w > maxW {
-				maxW = w
-			}
+		m, ok := elem.(Measurable)
+		if !ok {
+			continue
+		}
+		if _, isFloat := elem.(*Float); isFloat {
+			floats += m.MaxWidth()
+		} else if w := m.MaxWidth(); w > maxW {
+			maxW = w
 		}
 	}
-	return maxW + d.padding.Left + d.padding.Right
+	return maxW + floats + d.padding.Left + d.padding.Right
+}
+
+// hasAutoWidth reports whether the box has no explicit, percentage or
+// fit-content width, so it fills whatever width its container gives it.
+func (d *Div) hasAutoWidth() bool {
+	return d.widthUnit == nil && d.widthPct == 0 && d.width == 0 && !d.shrinkToFit
 }
 
 // PlanLayout implements Element. A Div splits its children across pages.
@@ -627,7 +639,7 @@ func (d *Div) PlanLayout(area LayoutArea) LayoutPlan {
 	// available area minus its left margin, so a non-zero margin-left shifts the
 	// left edge while the right edge stays put (negative margin widens / bleeds
 	// left). Boxes with a resolved width keep that width and only shift.
-	autoWidth := d.widthUnit == nil && d.widthPct == 0 && d.width == 0 && !d.shrinkToFit
+	autoWidth := d.hasAutoWidth()
 	if autoWidth && d.marginLeft != 0 {
 		effectiveWidth = area.Width - d.marginLeft
 	}
@@ -713,13 +725,28 @@ func (d *Div) PlanLayout(area LayoutArea) LayoutPlan {
 
 	allFit := true
 	overflowStartIdx := -1
+	var floats boxFloats
 	for idx, elem := range d.elements {
-		plan := elem.PlanLayout(LayoutArea{Width: innerWidth, Height: remaining})
+		if cl, ok := elem.(Clearable); ok {
+			if below := floats.clearance(cl.ClearValue(), curY); below > 0 {
+				curY += below
+				remaining -= below
+			}
+		}
+		left, right := floats.intrusion(curY)
+		plan := elem.PlanLayout(LayoutArea{Width: max(innerWidth-left-right, 0), Height: remaining})
+		if (left > 0 || right > 0) && planWidth(plan) > innerWidth-left-right+0.01 {
+			// A box too wide for the space beside the floats (an explicit
+			// width) keeps its own place, as before floats narrowed siblings.
+			left = 0
+			plan = elem.PlanLayout(LayoutArea{Width: innerWidth, Height: remaining})
+		}
+		floats.add(plan.Blocks, curY)
 
 		switch plan.Status {
 		case LayoutFull:
 			for _, block := range plan.Blocks {
-				block.X += d.padding.Left
+				block.X += d.padding.Left + left
 				block.Y += curY
 				fittedBlocks = append(fittedBlocks, block)
 			}
@@ -728,7 +755,7 @@ func (d *Div) PlanLayout(area LayoutArea) LayoutPlan {
 
 		case LayoutPartial:
 			for _, block := range plan.Blocks {
-				block.X += d.padding.Left
+				block.X += d.padding.Left + left
 				block.Y += curY
 				fittedBlocks = append(fittedBlocks, block)
 			}
@@ -959,4 +986,62 @@ type divLayoutRef struct {
 	totalHeight   float64
 	innerWidth    float64
 	outerWidth    float64
+}
+
+// boxFloats tracks the floats placed so far among a box's children, so later
+// siblings lay out in the width beside them (CSS 2.1 §9.5) instead of under
+// them. A sibling that starts beside a float stays narrowed for its whole
+// height, as the page-level flow loop in render_plans.go does.
+type boxFloats []boxFloat
+
+type boxFloat struct {
+	side   FloatSide
+	width  float64
+	bottom float64 // Y within the box where the float ends
+}
+
+// add records the float blocks of a child placed at y.
+func (fs *boxFloats) add(blocks []PlacedBlock, y float64) {
+	for _, b := range blocks {
+		if b.floatInfo != nil {
+			*fs = append(*fs, boxFloat{side: b.floatInfo.side, width: b.floatInfo.floatWidth, bottom: y + b.floatInfo.height})
+		}
+	}
+}
+
+// clearance returns how far below y a box with the given CSS clear value
+// must move to sit under the floats it clears.
+func (fs boxFloats) clearance(clear string, y float64) float64 {
+	below := 0.0
+	for _, f := range fs {
+		if clear == "both" || (clear == "left" && f.side == FloatLeft) || (clear == "right" && f.side == FloatRight) {
+			below = max(below, f.bottom-y)
+		}
+	}
+	return below
+}
+
+// planWidth returns how far a plan's blocks reach to the right.
+func planWidth(p LayoutPlan) float64 {
+	w := 0.0
+	for _, b := range p.Blocks {
+		w = max(w, b.X+b.Width)
+	}
+	return w
+}
+
+// intrusion returns how far the floats still beside y reach in from the left
+// and right edges.
+func (fs boxFloats) intrusion(y float64) (left, right float64) {
+	for _, f := range fs {
+		if f.bottom <= y {
+			continue
+		}
+		if f.side == FloatLeft {
+			left += f.width
+		} else {
+			right += f.width
+		}
+	}
+	return left, right
 }

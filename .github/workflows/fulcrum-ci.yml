@@ -1,0 +1,36 @@
+name: Fulcrum CI
+
+# Upstream's ci.yml runs only for main. This runs the build and the test suite
+# for the fulcrum patch branch and the pull requests into it.
+on:
+  push:
+    branches: [fulcrum]
+  pull_request:
+    branches: [fulcrum]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Install qpdf
+        run: sudo apt-get update && sudo apt-get install -y qpdf
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test ./... -race -count=1 -timeout 600s
